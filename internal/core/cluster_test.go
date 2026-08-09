@@ -21,6 +21,7 @@ func validSpec() ClusterSpec {
 			DesiredSize:  3,
 		}},
 		Profile: ProfileRef{Name: "tier-small", Version: "1.0.0"},
+		Subnets: []string{"subnet-aaa", "subnet-bbb"},
 	}
 }
 
@@ -52,6 +53,7 @@ func TestClusterSpecValidate_Invalid(t *testing.T) {
 		"unknown access":      {func(s *ClusterSpec) { s.Access = "semi-private" }, "access"},
 		"bad k8s version":     {func(s *ClusterSpec) { s.KubernetesVersion = "v1.34.2" }, "kubernetesVersion"},
 		"no node pools":       {func(s *ClusterSpec) { s.NodePools = nil }, "at least one node pool"},
+		"no subnets":          {func(s *ClusterSpec) { s.Subnets = nil }, "at least one subnet"},
 		"invalid profile ref": {func(s *ClusterSpec) { s.Profile.Version = "" }, "version is required"},
 		"private with cidrs": {
 			func(s *ClusterSpec) { s.AuthorizedCIDRs = []string{"10.0.0.0/8"} },

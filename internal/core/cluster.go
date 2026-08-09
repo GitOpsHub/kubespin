@@ -135,6 +135,16 @@ type ClusterSpec struct {
 	// AuthorizedCIDRs restricts API server access. It is meaningful only for
 	// AccessPublic; a private cluster has no public endpoint to restrict.
 	AuthorizedCIDRs []string `yaml:"authorizedCIDRs,omitempty" json:"authorizedCIDRs,omitempty"`
+
+	// Subnets place the cluster on an existing network, named in whatever form
+	// the provider uses: subnet IDs on AWS, a subnetwork on GCP, a subnet
+	// resource ID on Azure.
+	//
+	// kubespin does not create networks. Network topology is almost always
+	// owned by a separate team with its own IP plan, peering, and egress rules,
+	// so a cluster tool that invented its own VPCs would fight that ownership
+	// rather than fit into it.
+	Subnets []string `yaml:"subnets" json:"subnets"`
 }
 
 var kubernetesVersionPattern = regexp.MustCompile(`^\d+\.\d+$`)
@@ -164,6 +174,9 @@ func (s ClusterSpec) Validate() error {
 	}
 	if len(s.NodePools) == 0 {
 		errs = append(errs, fmt.Errorf("%w: at least one node pool is required", ErrInvalidSpec))
+	}
+	if len(s.Subnets) == 0 {
+		errs = append(errs, fmt.Errorf("%w: at least one subnet is required", ErrInvalidSpec))
 	}
 
 	seen := make(map[string]struct{}, len(s.NodePools))

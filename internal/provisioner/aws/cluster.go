@@ -1,0 +1,491 @@
+package aws
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
+	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+
+	"github.com/GitOpsHub/kubespin/internal/core"
+	"github.com/GitOpsHub/kubespin/internal/provisioner"
+)
+
+// ClusterProvisioner creates and reconciles EKS clusters.
+type ClusterProvisioner struct {
+	c *Clients
+}
+
+// NewClusterProvisioner builds an EKS provisioner over the given clients.
+func NewClusterProvisioner(c *Clients) *ClusterProvisioner { return &ClusterProvisioner{c: c} }
+
+// Provider identifies this implementation's cloud.
+func (p *ClusterProvisioner) Provider() core.Provider { return core.ProviderAWS }
+
+// Create requests a cluster and its node groups.
+//
+// It is idempotent at every step: an existing cluster or node group is left
+// alone rather than treated as an error, so a resumed run passes straight
+// through to whatever is still missing.
+func (p *ClusterProvisioner) Create(ctx context.Context, spec core.ClusterSpec) error {
+	if err := validateForEKS(spec); err != nil {
+		return err
+	}
+
+	clusterRoleARN, err := p.ensureRole(ctx, names{spec}.clusterRole(),
+		eksServiceTrust("eks.amazonaws.com"), []string{policyEKSCluster})
+	if err != nil {
+		return err
+	}
+
+	state, err := p.Describe(ctx, spec)
+	if err != nil {
+		return err
+	}
+
+	if state.Status == provisioner.StatusAbsent {
+		if err := p.createCluster(ctx, spec, clusterRoleARN); err != nil {
+			return err
+		}
+		// Node groups cannot be attached until the control plane is active, so
+		// they are created by Reconcile once the caller has waited.
+		return nil
+	}
+
+	if state.Status == provisioner.StatusActive {
+		return p.ensureNodeGroups(ctx, spec, nil)
+	}
+	return nil
+}
+
+func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.ClusterSpec, roleARN string) error {
+	in := &eks.CreateClusterInput{
+		Name:               aws.String(names{spec}.cluster()),
+		RoleArn:            aws.String(roleARN),
+		ResourcesVpcConfig: vpcConfig(spec),
+		Tags:               tags(spec),
+	}
+	if spec.KubernetesVersion != "" {
+		in.Version = aws.String(spec.KubernetesVersion)
+	}
+
+	if _, err := p.c.eks.CreateCluster(ctx, in); err != nil {
+		// Another run got there first; that is convergence, not failure.
+		var exists *ekstypes.ResourceInUseException
+		if errors.As(err, &exists) {
+			return nil
+		}
+		return fmt.Errorf("creating EKS cluster %s: %w", spec.ID, err)
+	}
+	return nil
+}
+
+// vpcConfig translates the access mode into EKS endpoint configuration.
+//
+// A private cluster has no public endpoint at all; a public one is reachable
+// but still restricted to the authorized CIDRs when any are given. Both keep
+// the private endpoint enabled so in-VPC traffic never leaves the network.
+func vpcConfig(spec core.ClusterSpec) *ekstypes.VpcConfigRequest {
+	cfg := &ekstypes.VpcConfigRequest{
+		SubnetIds:             spec.Subnets,
+		EndpointPrivateAccess: aws.Bool(true),
+		EndpointPublicAccess:  aws.Bool(spec.Access == core.AccessPublic),
+	}
+	if spec.Access == core.AccessPublic && len(spec.AuthorizedCIDRs) > 0 {
+		cfg.PublicAccessCidrs = spec.AuthorizedCIDRs
+	}
+	return cfg
+}
+
+// Describe reports the cluster's current state.
+func (p *ClusterProvisioner) Describe(ctx context.Context, spec core.ClusterSpec) (provisioner.ClusterState, error) {
+	out, err := p.c.eks.DescribeCluster(ctx, &eks.DescribeClusterInput{
+		Name: aws.String(names{spec}.cluster()),
+	})
+	if err != nil {
+		var missing *ekstypes.ResourceNotFoundException
+		if errors.As(err, &missing) {
+			// Absent is a normal answer while polling, not an error.
+			return provisioner.ClusterState{Status: provisioner.StatusAbsent}, nil
+		}
+		return provisioner.ClusterState{}, fmt.Errorf("describing EKS cluster %s: %w", spec.ID, err)
+	}
+
+	cluster := out.Cluster
+	if cluster == nil {
+		return provisioner.ClusterState{Status: provisioner.StatusAbsent}, nil
+	}
+
+	state := provisioner.ClusterState{
+		Status:   normaliseStatus(cluster.Status),
+		Endpoint: aws.ToString(cluster.Endpoint),
+		Version:  aws.ToString(cluster.Version),
+		Access:   accessFrom(cluster.ResourcesVpcConfig),
+	}
+	if cluster.Identity != nil && cluster.Identity.Oidc != nil {
+		state.OIDCIssuer = aws.ToString(cluster.Identity.Oidc.Issuer)
+	}
+	if cluster.ResourcesVpcConfig != nil {
+		state.NetworkID = aws.ToString(cluster.ResourcesVpcConfig.ClusterSecurityGroupId)
+	}
+
+	if state.Status == provisioner.StatusActive {
+		pools, err := p.describeNodePools(ctx, spec)
+		if err != nil {
+			return state, err
+		}
+		state.NodePools = pools
+	}
+
+	return state, nil
+}
+
+func normaliseStatus(status ekstypes.ClusterStatus) provisioner.Status {
+	switch status {
+	case ekstypes.ClusterStatusActive:
+		return provisioner.StatusActive
+	case ekstypes.ClusterStatusCreating:
+		return provisioner.StatusCreating
+	case ekstypes.ClusterStatusUpdating:
+		return provisioner.StatusUpdating
+	case ekstypes.ClusterStatusDeleting:
+		return provisioner.StatusDeleting
+	case ekstypes.ClusterStatusFailed, ekstypes.ClusterStatusPending:
+		// Pending is grouped with failed deliberately: EKS reports it for a
+		// cluster that could not start, and waiting will not clear it.
+		if status == ekstypes.ClusterStatusPending {
+			return provisioner.StatusCreating
+		}
+		return provisioner.StatusFailed
+	default:
+		return provisioner.StatusFailed
+	}
+}
+
+func accessFrom(cfg *ekstypes.VpcConfigResponse) core.Access {
+	if cfg != nil && cfg.EndpointPublicAccess {
+		return core.AccessPublic
+	}
+	return core.AccessPrivate
+}
+
+func (p *ClusterProvisioner) describeNodePools(ctx context.Context, spec core.ClusterSpec) ([]core.NodePool, error) {
+	listed, err := p.c.eks.ListNodegroups(ctx, &eks.ListNodegroupsInput{
+		ClusterName: aws.String(names{spec}.cluster()),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing node groups for %s: %w", spec.ID, err)
+	}
+
+	pools := make([]core.NodePool, 0, len(listed.Nodegroups))
+	for _, name := range listed.Nodegroups {
+		out, err := p.c.eks.DescribeNodegroup(ctx, &eks.DescribeNodegroupInput{
+			ClusterName:   aws.String(names{spec}.cluster()),
+			NodegroupName: aws.String(name),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("describing node group %s: %w", name, err)
+		}
+		if out.Nodegroup == nil {
+			continue
+		}
+
+		pool := core.NodePool{Name: poolNameFromNodeGroup(spec, name), Labels: out.Nodegroup.Labels}
+		if types := out.Nodegroup.InstanceTypes; len(types) > 0 {
+			pool.InstanceType = types[0]
+		}
+		if scaling := out.Nodegroup.ScalingConfig; scaling != nil {
+			pool.MinSize = aws.ToInt32(scaling.MinSize)
+			pool.MaxSize = aws.ToInt32(scaling.MaxSize)
+			pool.DesiredSize = aws.ToInt32(scaling.DesiredSize)
+		}
+		pools = append(pools, pool)
+	}
+
+	slices.SortFunc(pools, func(a, b core.NodePool) int { return strings.Compare(a.Name, b.Name) })
+	return pools, nil
+}
+
+func poolNameFromNodeGroup(spec core.ClusterSpec, nodeGroup string) string {
+	return strings.TrimPrefix(nodeGroup, spec.ID.String()+"-")
+}
+
+// Reconcile brings an existing cluster in line with the spec.
+//
+// It reports whether it changed anything as data. `apply` proves it made no
+// cloud calls when nothing differs, and that cannot be inferred by diffing
+// state before and after.
+func (p *ClusterProvisioner) Reconcile(ctx context.Context, spec core.ClusterSpec) (provisioner.Change, error) {
+	var change provisioner.Change
+
+	state, err := p.Describe(ctx, spec)
+	if err != nil {
+		return change, err
+	}
+	if state.Status == provisioner.StatusAbsent {
+		return change, fmt.Errorf("%w: %s", provisioner.ErrNotFound, spec.ID)
+	}
+
+	accessChange, err := p.reconcileAccess(ctx, spec, state)
+	if err != nil {
+		return change, err
+	}
+	change.Merge(accessChange)
+
+	if err := p.ensureNodeGroups(ctx, spec, &change); err != nil {
+		return change, err
+	}
+	return change, nil
+}
+
+func (p *ClusterProvisioner) reconcileAccess(
+	ctx context.Context, spec core.ClusterSpec, state provisioner.ClusterState,
+) (provisioner.Change, error) {
+	if state.Access == spec.Access {
+		return provisioner.Change{}, nil
+	}
+
+	_, err := p.c.eks.UpdateClusterConfig(ctx, &eks.UpdateClusterConfigInput{
+		Name:               aws.String(names{spec}.cluster()),
+		ResourcesVpcConfig: vpcConfig(spec),
+	})
+	if err != nil {
+		return provisioner.Change{}, fmt.Errorf("updating access mode for %s: %w", spec.ID, err)
+	}
+
+	return provisioner.Change{
+		Changed: true,
+		Details: []string{fmt.Sprintf("access %s -> %s", state.Access, spec.Access)},
+	}, nil
+}
+
+// ensureNodeGroups creates missing node groups and resizes drifted ones.
+// It never deletes: removing a node pool evicts running workloads, which is a
+// decision that belongs to a human rather than to a reconcile loop.
+func (p *ClusterProvisioner) ensureNodeGroups(
+	ctx context.Context, spec core.ClusterSpec, change *provisioner.Change,
+) error {
+	nodeRoleARN, err := p.ensureRole(ctx, names{spec}.nodeRole(),
+		eksServiceTrust("ec2.amazonaws.com"),
+		[]string{policyEKSWorkerNode, policyEKSCNI, policyECRReadOnly})
+	if err != nil {
+		return err
+	}
+
+	existing, err := p.describeNodePools(ctx, spec)
+	if err != nil {
+		return err
+	}
+
+	for _, want := range spec.NodePools {
+		current, found := findPool(existing, want.Name)
+		if !found {
+			if err := p.createNodeGroup(ctx, spec, want, nodeRoleARN); err != nil {
+				return err
+			}
+			record(change, fmt.Sprintf("create node pool %s", want.Name))
+			continue
+		}
+
+		if current.MinSize == want.MinSize && current.MaxSize == want.MaxSize &&
+			current.DesiredSize == want.DesiredSize {
+			continue
+		}
+
+		_, err := p.c.eks.UpdateNodegroupConfig(ctx, &eks.UpdateNodegroupConfigInput{
+			ClusterName:   aws.String(names{spec}.cluster()),
+			NodegroupName: aws.String(names{spec}.nodeGroup(want.Name)),
+			ScalingConfig: &ekstypes.NodegroupScalingConfig{
+				MinSize:     aws.Int32(want.MinSize),
+				MaxSize:     aws.Int32(want.MaxSize),
+				DesiredSize: aws.Int32(want.DesiredSize),
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("resizing node pool %s: %w", want.Name, err)
+		}
+		record(change, fmt.Sprintf("resize node pool %s to %d/%d/%d",
+			want.Name, want.MinSize, want.DesiredSize, want.MaxSize))
+	}
+
+	return nil
+}
+
+func (p *ClusterProvisioner) createNodeGroup(
+	ctx context.Context, spec core.ClusterSpec, pool core.NodePool, nodeRoleARN string,
+) error {
+	_, err := p.c.eks.CreateNodegroup(ctx, &eks.CreateNodegroupInput{
+		ClusterName:   aws.String(names{spec}.cluster()),
+		NodegroupName: aws.String(names{spec}.nodeGroup(pool.Name)),
+		NodeRole:      aws.String(nodeRoleARN),
+		Subnets:       spec.Subnets,
+		InstanceTypes: []string{pool.InstanceType},
+		ScalingConfig: &ekstypes.NodegroupScalingConfig{
+			MinSize:     aws.Int32(pool.MinSize),
+			MaxSize:     aws.Int32(pool.MaxSize),
+			DesiredSize: aws.Int32(pool.DesiredSize),
+		},
+		Labels: pool.Labels,
+		Tags:   tags(spec),
+	})
+	if err != nil {
+		var exists *ekstypes.ResourceInUseException
+		if errors.As(err, &exists) {
+			return nil
+		}
+		return fmt.Errorf("creating node pool %s: %w", pool.Name, err)
+	}
+	return nil
+}
+
+// Delete tears down node groups then the cluster.
+func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) error {
+	listed, err := p.c.eks.ListNodegroups(ctx, &eks.ListNodegroupsInput{
+		ClusterName: aws.String(names{spec}.cluster()),
+	})
+	if err != nil {
+		var missing *ekstypes.ResourceNotFoundException
+		if errors.As(err, &missing) {
+			return nil // already gone; teardown converges
+		}
+		return fmt.Errorf("listing node groups for %s: %w", spec.ID, err)
+	}
+
+	// Node groups must go first: EKS refuses to delete a cluster that still has
+	// any attached.
+	for _, name := range listed.Nodegroups {
+		_, err := p.c.eks.DeleteNodegroup(ctx, &eks.DeleteNodegroupInput{
+			ClusterName:   aws.String(names{spec}.cluster()),
+			NodegroupName: aws.String(name),
+		})
+		if err != nil {
+			var missing *ekstypes.ResourceNotFoundException
+			if errors.As(err, &missing) {
+				continue
+			}
+			return fmt.Errorf("deleting node group %s: %w", name, err)
+		}
+	}
+
+	if _, err := p.c.eks.DeleteCluster(ctx, &eks.DeleteClusterInput{
+		Name: aws.String(names{spec}.cluster()),
+	}); err != nil {
+		var missing *ekstypes.ResourceNotFoundException
+		if errors.As(err, &missing) {
+			return nil
+		}
+		return fmt.Errorf("deleting EKS cluster %s: %w", spec.ID, err)
+	}
+	return nil
+}
+
+// ensureRole creates a service role if absent and attaches the managed policies.
+func (p *ClusterProvisioner) ensureRole(
+	ctx context.Context, name string, trust map[string]any, policies []string,
+) (string, error) {
+	out, err := p.c.iam.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(name)})
+	if err == nil {
+		if err := p.attachPolicies(ctx, name, policies); err != nil {
+			return "", err
+		}
+		return aws.ToString(out.Role.Arn), nil
+	}
+
+	var missing *iamtypes.NoSuchEntityException
+	if !errors.As(err, &missing) {
+		return "", fmt.Errorf("getting role %s: %w", name, err)
+	}
+
+	doc, err := json.Marshal(trust)
+	if err != nil {
+		return "", fmt.Errorf("rendering trust policy for %s: %w", name, err)
+	}
+
+	created, err := p.c.iam.CreateRole(ctx, &iam.CreateRoleInput{
+		RoleName:                 aws.String(name),
+		AssumeRolePolicyDocument: aws.String(string(doc)),
+		Description:              aws.String("kubespin-managed role"),
+	})
+	if err != nil {
+		return "", fmt.Errorf("creating role %s: %w", name, err)
+	}
+	if err := p.attachPolicies(ctx, name, policies); err != nil {
+		return "", err
+	}
+	return aws.ToString(created.Role.Arn), nil
+}
+
+func (p *ClusterProvisioner) attachPolicies(ctx context.Context, role string, policies []string) error {
+	attached, err := p.c.iam.ListAttachedRolePolicies(ctx, &iam.ListAttachedRolePoliciesInput{
+		RoleName: aws.String(role),
+	})
+	if err != nil {
+		return fmt.Errorf("listing policies on %s: %w", role, err)
+	}
+
+	have := make(map[string]struct{}, len(attached.AttachedPolicies))
+	for _, policy := range attached.AttachedPolicies {
+		have[aws.ToString(policy.PolicyArn)] = struct{}{}
+	}
+
+	for _, want := range policies {
+		if _, ok := have[want]; ok {
+			continue
+		}
+		if _, err := p.c.iam.AttachRolePolicy(ctx, &iam.AttachRolePolicyInput{
+			RoleName:  aws.String(role),
+			PolicyArn: aws.String(want),
+		}); err != nil {
+			return fmt.Errorf("attaching %s to %s: %w", want, role, err)
+		}
+	}
+	return nil
+}
+
+func eksServiceTrust(service string) map[string]any {
+	return map[string]any{
+		"Version": "2012-10-17",
+		"Statement": []any{map[string]any{
+			"Effect":    "Allow",
+			"Action":    "sts:AssumeRole",
+			"Principal": map[string]any{"Service": service},
+		}},
+	}
+}
+
+// validateForEKS covers the requirements EKS adds beyond the shared spec rules.
+func validateForEKS(spec core.ClusterSpec) error {
+	// EKS places the control plane's cross-account network interfaces in at
+	// least two availability zones and rejects anything less at creation time.
+	if len(spec.Subnets) < 2 {
+		return fmt.Errorf("%w: EKS requires at least two subnets in different availability zones, got %d",
+			core.ErrInvalidSpec, len(spec.Subnets))
+	}
+	return nil
+}
+
+func findPool(pools []core.NodePool, name string) (core.NodePool, bool) {
+	for _, pool := range pools {
+		if pool.Name == name {
+			return pool, true
+		}
+	}
+	return core.NodePool{}, false
+}
+
+// record notes a change when the caller is collecting them. Create passes nil,
+// because creating a cluster is not a reconcile finding.
+func record(change *provisioner.Change, detail string) {
+	if change == nil {
+		return
+	}
+	change.Changed = true
+	change.Details = append(change.Details, detail)
+}

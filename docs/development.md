@@ -34,6 +34,7 @@ internal/cli/          cobra command tree and configuration resolution
 internal/core/         shared domain types
 internal/registry/     Fleet Registry client, lease primitive, in-memory implementation
 internal/orchestrator/ sequences one cluster's provisioning through the phases
+internal/provisioner/  cloud-facing interfaces; one subpackage per cloud
 internal/fleetinfra/   SDK converge engine behind `fleet bootstrap`
 internal/tools/        build-time tools (docs generation)
 internal/version/      build metadata stamped in via -ldflags
