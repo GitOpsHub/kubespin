@@ -56,6 +56,14 @@ type Record struct {
 	Access   core.Access
 	Profile  core.ProfileRef
 
+	// OIDCIssuer is the cluster's own workload identity issuer URL, recorded
+	// once identity binding (M2) succeeds. The Central Ingestion API (M6)
+	// verifies fleet-status-reporter's signature against exactly this issuer,
+	// which is what makes a signature from one cluster unusable to spoof
+	// another: every cluster's issuer is unique, so a token that verifies
+	// against cluster A's issuer cannot also verify against cluster B's.
+	OIDCIssuer string
+
 	// Version is bumped on every data write and asserted as a condition, so a
 	// read-modify-write that raced another writer fails instead of overwriting.
 	Version int64
@@ -162,6 +170,14 @@ type Registry interface {
 	// heartbeats arrive every couple of minutes and must not contend with a
 	// phase transition in progress.
 	Touch(ctx context.Context, id core.ClusterID, at time.Time) error
+
+	// RecordOIDCIssuer sets the cluster's workload identity issuer, once,
+	// after M2's identity binding succeeds. Like Touch it carries no version
+	// check — it is metadata about the cluster, not a phase transition — but
+	// unlike Touch it is written once and read for the lifetime of the
+	// cluster, which is why it is its own method rather than an overload of
+	// Touch.
+	RecordOIDCIssuer(ctx context.Context, id core.ClusterID, issuer string) error
 
 	// List returns records matching filter.
 	List(ctx context.Context, filter Filter) ([]Record, error)

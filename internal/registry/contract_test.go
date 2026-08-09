@@ -280,6 +280,38 @@ func runContract(t *testing.T, newRegistry factory) {
 		}
 	})
 
+	t.Run("RecordOIDCIssuer sets the issuer without bumping version", func(t *testing.T) {
+		clock := newFakeClock()
+		r := newRegistry(t, clock)
+		rec := seed(t, r, clock, "team-alpha")
+
+		const issuer = "https://oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE"
+		if err := r.RecordOIDCIssuer(context.Background(), rec.ClusterID, issuer); err != nil {
+			t.Fatalf("RecordOIDCIssuer: %v", err)
+		}
+
+		stored, err := r.Get(context.Background(), rec.ClusterID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if stored.OIDCIssuer != issuer {
+			t.Errorf("OIDCIssuer = %q, want %q", stored.OIDCIssuer, issuer)
+		}
+		if stored.Version != rec.Version {
+			t.Errorf("Version = %d, want it unchanged at %d", stored.Version, rec.Version)
+		}
+	})
+
+	t.Run("RecordOIDCIssuer on a missing cluster", func(t *testing.T) {
+		clock := newFakeClock()
+		r := newRegistry(t, clock)
+
+		err := r.RecordOIDCIssuer(context.Background(), "absent-cluster", "https://issuer.example.com")
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("error = %v, want one wrapping ErrNotFound", err)
+		}
+	})
+
 	t.Run("list filters", func(t *testing.T) {
 		clock := newFakeClock()
 		r := newRegistry(t, clock)

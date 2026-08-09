@@ -160,6 +160,32 @@ func (d *DynamoDB) Touch(ctx context.Context, id core.ClusterID, at time.Time) e
 	return nil
 }
 
+// RecordOIDCIssuer sets the cluster's workload identity issuer.
+func (d *DynamoDB) RecordOIDCIssuer(ctx context.Context, id core.ClusterID, issuer string) error {
+	_, err := d.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:        aws.String(d.table),
+		Key:              key(id),
+		UpdateExpression: aws.String("SET #issuer = :issuer"),
+		// No version assertion: this is metadata about the cluster, not a
+		// phase transition, the same reasoning Touch above uses.
+		ConditionExpression: aws.String("attribute_exists(#id)"),
+		ExpressionAttributeNames: map[string]string{
+			"#id":     attrClusterID,
+			"#issuer": attrOIDCIssuer,
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":issuer": &types.AttributeValueMemberS{Value: issuer},
+		},
+	})
+	if err != nil {
+		if conditionFailed(err) {
+			return fmt.Errorf("%w: %s", ErrNotFound, id)
+		}
+		return fmt.Errorf("recording OIDC issuer for %s: %w", id, err)
+	}
+	return nil
+}
+
 // List returns records matching filter.
 //
 // A provider filter is served by the ProviderPhaseIndex GSI; without one there
