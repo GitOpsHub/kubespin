@@ -158,3 +158,55 @@ func TestTeardown_CallsIdentityThenClusterThenRepo(t *testing.T) {
 		t.Error("expected the repository to have been archived")
 	}
 }
+
+// Delete only requests the teardown; the cluster lingers in a deleting state
+// for minutes afterwards. Teardown has to see it gone before it returns, or
+// the caller records decommissioned while the cloud is still working.
+func TestTeardown_WaitsForTheClusterToBeGone(t *testing.T) {
+	f := newFakeCloud()
+	f.deletingPolls = 3
+	spec := testSpec()
+
+	repoProv := repo.NewMemory()
+	if err := repoProv.Create(t.Context(), spec); err != nil {
+		t.Fatalf("seeding repo: %v", err)
+	}
+
+	teardown := Teardown(f.cloud(), repoProv, quietLogger())
+	if err := teardown(t.Context(), spec, registry.Record{}); err != nil {
+		t.Fatalf("Teardown: %v", err)
+	}
+
+	del := slices.Index(f.calls, "Delete")
+	polls := 0
+	for _, call := range f.calls[del:] {
+		if call == "Describe" {
+			polls++
+		}
+	}
+	if polls < 4 { // three deleting answers, then absent
+		t.Errorf("calls after Delete = %v, want Describe polled until the cluster was absent", f.calls[del:])
+	}
+}
+
+// A cluster the cloud never finishes deleting must fail the teardown, leaving
+// the phase at decommissioning for a retry — not archive the repo and let the
+// caller mark it decommissioned.
+func TestTeardown_FailsWhenTheClusterNeverGoesAway(t *testing.T) {
+	f := newFakeCloud()
+	f.deletingPolls = 1_000_000
+	spec := testSpec()
+
+	repoProv := repo.NewMemory()
+	if err := repoProv.Create(t.Context(), spec); err != nil {
+		t.Fatalf("seeding repo: %v", err)
+	}
+
+	err := Teardown(f.cloud(), repoProv, quietLogger())(t.Context(), spec, registry.Record{})
+	if err == nil {
+		t.Fatal("Teardown succeeded, want a timeout waiting for the cluster to be deleted")
+	}
+	if repoProv.Archived(spec) {
+		t.Error("the repository was archived even though the cluster was never deleted")
+	}
+}

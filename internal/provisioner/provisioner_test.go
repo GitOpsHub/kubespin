@@ -149,3 +149,44 @@ func TestStatusReporterComponent(t *testing.T) {
 		t.Errorf("component = %+v, want every field populated", comp)
 	}
 }
+
+func TestWaitUntilGone(t *testing.T) {
+	t.Run("polls until the cluster is absent", func(t *testing.T) {
+		p := &scriptedProvisioner{states: []ClusterState{
+			{Status: StatusActive},
+			{Status: StatusDeleting},
+			{Status: StatusDeleting},
+			{Status: StatusAbsent},
+		}}
+
+		if err := WaitUntilGone(context.Background(), p, core.ClusterSpec{ID: "c"}, fastWait()); err != nil {
+			t.Fatalf("WaitUntilGone: %v", err)
+		}
+		if p.calls < 4 {
+			t.Errorf("Describe called %d times, want it to poll until absent", p.calls)
+		}
+	})
+
+	// A deletion the cloud gave up on will not clear itself.
+	t.Run("fails fast on a failed cluster", func(t *testing.T) {
+		p := &scriptedProvisioner{states: []ClusterState{{Status: StatusFailed}}}
+
+		err := WaitUntilGone(context.Background(), p, core.ClusterSpec{ID: "c"}, fastWait())
+		if !errors.Is(err, ErrClusterFailed) {
+			t.Fatalf("error = %v, want one wrapping ErrClusterFailed", err)
+		}
+		if p.calls != 1 {
+			t.Errorf("Describe called %d times, want it to stop immediately", p.calls)
+		}
+	})
+
+	t.Run("times out on a cluster that never goes away", func(t *testing.T) {
+		p := &scriptedProvisioner{states: []ClusterState{{Status: StatusDeleting}}}
+
+		err := WaitUntilGone(context.Background(), p, core.ClusterSpec{ID: "c"},
+			WaitOptions{Interval: time.Millisecond, Timeout: 10 * time.Millisecond})
+		if err == nil || !strings.Contains(err.Error(), "timed out") {
+			t.Fatalf("error = %v, want a timeout", err)
+		}
+	})
+}
