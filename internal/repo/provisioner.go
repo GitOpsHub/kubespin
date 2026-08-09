@@ -2,7 +2,11 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
 
 	"github.com/google/go-github/v75/github"
 
@@ -36,6 +40,9 @@ type Provisioner interface {
 
 	// Create creates the repository, protects its default branch, and seeds a
 	// CODEOWNERS file. It is idempotent: creating an existing repo is a no-op.
+	// Branch protection is best-effort — an account plan that does not offer
+	// it on private repositories leaves the branch unprotected with a warning
+	// rather than failing.
 	Create(ctx context.Context, spec core.ClusterSpec) error
 
 	// Clone reads the repository's tracked files off its default branch.
@@ -85,7 +92,8 @@ func (p *githubProvisioner) Exists(ctx context.Context, spec core.ClusterSpec) (
 
 // Create creates the repository, protects its default branch (requiring
 // CODEOWNERS review), and seeds CODEOWNERS. It is idempotent: an existing
-// repository or an already-seeded CODEOWNERS file is left alone.
+// repository or an already-seeded CODEOWNERS file is left alone. Branch
+// protection is best-effort: see protectBranch.
 //
 // AutoInit is deliberate: it gives the new repository an initial commit on
 // its default branch, so Clone/Push have a ref to build on rather than
@@ -133,10 +141,38 @@ func (p *githubProvisioner) protectBranch(ctx context.Context, n names, branch s
 		},
 		EnforceAdmins: true,
 	})
-	if err != nil {
+	switch {
+	case err == nil:
+		return nil
+	case planLacksBranchProtection(err):
+		// The account's plan does not offer branch protection on a private
+		// repository. That is an account fact, not a kubespin misconfiguration
+		// or a transient failure, and retrying or failing the whole apply over
+		// it would leave the cluster half-provisioned for something no retry
+		// can fix. Converge without protection and say so loudly instead.
+		slog.Default().Warn("branch protection unavailable on this GitHub plan; repository left unprotected",
+			"repo", n.repoName(), "branch", branch, "error", err)
+		return nil
+	default:
 		return fmt.Errorf("protecting %s branch %s: %w", n.repoName(), branch, err)
 	}
-	return nil
+}
+
+// planLacksBranchProtection reports whether GitHub refused branch protection
+// because of the account's plan rather than the request. github.com answers
+// 403 "Upgrade to GitHub Pro or make this repository public to enable this
+// feature." for a private repo on a free plan. The message match is
+// deliberate: a 403 from a token missing admin scope is a real
+// misconfiguration and must still fail.
+func planLacksBranchProtection(err error) bool {
+	var errResp *github.ErrorResponse
+	if !errors.As(err, &errResp) {
+		return false
+	}
+	if errResp.Response == nil || errResp.Response.StatusCode != http.StatusForbidden {
+		return false
+	}
+	return strings.Contains(errResp.Message, "Upgrade to GitHub")
 }
 
 // seedCodeowners writes CODEOWNERS directly through the Contents-backed

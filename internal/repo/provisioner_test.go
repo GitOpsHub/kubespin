@@ -2,7 +2,10 @@ package repo
 
 import (
 	"context"
+	"net/http"
 	"testing"
+
+	"github.com/google/go-github/v75/github"
 )
 
 func TestProvisioner_Exists(t *testing.T) {
@@ -51,6 +54,46 @@ func TestProvisioner_Create_SeedsCodeownersAndProtection(t *testing.T) {
 	}
 	if content, ok := checkout.File("CODEOWNERS"); !ok || len(content) == 0 {
 		t.Error("expected a seeded CODEOWNERS file")
+	}
+}
+
+// A free-plan account cannot protect a private repository's branch. That is an
+// account fact no retry fixes, so Create must still seed the repo rather than
+// abandoning the apply partway through cluster provisioning.
+func TestProvisioner_Create_ToleratesPlanWithoutBranchProtection(t *testing.T) {
+	f := newFakeGitHub()
+	f.protectionErr = &github.ErrorResponse{
+		Response: &http.Response{StatusCode: http.StatusForbidden},
+		Message:  "Upgrade to GitHub Pro or make this repository public to enable this feature.",
+	}
+	p := NewProvisioner(f.clients())
+	spec := testSpec()
+
+	if err := p.Create(context.Background(), spec); err != nil {
+		t.Fatalf("Create should converge without branch protection: %v", err)
+	}
+
+	checkout, err := p.Clone(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if content, ok := checkout.File("CODEOWNERS"); !ok || len(content) == 0 {
+		t.Error("expected a seeded CODEOWNERS file")
+	}
+}
+
+// Every other 403 — a token missing admin scope, say — is a real
+// misconfiguration and must fail loudly.
+func TestProvisioner_Create_FailsOnForbiddenBranchProtection(t *testing.T) {
+	f := newFakeGitHub()
+	f.protectionErr = &github.ErrorResponse{
+		Response: &http.Response{StatusCode: http.StatusForbidden},
+		Message:  "Resource not accessible by personal access token",
+	}
+	p := NewProvisioner(f.clients())
+
+	if err := p.Create(context.Background(), testSpec()); err == nil {
+		t.Fatal("expected Create to fail when branch protection is forbidden for another reason")
 	}
 }
 
