@@ -59,8 +59,8 @@ func TestVersionFlag(t *testing.T) {
 
 // Scaffolded commands must fail rather than exit zero and imply they did work.
 func TestStubCommandsReportNotImplemented(t *testing.T) {
+	// apply is implemented from M2 onward; the rest are still scaffolded.
 	for _, args := range [][]string{
-		{"apply"},
 		{"delete"},
 		{"fleet", "update"},
 		{"fleet", "audit"},
@@ -90,7 +90,7 @@ func TestPersistentPreRunPopulatesContext(t *testing.T) {
 	root := NewRootCommand()
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
-	root.SetArgs([]string{"apply", "--log-level", "debug"})
+	root.SetArgs([]string{"delete", "--log-level", "debug"})
 
 	if err := root.Execute(); !errors.Is(err, ErrNotImplemented) {
 		t.Fatalf("error = %v, want one wrapping ErrNotImplemented", err)
@@ -98,7 +98,7 @@ func TestPersistentPreRunPopulatesContext(t *testing.T) {
 }
 
 func TestInvalidGlobalFlagFailsBeforeCommandRuns(t *testing.T) {
-	_, err := execute(t, "apply", "--log-level", "chatty")
+	_, err := execute(t, "delete", "--log-level", "chatty")
 	if !errors.Is(err, ErrConfig) {
 		t.Errorf("error = %v, want one wrapping ErrConfig", err)
 	}
