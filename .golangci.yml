@@ -1,0 +1,43 @@
+version: "2"
+
+run:
+  timeout: 5m
+  build-tags:
+    - integration
+
+linters:
+  enable:
+    - errorlint      # enforces errors.Is/As over == and type assertions
+    - wrapcheck      # errors crossing a package boundary must be wrapped
+    - copyloopvar
+    - gosec
+    - misspell
+    - revive
+    - unconvert
+    - unparam
+    - errname
+  settings:
+    errcheck:
+      check-type-assertions: true
+    revive:
+      rules:
+        - name: exported
+        - name: error-strings
+        - name: context-as-argument
+  exclusions:
+    rules:
+      # Test helpers legitimately construct errors inline and skip some checks.
+      - path: _test\.go
+        linters:
+          - wrapcheck
+          - gosec
+          - unparam
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/GitOpsHub/kubespin

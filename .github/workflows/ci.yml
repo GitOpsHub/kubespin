@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.26"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.6.2
+
+      - name: go mod tidy is committed
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      # docs/cli is generated from the command tree; stale references fail here
+      # rather than misleading a reader.
+      - name: Generated CLI docs are current
+        run: |
+          make docs
+          git diff --exit-code -- docs/cli
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Unit tests
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: coverage
+          path: coverage.out
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # git describe needs tags for the version stamp
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: make build
+
+      - uses: actions/upload-artifact@v5
+        if: github.ref == 'refs/heads/main'
+        with:
+          name: kubespin-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: bin/kubespin

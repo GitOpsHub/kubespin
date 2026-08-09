@@ -1,0 +1,45 @@
+name: Integration
+
+# Integration tests touch real AWS and a local DynamoDB, so they run nightly and
+# on demand rather than on every pull request.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC only: no long-lived cloud credentials in this repo
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    environment: integration
+
+    services:
+      dynamodb:
+        image: amazon/dynamodb-local:latest
+        ports:
+          - 8000:8000
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+
+      # Configured once the fleet AWS account exists (see infra/fleet/README.md).
+      # Until then the DynamoDB-Local-backed tests below run without it.
+      - name: Configure AWS credentials
+        if: vars.AWS_INTEGRATION_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_INTEGRATION_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Integration tests
+        env:
+          KUBESPIN_DYNAMODB_ENDPOINT: http://localhost:8000
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+        run: go test -race -tags=integration -timeout 30m ./...
