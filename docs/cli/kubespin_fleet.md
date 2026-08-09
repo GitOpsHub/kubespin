@@ -6,6 +6,16 @@ Operate on the whole fleet rather than a single cluster
 kubespin fleet [flags]
 ```
 
+### Examples
+
+```
+  # The typical fleet lifecycle, in order
+  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+  kubespin fleet status
+  kubespin fleet update --component argo-cd --version 2.11.0
+  kubespin fleet audit
+```
+
 ### Options
 
 ```

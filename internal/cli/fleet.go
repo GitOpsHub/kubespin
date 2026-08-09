@@ -20,7 +20,12 @@ func newFleetCommand() *cobra.Command {
 	fleetCmd := &cobra.Command{
 		Use:   "fleet",
 		Short: "Operate on the whole fleet rather than a single cluster",
-		Args:  cobra.NoArgs,
+		Example: `  # The typical fleet lifecycle, in order
+  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+  kubespin fleet status
+  kubespin fleet update --component argo-cd --version 2.11.0
+  kubespin fleet audit`,
+		Args: cobra.NoArgs,
 		// With no subcommand, print help rather than failing.
 		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
@@ -44,6 +49,12 @@ staged through a rate-limited worker pool.
 Canary-first staging (updating a canary tier before the rest of the fleet)
 is not yet implemented: every matching cluster is updated in the same wave.
 Use --profile to scope a wave to one tier by hand in the meantime.`,
+		Example: `  # Roll a new Argo CD version across every cluster, 8 at a time
+  kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8
+
+  # Scope the wave to one tier and one cloud
+  kubespin fleet update --component cert-manager --version 1.15.1 \
+    --profile tier-standard@1.0.0 --provider aws`,
 		Args: cobra.NoArgs,
 		RunE: runFleetUpdate,
 	}
@@ -144,6 +155,11 @@ detects changes made outside kubespin, such as a manually resized node pool.
 
 audit is read-only: it never reconciles or commits. Persisting findings back
 into the Fleet Registry is not yet implemented; this prints them.`,
+		Example: `  # Audit every cluster in the fleet
+  kubespin fleet audit
+
+  # Audit only AWS clusters, with more concurrency
+  kubespin fleet audit --provider aws --concurrency 8`,
 		Args: cobra.NoArgs,
 		RunE: runFleetAudit,
 	}
@@ -241,6 +257,14 @@ func newFleetStatusCommand() *cobra.Command {
 		Long: `status reads the Fleet Registry, which is populated by each cluster's
 fleet-status-reporter pushing outward. It never connects to a cluster, so a
 cluster that is unreachable shows as stale rather than blocking the command.`,
+		Example: `  # Every cluster, as a table
+  kubespin fleet status
+
+  # Only clusters that have missed their reporting window
+  kubespin fleet status --stale-only --stale-threshold 30m
+
+  # Machine-readable output, restricted to one phase
+  kubespin fleet status --phase ready --output json`,
 		Args: cobra.NoArgs,
 		RunE: runFleetStatus,
 	}

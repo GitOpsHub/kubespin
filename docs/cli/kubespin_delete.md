@@ -22,6 +22,21 @@ flags below, which override the file when given.
 kubespin delete [flags]
 ```
 
+### Examples
+
+```
+  # AWS, prompts to type the cluster ID to confirm
+  kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
+    --github-org GitOpsHub
+
+  # GCP, scripted (no interactive confirmation)
+  kubespin delete --provider gcp --gcp-project my-gcp-project --region us-central1 \
+    --cluster-id demo-gcp --github-org GitOpsHub --yes
+
+  # Using the same cluster.yaml apply was run with
+  kubespin delete --spec ./cluster.yaml --yes
+```
+
 ### Options
 
 ```

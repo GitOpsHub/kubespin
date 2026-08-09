@@ -23,6 +23,14 @@ already looks valid.
 Logins run concurrently: each provider may open a browser, and there is no
 dependency between them, so waiting for them one at a time would just be a
 needless delay.`,
+		Example: `  # Log in to every configured provider
+  kubespin login
+
+  # Only AWS and GCP
+  kubespin login --only aws,gcp
+
+  # Re-authenticate even if the session still looks valid
+  kubespin login --force`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			logger := LoggerFrom(cmd.Context())
@@ -56,6 +64,11 @@ looks valid, without logging in, logging out, or otherwise changing anything.
 
 Use this to debug "why is my provisioner failing" before assuming the bug is
 in kubespin rather than an expired session.`,
+		Example: `  # Every configured provider
+  kubespin status
+
+  # Just Azure
+  kubespin status --only azure`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			logger := LoggerFrom(cmd.Context())
@@ -85,7 +98,12 @@ func newLogoutCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logout",
 		Short: "Clear cached sessions for one or more cloud providers",
-		Args:  cobra.NoArgs,
+		Example: `  # Log out of every provider
+  kubespin logout
+
+  # Just GCP
+  kubespin logout --only gcp`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			logger := LoggerFrom(cmd.Context())
 

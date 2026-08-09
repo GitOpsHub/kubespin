@@ -18,6 +18,19 @@ checked against --account-id before anything is created.
 kubespin fleet bootstrap [flags]
 ```
 
+### Examples
+
+```
+  # Preview what bootstrap would create
+  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
+
+  # Provision it for real
+  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+
+  # Re-running is safe; a converged fleet reports no changes
+  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+```
+
 ### Options
 
 ```

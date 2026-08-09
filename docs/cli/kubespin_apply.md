@@ -19,6 +19,27 @@ holds — or from the flags below, which override the file when given.
 kubespin apply [flags]
 ```
 
+### Examples
+
+```
+  # AWS, private API server, default node pool
+  kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
+    --access private --github-org GitOpsHub
+
+  # GCP, public API server, larger node pool
+  kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
+    --cluster-id demo-gcp --access public --instance-type e2-standard-4 \
+    --desired-size 3 --github-org GitOpsHub
+
+  # Azure, resolving addons from a platform-profiles repo instead of the builtin catalog
+  kubespin apply --provider azure --azure-subscription <subscription-id> --region eastus \
+    --cluster-id demo-azure --profile tier-standard@1.0.0 \
+    --profiles-repo platform-profiles --github-org GitOpsHub
+
+  # Preview what apply would do without touching any cloud
+  kubespin apply --spec ./cluster.yaml --dry-run
+```
+
 ### Options
 
 ```

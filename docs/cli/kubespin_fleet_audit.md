@@ -15,6 +15,16 @@ into the Fleet Registry is not yet implemented; this prints them.
 kubespin fleet audit [flags]
 ```
 
+### Examples
+
+```
+  # Audit every cluster in the fleet
+  kubespin fleet audit
+
+  # Audit only AWS clusters, with more concurrency
+  kubespin fleet audit --provider aws --concurrency 8
+```
+
 ### Options
 
 ```

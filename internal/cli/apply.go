@@ -33,6 +33,22 @@ recorded in the Fleet Registry.
 
 The spec may come from a cluster.yaml — the same file the cluster's repository
 holds — or from the flags below, which override the file when given.`,
+		Example: `  # AWS, private API server, default node pool
+  kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
+    --access private --github-org GitOpsHub
+
+  # GCP, public API server, larger node pool
+  kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
+    --cluster-id demo-gcp --access public --instance-type e2-standard-4 \
+    --desired-size 3 --github-org GitOpsHub
+
+  # Azure, resolving addons from a platform-profiles repo instead of the builtin catalog
+  kubespin apply --provider azure --azure-subscription <subscription-id> --region eastus \
+    --cluster-id demo-azure --profile tier-standard@1.0.0 \
+    --profiles-repo platform-profiles --github-org GitOpsHub
+
+  # Preview what apply would do without touching any cloud
+  kubespin apply --spec ./cluster.yaml --dry-run`,
 		Args: cobra.NoArgs,
 		RunE: runApply,
 	}
@@ -340,6 +356,16 @@ decommissioning on retry rather than needing to be reasoned about by hand.
 The spec identifies which cluster and cloud to tear down. It may come from a
 cluster.yaml — the same file the cluster's repository holds — or from the
 flags below, which override the file when given.`,
+		Example: `  # AWS, prompts to type the cluster ID to confirm
+  kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
+    --github-org GitOpsHub
+
+  # GCP, scripted (no interactive confirmation)
+  kubespin delete --provider gcp --gcp-project my-gcp-project --region us-central1 \
+    --cluster-id demo-gcp --github-org GitOpsHub --yes
+
+  # Using the same cluster.yaml apply was run with
+  kubespin delete --spec ./cluster.yaml --yes`,
 		Args: cobra.NoArgs,
 		RunE: runDelete,
 	}

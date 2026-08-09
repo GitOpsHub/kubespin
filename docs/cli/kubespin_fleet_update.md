@@ -15,6 +15,17 @@ Use --profile to scope a wave to one tier by hand in the meantime.
 kubespin fleet update [flags]
 ```
 
+### Examples
+
+```
+  # Roll a new Argo CD version across every cluster, 8 at a time
+  kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8
+
+  # Scope the wave to one tier and one cloud
+  kubespin fleet update --component cert-manager --version 1.15.1 \
+    --profile tier-standard@1.0.0 --provider aws
+```
+
 ### Options
 
 ```
