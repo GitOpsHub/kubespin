@@ -165,8 +165,9 @@ func Teardown(cloud Cloud, repoProv repo.Provisioner, logger *slog.Logger) Teard
 	}
 }
 
-// createClusterStep requests the cluster, waits for it to become active, then
-// reconciles node pools and opens the status reporter's egress path.
+// createClusterStep resolves the cluster's network, requests the cluster,
+// waits for it to become active, then reconciles node pools and opens the
+// status reporter's egress path.
 //
 // Waiting here rather than returning early is deliberate: the phase is only
 // recorded once the cluster is genuinely usable, so a resumed run never
@@ -175,6 +176,19 @@ func createClusterStep(
 	cloud Cloud, logger *slog.Logger,
 ) func(context.Context, core.ClusterSpec, registry.Record) error {
 	return func(ctx context.Context, spec core.ClusterSpec, _ registry.Record) error {
+		if cloud.Network != nil {
+			result, err := cloud.Network.EnsureNetwork(ctx, spec)
+			if err != nil {
+				return fmt.Errorf("ensuring network for %s: %w", spec.ID, err)
+			}
+			// spec is this closure's own local copy, safe to mutate: everything
+			// below, including Cluster.Create, must see the resolved subnets.
+			spec.Subnets = result.SubnetIDs
+			if result.Change.Changed {
+				logger.Info("provisioned network", "cluster", spec.ID, "changes", result.Change.Details)
+			}
+		}
+
 		if err := cloud.Cluster.Create(ctx, spec); err != nil {
 			return fmt.Errorf("requesting cluster %s: %w", spec.ID, err)
 		}

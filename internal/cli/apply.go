@@ -46,6 +46,9 @@ holds — or from the flags below, which override the file when given.`,
 	fs.String("profile", "", "profile reference from platform-profiles, e.g. tier-small@1.0.0")
 	fs.String("kubernetes-version", "", "Kubernetes minor version, e.g. 1.34")
 	fs.StringSlice("subnets", nil, "existing subnets to place the cluster in")
+	fs.String("vpc-cidr", "", "address space for the VPC kubespin creates when --subnets is omitted (AWS only, default 10.0.0.0/16)")
+	fs.String("vnet-cidr", "", "address space for the VNet kubespin creates when --subnets is omitted (Azure only, default 10.0.0.0/16)")
+	fs.String("subnet-cidr", "", "address prefix for the subnet kubespin creates when --subnets is omitted (Azure default 10.0.1.0/24, GCP default 10.0.0.0/20)")
 	fs.String("ingestion-endpoint", "", "Central Ingestion API host the cluster must be able to reach")
 	fs.String("gcp-project", "", "GCP project hosting the cluster (required for --provider gcp)")
 	fs.String("azure-subscription", "", "Azure subscription hosting the cluster (required for --provider azure)")
@@ -77,6 +80,17 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	}
 	if cfg.Registry.Region == "" {
 		return fmt.Errorf("%w: --registry-region is required", ErrConfig)
+	}
+
+	// A dry run only reads the AWS-hosted Fleet Registry — it never touches the
+	// cluster's own cloud — so it only needs AWS authenticated, regardless of
+	// spec.Provider. A real apply needs both.
+	authProviders := []string{"aws"}
+	if !cfg.DryRun {
+		authProviders = cloudAuthProviders(spec)
+	}
+	if err := ensureAuthenticated(cmd, authProviders...); err != nil {
+		return err
 	}
 
 	reg, err := registry.NewDynamoDB(ctx, cfg.Registry.Region, cfg.Registry.Table)
@@ -157,6 +171,16 @@ func reportPlan(
 		phase = next
 	}
 	return nil
+}
+
+// cloudAuthProviders names the auth providers a real (non-dry-run) apply or
+// delete needs: the cluster's own cloud, plus AWS, which is always required
+// because the Fleet Registry is AWS-hosted regardless of spec.Provider.
+func cloudAuthProviders(spec core.ClusterSpec) []string {
+	if spec.Provider == core.ProviderAWS {
+		return []string{"aws"}
+	}
+	return []string{"aws", string(spec.Provider)}
 }
 
 // buildCloud assembles the provisioners for the spec's cloud.
@@ -329,6 +353,9 @@ flags below, which override the file when given.`,
 	fs.String("profile", "", "profile reference from platform-profiles, e.g. tier-small@1.0.0")
 	fs.String("kubernetes-version", "", "Kubernetes minor version, e.g. 1.34 (unused by delete, kept for spec compatibility)")
 	fs.StringSlice("subnets", nil, "existing subnets the cluster was placed in")
+	fs.String("vpc-cidr", "", "unused by delete, kept for spec compatibility")
+	fs.String("vnet-cidr", "", "unused by delete, kept for spec compatibility")
+	fs.String("subnet-cidr", "", "unused by delete, kept for spec compatibility")
 	fs.String("gcp-project", "", "GCP project hosting the cluster (required for --provider gcp)")
 	fs.String("azure-subscription", "", "Azure subscription hosting the cluster (required for --provider azure)")
 	fs.String("github-org", "", "GitHub organization the cluster repository lives in")
@@ -358,6 +385,10 @@ func runDelete(cmd *cobra.Command, _ []string) error {
 	}
 	if cfg.Registry.Region == "" {
 		return fmt.Errorf("%w: --registry-region is required", ErrConfig)
+	}
+
+	if err := ensureAuthenticated(cmd, cloudAuthProviders(spec)...); err != nil {
+		return err
 	}
 
 	confirmed, err := cmd.Flags().GetBool("yes")

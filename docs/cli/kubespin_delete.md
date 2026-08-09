@@ -42,7 +42,10 @@ kubespin delete [flags]
       --provider string             cloud provider: aws, gcp, or azure
       --region string               cloud region
       --spec string                 path to a cluster.yaml describing the cluster
+      --subnet-cidr string          unused by delete, kept for spec compatibility
       --subnets strings             existing subnets the cluster was placed in
+      --vnet-cidr string            unused by delete, kept for spec compatibility
+      --vpc-cidr string             unused by delete, kept for spec compatibility
       --yes                         skip the interactive confirmation prompt
 ```
 

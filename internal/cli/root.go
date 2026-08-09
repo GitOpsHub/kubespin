@@ -58,6 +58,9 @@ reporter to the Fleet Registry.`,
 		newApplyCommand(),
 		newDeleteCommand(),
 		newFleetCommand(),
+		newLoginCommand(),
+		newStatusCommand(),
+		newLogoutCommand(),
 	)
 	return root
 }

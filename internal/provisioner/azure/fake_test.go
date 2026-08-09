@@ -18,21 +18,27 @@ import (
 type fakeAzure struct {
 	calls []string
 
-	cluster    *armcontainerservice.ManagedCluster
-	agentPools map[string]*armcontainerservice.AgentPool
-	identities map[string]*armmsi.Identity
-	federated  map[string]*armmsi.FederatedIdentityCredential // "identity/credName" -> cred
-	nsgs       map[string][]*armnetwork.SecurityGroup         // resourceGroup -> NSGs
-	rules      map[string]*armnetwork.SecurityRule            // "nsg/ruleName" -> rule
+	cluster        *armcontainerservice.ManagedCluster
+	agentPools     map[string]*armcontainerservice.AgentPool
+	identities     map[string]*armmsi.Identity
+	federated      map[string]*armmsi.FederatedIdentityCredential // "identity/credName" -> cred
+	nsgs           map[string][]*armnetwork.SecurityGroup         // resourceGroup -> NSGs
+	rules          map[string]*armnetwork.SecurityRule            // "nsg/ruleName" -> rule
+	resourceGroups map[string]string                              // name -> location
+	vnets          map[string]*armnetwork.VirtualNetwork          // "rg/vnet" -> vnet
+	subnets        map[string]*armnetwork.Subnet                  // "rg/vnet/subnet" -> subnet
 }
 
 func newFakeAzure() *fakeAzure {
 	return &fakeAzure{
-		agentPools: map[string]*armcontainerservice.AgentPool{},
-		identities: map[string]*armmsi.Identity{},
-		federated:  map[string]*armmsi.FederatedIdentityCredential{},
-		nsgs:       map[string][]*armnetwork.SecurityGroup{},
-		rules:      map[string]*armnetwork.SecurityRule{},
+		agentPools:     map[string]*armcontainerservice.AgentPool{},
+		identities:     map[string]*armmsi.Identity{},
+		federated:      map[string]*armmsi.FederatedIdentityCredential{},
+		nsgs:           map[string][]*armnetwork.SecurityGroup{},
+		rules:          map[string]*armnetwork.SecurityRule{},
+		resourceGroups: map[string]string{},
+		vnets:          map[string]*armnetwork.VirtualNetwork{},
+		subnets:        map[string]*armnetwork.Subnet{},
 	}
 }
 
@@ -43,6 +49,7 @@ var mutatingCalls = []string{
 	"CreateOrUpdateIdentity", "DeleteIdentity",
 	"CreateOrUpdateFederatedCredential", "DeleteFederatedCredential",
 	"CreateOrUpdateSecurityRule",
+	"EnsureResourceGroup", "CreateOrUpdateVirtualNetwork", "CreateOrUpdateSubnet",
 }
 
 func (f *fakeAzure) assertNoMutations(t *testing.T) {
@@ -57,7 +64,9 @@ func (f *fakeAzure) assertNoMutations(t *testing.T) {
 }
 
 func (f *fakeAzure) clients() *Clients {
-	return &Clients{subscription: testSubscription, cluster: f, identity: f, network: f}
+	return &Clients{
+		subscription: testSubscription, cluster: f, identity: f, network: f, resourceGroups: f,
+	}
 }
 
 func notFound() error { return &azcore.ResponseError{StatusCode: 404} }
@@ -90,7 +99,7 @@ func (f *fakeAzure) CreateOrUpdate(_ context.Context, _, name string, cluster ar
 			Name: ap.Name,
 			Properties: &armcontainerservice.ManagedClusterAgentPoolProfileProperties{
 				VMSize: ap.VMSize, Count: ap.Count, MinCount: ap.MinCount, MaxCount: ap.MaxCount,
-				NodeLabels: ap.NodeLabels,
+				NodeLabels: ap.NodeLabels, VnetSubnetID: ap.VnetSubnetID,
 			},
 		}
 	}
@@ -213,6 +222,56 @@ func (f *fakeAzure) CreateOrUpdateSecurityRule(_ context.Context, _, nsg, name s
 	f.record("CreateOrUpdateSecurityRule")
 	rule.Name = ptr(name)
 	f.rules[nsg+"/"+name] = &rule
+	return nil
+}
+
+func (f *fakeAzure) GetVirtualNetwork(_ context.Context, rg, name string) (*armnetwork.VirtualNetwork, error) {
+	f.record("GetVirtualNetwork")
+	vnet, ok := f.vnets[rg+"/"+name]
+	if !ok {
+		return nil, notFound()
+	}
+	return vnet, nil
+}
+
+func (f *fakeAzure) CreateOrUpdateVirtualNetwork(_ context.Context, rg, name string, vnet armnetwork.VirtualNetwork) error {
+	f.record("CreateOrUpdateVirtualNetwork")
+	vnet.Name = ptr(name)
+	vnet.ID = ptr("/subscriptions/" + testSubscription + "/resourceGroups/" + rg +
+		"/providers/Microsoft.Network/virtualNetworks/" + name)
+	f.vnets[rg+"/"+name] = &vnet
+	return nil
+}
+
+func (f *fakeAzure) GetSubnet(_ context.Context, rg, vnet, name string) (*armnetwork.Subnet, error) {
+	f.record("GetSubnet")
+	subnet, ok := f.subnets[rg+"/"+vnet+"/"+name]
+	if !ok {
+		return nil, notFound()
+	}
+	return subnet, nil
+}
+
+func (f *fakeAzure) CreateOrUpdateSubnet(_ context.Context, rg, vnet, name string, subnet armnetwork.Subnet) error {
+	f.record("CreateOrUpdateSubnet")
+	subnet.Name = ptr(name)
+	subnet.ID = ptr("/subscriptions/" + testSubscription + "/resourceGroups/" + rg +
+		"/providers/Microsoft.Network/virtualNetworks/" + vnet + "/subnets/" + name)
+	f.subnets[rg+"/"+vnet+"/"+name] = &subnet
+	return nil
+}
+
+// --- Resource Groups ---
+
+func (f *fakeAzure) GetResourceGroup(_ context.Context, name string) (bool, error) {
+	f.record("GetResourceGroup")
+	_, ok := f.resourceGroups[name]
+	return ok, nil
+}
+
+func (f *fakeAzure) EnsureResourceGroup(_ context.Context, name, location string) error {
+	f.record("EnsureResourceGroup")
+	f.resourceGroups[name] = location
 	return nil
 }
 

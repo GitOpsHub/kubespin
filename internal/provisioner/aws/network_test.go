@@ -107,6 +107,113 @@ func TestAllowEgress_IgnoresIngressRules(t *testing.T) {
 	}
 }
 
+// An existing spec's subnets pass through unchanged — the operator owns
+// that network.
+func TestEnsureNetwork_PassesThroughExistingSubnets(t *testing.T) {
+	f := newFakeAWS()
+	spec := testSpec()
+
+	result, err := NewNetworkProvisioner(f.clients()).EnsureNetwork(t.Context(), spec)
+	if err != nil {
+		t.Fatalf("EnsureNetwork: %v", err)
+	}
+	if len(result.SubnetIDs) != 2 || result.Change.Changed {
+		t.Errorf("result = %+v, want spec.Subnets passed through unchanged", result)
+	}
+	f.assertNoMutations(t)
+}
+
+// A clean account with no subnets supplied gets a VPC, two subnets across
+// two AZs, an Internet Gateway, and a public route table.
+func TestEnsureNetwork_CreatesVPCAndSubnetsWhenSubnetsEmpty(t *testing.T) {
+	f := newFakeAWS()
+	spec := testSpec()
+	spec.Subnets = nil
+
+	result, err := NewNetworkProvisioner(f.clients()).EnsureNetwork(t.Context(), spec)
+	if err != nil {
+		t.Fatalf("EnsureNetwork: %v", err)
+	}
+
+	if !result.Change.Changed {
+		t.Error("Changed = false, want the new network reported")
+	}
+	if len(result.SubnetIDs) != 2 {
+		t.Fatalf("SubnetIDs = %v, want exactly two resolved subnet IDs", result.SubnetIDs)
+	}
+	if result.SubnetIDs[0] == result.SubnetIDs[1] {
+		t.Errorf("both subnets resolved to the same ID: %v", result.SubnetIDs)
+	}
+
+	for _, want := range []string{
+		"CreateVpc", "ModifyVpcAttribute", "CreateSubnet",
+		"CreateInternetGateway", "AttachInternetGateway",
+		"CreateRouteTable", "CreateRoute", "AssociateRouteTable",
+	} {
+		if !f.called(want) {
+			t.Errorf("%s was not called", want)
+		}
+	}
+
+	if len(f.vpcs) != 1 {
+		t.Errorf("vpcs created = %d, want 1", len(f.vpcs))
+	}
+	if len(f.subnets) != 2 {
+		t.Errorf("subnets created = %d, want 2", len(f.subnets))
+	}
+}
+
+// A repeated apply must not create duplicate resources or report a change.
+func TestEnsureNetwork_IsIdempotent(t *testing.T) {
+	f := newFakeAWS()
+	spec := testSpec()
+	spec.Subnets = nil
+	p := NewNetworkProvisioner(f.clients())
+
+	first, err := p.EnsureNetwork(t.Context(), spec)
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	f.calls = nil
+	second, err := p.EnsureNetwork(t.Context(), spec)
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+
+	if second.Change.Changed {
+		t.Errorf("Changed = true on a second call: %v", second.Change.Details)
+	}
+	if len(second.SubnetIDs) != 2 || second.SubnetIDs[0] != first.SubnetIDs[0] || second.SubnetIDs[1] != first.SubnetIDs[1] {
+		t.Errorf("SubnetIDs = %v, want the same subnets as the first call (%v)", second.SubnetIDs, first.SubnetIDs)
+	}
+	if len(f.vpcs) != 1 || len(f.subnets) != 2 {
+		t.Errorf("resources duplicated on second call: %d vpcs, %d subnets", len(f.vpcs), len(f.subnets))
+	}
+	f.assertNoMutations(t)
+}
+
+func TestEnsureNetwork_RespectsVPCCIDROverride(t *testing.T) {
+	f := newFakeAWS()
+	spec := testSpec()
+	spec.Subnets = nil
+	spec.VPCCIDR = "172.16.0.0/16"
+
+	if _, err := NewNetworkProvisioner(f.clients()).EnsureNetwork(t.Context(), spec); err != nil {
+		t.Fatalf("EnsureNetwork: %v", err)
+	}
+
+	var found bool
+	for _, v := range f.vpcs {
+		if aws.ToString(v.CidrBlock) == spec.VPCCIDR {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no VPC created with CIDR %s", spec.VPCCIDR)
+	}
+}
+
 func TestAllowEgress_RequiresAClusterSecurityGroup(t *testing.T) {
 	f := newFakeAWS()
 

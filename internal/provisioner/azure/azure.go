@@ -25,6 +25,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v6"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/msi/armmsi"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork/v6"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
 
 	"github.com/GitOpsHub/kubespin/internal/core"
 )
@@ -54,11 +55,25 @@ type identityAPI interface {
 	DeleteFederatedCredential(ctx context.Context, resourceGroup, identityName, name string) error
 }
 
-// networkAPI is used only for the status reporter's egress rule.
+// networkAPI covers the status reporter's egress rule and, for EnsureNetwork,
+// the VNet/subnet kubespin creates when none is supplied.
 type networkAPI interface {
 	ListSecurityGroups(ctx context.Context, resourceGroup string) ([]*armnetwork.SecurityGroup, error)
 	GetSecurityRule(ctx context.Context, resourceGroup, nsg, name string) (*armnetwork.SecurityRule, error)
 	CreateOrUpdateSecurityRule(ctx context.Context, resourceGroup, nsg, name string, rule armnetwork.SecurityRule) error
+
+	GetVirtualNetwork(ctx context.Context, resourceGroup, name string) (*armnetwork.VirtualNetwork, error)
+	CreateOrUpdateVirtualNetwork(ctx context.Context, resourceGroup, name string, vnet armnetwork.VirtualNetwork) error
+	GetSubnet(ctx context.Context, resourceGroup, vnet, name string) (*armnetwork.Subnet, error)
+	CreateOrUpdateSubnet(ctx context.Context, resourceGroup, vnet, name string, subnet armnetwork.Subnet) error
+}
+
+// resourceGroupAPI is the prerequisite every other Azure resource this
+// package creates needs: ARM rejects a cluster, identity, or VNet create
+// against a resource group that does not exist yet.
+type resourceGroupAPI interface {
+	GetResourceGroup(ctx context.Context, name string) (bool, error)
+	EnsureResourceGroup(ctx context.Context, name, location string) error
 }
 
 // Clients bundles the Azure clients the provisioner uses, scoped to one
@@ -66,10 +81,11 @@ type networkAPI interface {
 // Clients fixes a region and GCP's fixes a project: it is operator
 // configuration rather than cluster desired state.
 type Clients struct {
-	subscription string
-	cluster      clusterAPI
-	identity     identityAPI
-	network      networkAPI
+	subscription   string
+	cluster        clusterAPI
+	identity       identityAPI
+	network        networkAPI
+	resourceGroups resourceGroupAPI
 }
 
 // NewClients builds real Azure clients for a subscription, authenticating
@@ -109,12 +125,27 @@ func NewClients(subscription string) (*Clients, error) {
 	if err != nil {
 		return nil, fmt.Errorf("building NSG rules client: %w", err)
 	}
+	vnets, err := armnetwork.NewVirtualNetworksClient(subscription, cred, nil)
+	if err != nil {
+		return nil, fmt.Errorf("building virtual networks client: %w", err)
+	}
+	subnets, err := armnetwork.NewSubnetsClient(subscription, cred, nil)
+	if err != nil {
+		return nil, fmt.Errorf("building subnets client: %w", err)
+	}
+	resourceGroups, err := armresources.NewResourceGroupsClient(subscription, cred, nil)
+	if err != nil {
+		return nil, fmt.Errorf("building resource groups client: %w", err)
+	}
 
 	return &Clients{
 		subscription: subscription,
 		cluster:      realCluster{clusters: clusters, agentPools: agentPools},
 		identity:     realIdentity{identities: identities, federated: federated},
-		network:      realNetwork{groups: securityGroups, rules: securityRules},
+		network: realNetwork{
+			groups: securityGroups, rules: securityRules, vnets: vnets, subnets: subnets,
+		},
+		resourceGroups: realResourceGroups{groups: resourceGroups},
 	}, nil
 }
 
@@ -234,10 +265,12 @@ func (r realIdentity) DeleteFederatedCredential(ctx context.Context, rg, identit
 	return nil
 }
 
-// realNetwork adapts the NSG clients to networkAPI.
+// realNetwork adapts the NSG, VNet, and subnet clients to networkAPI.
 type realNetwork struct {
-	groups *armnetwork.SecurityGroupsClient
-	rules  *armnetwork.SecurityRulesClient
+	groups  *armnetwork.SecurityGroupsClient
+	rules   *armnetwork.SecurityRulesClient
+	vnets   *armnetwork.VirtualNetworksClient
+	subnets *armnetwork.SubnetsClient
 }
 
 func (r realNetwork) ListSecurityGroups(ctx context.Context, rg string) ([]*armnetwork.SecurityGroup, error) {
@@ -268,6 +301,61 @@ func (r realNetwork) CreateOrUpdateSecurityRule(ctx context.Context, rg, nsg, na
 	return nil
 }
 
+func (r realNetwork) GetVirtualNetwork(ctx context.Context, rg, name string) (*armnetwork.VirtualNetwork, error) {
+	resp, err := r.vnets.Get(ctx, rg, name, nil)
+	if err != nil {
+		return nil, fmt.Errorf("network: get virtual network %s/%s: %w", rg, name, err)
+	}
+	return &resp.VirtualNetwork, nil
+}
+
+func (r realNetwork) CreateOrUpdateVirtualNetwork(ctx context.Context, rg, name string, vnet armnetwork.VirtualNetwork) error {
+	if _, err := r.vnets.BeginCreateOrUpdate(ctx, rg, name, vnet, nil); err != nil {
+		return fmt.Errorf("network: create or update virtual network %s/%s: %w", rg, name, err)
+	}
+	return nil
+}
+
+func (r realNetwork) GetSubnet(ctx context.Context, rg, vnet, name string) (*armnetwork.Subnet, error) {
+	resp, err := r.subnets.Get(ctx, rg, vnet, name, nil)
+	if err != nil {
+		return nil, fmt.Errorf("network: get subnet %s/%s/%s: %w", rg, vnet, name, err)
+	}
+	return &resp.Subnet, nil
+}
+
+func (r realNetwork) CreateOrUpdateSubnet(ctx context.Context, rg, vnet, name string, subnet armnetwork.Subnet) error {
+	if _, err := r.subnets.BeginCreateOrUpdate(ctx, rg, vnet, name, subnet, nil); err != nil {
+		return fmt.Errorf("network: create or update subnet %s/%s/%s: %w", rg, vnet, name, err)
+	}
+	return nil
+}
+
+// realResourceGroups adapts the resource groups client to resourceGroupAPI.
+// Unlike the network and cluster clients, CreateOrUpdate here is synchronous —
+// ARM does not treat resource group creation as a long-running operation.
+type realResourceGroups struct {
+	groups *armresources.ResourceGroupsClient
+}
+
+func (r realResourceGroups) GetResourceGroup(ctx context.Context, name string) (bool, error) {
+	resp, err := r.groups.CheckExistence(ctx, name, nil)
+	if err != nil {
+		return false, fmt.Errorf("resources: checking resource group %s: %w", name, err)
+	}
+	return resp.Success, nil
+}
+
+func (r realResourceGroups) EnsureResourceGroup(ctx context.Context, name, location string) error {
+	_, err := r.groups.CreateOrUpdate(ctx, name, armresources.ResourceGroup{
+		Location: ptr(location),
+	}, nil)
+	if err != nil {
+		return fmt.Errorf("resources: create or update resource group %s: %w", name, err)
+	}
+	return nil
+}
+
 // code extracts the HTTP status code from an azcore response error, or 0 if
 // err is not one.
 func code(err error) int {
@@ -292,6 +380,8 @@ func (n names) identity(comp string) string {
 }
 func (n names) federatedCredential(comp string) string { return comp }
 func (n names) securityRule() string                   { return "kubespin-" + n.spec.ID.String() + "-egress" }
+func (n names) vnet() string                           { return "kubespin-" + n.spec.ID.String() + "-vnet" }
+func (n names) subnet() string                         { return "kubespin-" + n.spec.ID.String() + "-subnet" }
 
 func tags(spec core.ClusterSpec) map[string]*string {
 	managedBy, cluster, profile := "kubespin", spec.ID.String(), spec.Profile.String()

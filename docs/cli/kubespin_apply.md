@@ -41,7 +41,10 @@ kubespin apply [flags]
       --provider string             cloud provider: aws, gcp, or azure
       --region string               cloud region
       --spec string                 path to a cluster.yaml describing the cluster
+      --subnet-cidr string          address prefix for the subnet kubespin creates when --subnets is omitted (Azure default 10.0.1.0/24, GCP default 10.0.0.0/20)
       --subnets strings             existing subnets to place the cluster in
+      --vnet-cidr string            address space for the VNet kubespin creates when --subnets is omitted (Azure only, default 10.0.0.0/16)
+      --vpc-cidr string             address space for the VPC kubespin creates when --subnets is omitted (AWS only, default 10.0.0.0/16)
 ```
 
 ### Options inherited from parent commands

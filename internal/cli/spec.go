@@ -76,6 +76,9 @@ func applySpecFlags(cmd *cobra.Command, spec *core.ClusterSpec) error {
 		{"region", func() string { return spec.Region }, func(v string) { spec.Region = v }},
 		{"access", func() string { return spec.Access.String() }, func(v string) { spec.Access = core.Access(v) }},
 		{"kubernetes-version", func() string { return spec.KubernetesVersion }, func(v string) { spec.KubernetesVersion = v }},
+		{"vpc-cidr", func() string { return spec.VPCCIDR }, func(v string) { spec.VPCCIDR = v }},
+		{"vnet-cidr", func() string { return spec.VNetCIDR }, func(v string) { spec.VNetCIDR = v }},
+		{"subnet-cidr", func() string { return spec.SubnetCIDR }, func(v string) { spec.SubnetCIDR = v }},
 	} {
 		// An explicitly-set flag always wins. A flag left at its default only
 		// applies when the file did not set the field, so passing a spec file

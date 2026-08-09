@@ -53,7 +53,6 @@ func TestClusterSpecValidate_Invalid(t *testing.T) {
 		"unknown access":      {func(s *ClusterSpec) { s.Access = "semi-private" }, "access"},
 		"bad k8s version":     {func(s *ClusterSpec) { s.KubernetesVersion = "v1.34.2" }, "kubernetesVersion"},
 		"no node pools":       {func(s *ClusterSpec) { s.NodePools = nil }, "at least one node pool"},
-		"no subnets":          {func(s *ClusterSpec) { s.Subnets = nil }, "at least one subnet"},
 		"invalid profile ref": {func(s *ClusterSpec) { s.Profile.Version = "" }, "version is required"},
 		"private with cidrs": {
 			func(s *ClusterSpec) { s.AuthorizedCIDRs = []string{"10.0.0.0/8"} },
@@ -89,6 +88,49 @@ func TestClusterSpecValidate_Invalid(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.wantMsg) {
 				t.Errorf("error %q does not mention %q", err, tc.wantMsg)
+			}
+		})
+	}
+}
+
+// Every provider's EnsureNetwork creates a network when none is supplied, so
+// an empty Subnets is valid on every cloud, not just Azure.
+func TestClusterSpecValidate_AllowsEmptySubnets(t *testing.T) {
+	for _, provider := range []Provider{ProviderAWS, ProviderGCP, ProviderAzure} {
+		t.Run(string(provider), func(t *testing.T) {
+			s := validSpec()
+			s.Provider = provider
+			s.Subnets = nil
+
+			if err := s.Validate(); err != nil {
+				t.Fatalf("%s spec with no subnets rejected: %v", provider, err)
+			}
+		})
+	}
+}
+
+func TestClusterSpecValidate_CIDRFields(t *testing.T) {
+	tests := map[string]struct {
+		mutate  func(*ClusterSpec)
+		wantErr bool
+	}{
+		"valid vpc cidr":       {func(s *ClusterSpec) { s.VPCCIDR = "10.0.0.0/16" }, false},
+		"valid vnet cidr":      {func(s *ClusterSpec) { s.VNetCIDR = "10.0.0.0/16" }, false},
+		"valid subnet cidr":    {func(s *ClusterSpec) { s.SubnetCIDR = "10.0.1.0/24" }, false},
+		"invalid vpc cidr":     {func(s *ClusterSpec) { s.VPCCIDR = "not-a-cidr" }, true},
+		"invalid vnet cidr":    {func(s *ClusterSpec) { s.VNetCIDR = "not-a-cidr" }, true},
+		"invalid subnet cidr":  {func(s *ClusterSpec) { s.SubnetCIDR = "10.0.1.0" }, true},
+		"empty cidrs are fine": {func(s *ClusterSpec) {}, false},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			s := validSpec()
+			tc.mutate(&s)
+
+			err := s.Validate()
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Validate() = %v, wantErr %v", err, tc.wantErr)
 			}
 		})
 	}

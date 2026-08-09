@@ -24,6 +24,99 @@ func NewNetworkProvisioner(c *Clients) *NetworkProvisioner {
 // Provider identifies this implementation's cloud.
 func (p *NetworkProvisioner) Provider() core.Provider { return core.ProviderGCP }
 
+// Default used when spec.SubnetCIDR is empty.
+const defaultSubnetCIDR = "10.0.0.0/20"
+
+// EnsureNetwork resolves the subnetwork the cluster will be created in.
+//
+// When spec.Subnets is already set, EnsureNetwork passes it through
+// unchanged — the operator owns that network. When empty, it creates a
+// custom-mode VPC network and a single subnetwork in the cluster's region,
+// named deterministically from the cluster ID so a resumed or repeated apply
+// converges to the same resources rather than creating duplicates.
+func (p *NetworkProvisioner) EnsureNetwork(
+	ctx context.Context, spec core.ClusterSpec,
+) (provisioner.NetworkResult, error) {
+	if len(spec.Subnets) > 0 {
+		return provisioner.NetworkResult{SubnetIDs: spec.Subnets}, nil
+	}
+
+	n := names{project: p.c.project, spec: spec}
+	var change provisioner.Change
+
+	if err := p.ensureVPCNetwork(ctx, n, &change); err != nil {
+		return provisioner.NetworkResult{}, err
+	}
+
+	subnetCIDR := spec.SubnetCIDR
+	if subnetCIDR == "" {
+		subnetCIDR = defaultSubnetCIDR
+	}
+	if err := p.ensureSubnetwork(ctx, n, subnetCIDR, &change); err != nil {
+		return provisioner.NetworkResult{}, err
+	}
+
+	return provisioner.NetworkResult{SubnetIDs: []string{n.subnetworkResource()}, Change: change}, nil
+}
+
+func (p *NetworkProvisioner) ensureVPCNetwork(
+	ctx context.Context, n names, change *provisioner.Change,
+) error {
+	name := n.network()
+
+	if _, err := p.c.networks.GetNetwork(ctx, n.project, name); err == nil {
+		return nil
+	} else if code(err) != 404 {
+		return fmt.Errorf("describing network %s: %w", name, err)
+	}
+
+	err := p.c.networks.InsertNetwork(ctx, n.project, &compute.Network{
+		Name:                  name,
+		AutoCreateSubnetworks: false,
+		Description:           "kubespin-managed network for cluster " + n.spec.ID.String(),
+	})
+	if err != nil {
+		if code(err) == 409 {
+			return nil
+		}
+		return fmt.Errorf("creating network %s: %w", name, err)
+	}
+
+	change.Changed = true
+	change.Details = append(change.Details, fmt.Sprintf("created network %s", name))
+	return nil
+}
+
+func (p *NetworkProvisioner) ensureSubnetwork(
+	ctx context.Context, n names, cidr string, change *provisioner.Change,
+) error {
+	name := n.subnetwork()
+
+	if _, err := p.c.subnetworks.GetSubnetwork(ctx, n.project, n.location(), name); err == nil {
+		return nil
+	} else if code(err) != 404 {
+		return fmt.Errorf("describing subnetwork %s: %w", name, err)
+	}
+
+	err := p.c.subnetworks.InsertSubnetwork(ctx, n.project, n.location(), &compute.Subnetwork{
+		Name:                  name,
+		Network:               n.networkResource(),
+		IpCidrRange:           cidr,
+		Region:                n.location(),
+		PrivateIpGoogleAccess: true,
+	})
+	if err != nil {
+		if code(err) == 409 {
+			return nil
+		}
+		return fmt.Errorf("creating subnetwork %s: %w", name, err)
+	}
+
+	change.Changed = true
+	change.Details = append(change.Details, fmt.Sprintf("created subnetwork %s (%s)", name, cidr))
+	return nil
+}
+
 // AllowEgress authorises outbound traffic from the cluster's network to the
 // ingestion endpoint via a VPC firewall rule.
 //

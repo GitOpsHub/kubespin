@@ -1,0 +1,125 @@
+name: Deploy AKS cluster
+
+# Manual, per-cluster deploys only — apply is not something that should fire on
+# every push. Two separate OIDC federations are required because the Fleet
+# Registry is always AWS-hosted DynamoDB (see CLAUDE.md's "outbound-only" /
+# "Fleet Registry is the single source of durable fleet state" invariants),
+# even when the cluster itself is AKS:
+#   - AWS: sts:AssumeRoleWithWebIdentity against the Fleet Registry account
+#   - Azure: federated credential against the subscription that hosts the AKS
+#     cluster and its workload identity
+# Neither role/App Registration is created by this workflow — see
+# docs/cicd-azure-oidc.md for the one-time setup in each tenant.
+on:
+  workflow_dispatch:
+    inputs:
+      cluster-id:
+        description: "Cluster identifier (also the repository suffix)"
+        required: true
+      region:
+        description: "Azure region, e.g. eastus2"
+        required: true
+      access:
+        description: "API server exposure"
+        required: true
+        default: private
+        type: choice
+        options: [private, public]
+      profile:
+        description: "Profile reference, e.g. tier-small@1.0.0"
+        required: true
+      kubernetes-version:
+        description: "Kubernetes minor version, e.g. 1.34"
+        required: true
+      dry-run:
+        description: "Report the plan without provisioning anything"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  id-token: write # required for both OIDC exchanges below
+  contents: read
+
+concurrency:
+  # Serialize per cluster-id: two concurrent applies against the same lease
+  # just fight over it and one loses noisily instead of queueing cleanly.
+  group: deploy-aks-${{ inputs.cluster-id }}
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: "1.26"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: azure-production
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build kubespin
+        run: make build
+
+      # Grants the Fleet Registry access this run needs: DynamoDB read/write on
+      # the lease and phase records for this cluster-id only, nothing broader.
+      - name: Authenticate to AWS (Fleet Registry)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_FLEET_REGISTRY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_FLEET_REGISTRY_REGION }}
+
+      # Grants the AKS/identity/network calls the Azure ClusterProvisioner and
+      # IdentityProvisioner make against this subscription.
+      - name: Authenticate to Azure (AKS)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: kubespin apply
+        env:
+          KUBESPIN_REGISTRY_REGION: ${{ vars.AWS_FLEET_REGISTRY_REGION }}
+          CLUSTER_ID: ${{ inputs.cluster-id }}
+          REGION: ${{ inputs.region }}
+          ACCESS: ${{ inputs.access }}
+          PROFILE: ${{ inputs.profile }}
+          KUBERNETES_VERSION: ${{ inputs.kubernetes-version }}
+          INGESTION_ENDPOINT: ${{ vars.INGESTION_ENDPOINT }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          GITHUB_ORG: ${{ vars.CLUSTER_REPO_GITHUB_ORG }}
+          GITHUB_ENTERPRISE_BASE_URL: ${{ vars.GITHUB_ENTERPRISE_BASE_URL }}
+          GITHUB_ENTERPRISE_UPLOAD_URL: ${{ vars.GITHUB_ENTERPRISE_UPLOAD_URL }}
+          PROFILES_REPO: ${{ vars.PROFILES_REPO }}
+          # Repo API auth is a GitHub PAT/App token, not OIDC — GitHub Actions'
+          # federated identity covers cloud provider auth (above), not GitHub's
+          # own REST API. This must be a distinct secret with repo-create scope
+          # in CLUSTER_REPO_GITHUB_ORG, separate from the ambient GITHUB_TOKEN
+          # (which is scoped only to this kubespin repo).
+          GITHUB_TOKEN: ${{ secrets.KUBESPIN_CLUSTER_REPO_TOKEN }}
+        run: |
+          args=(
+            apply
+            --provider azure
+            --cluster-id "$CLUSTER_ID"
+            --region "$REGION"
+            --access "$ACCESS"
+            --profile "$PROFILE"
+            --kubernetes-version "$KUBERNETES_VERSION"
+            --ingestion-endpoint "$INGESTION_ENDPOINT"
+            --azure-subscription "$AZURE_SUBSCRIPTION_ID"
+            --github-org "$GITHUB_ORG"
+          )
+          [ -n "$GITHUB_ENTERPRISE_BASE_URL" ] && args+=(--github-base-url "$GITHUB_ENTERPRISE_BASE_URL")
+          [ -n "$GITHUB_ENTERPRISE_UPLOAD_URL" ] && args+=(--github-upload-url "$GITHUB_ENTERPRISE_UPLOAD_URL")
+          [ -n "$PROFILES_REPO" ] && args+=(--profiles-repo "$PROFILES_REPO")
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          ./bin/kubespin "${args[@]}"

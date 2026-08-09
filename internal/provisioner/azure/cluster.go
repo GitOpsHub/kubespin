@@ -52,9 +52,13 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 	n := names{spec}
 
 	location := spec.Region
+	subnetID := ""
+	if len(spec.Subnets) > 0 {
+		subnetID = spec.Subnets[0]
+	}
 	agentPools := []*armcontainerservice.ManagedClusterAgentPoolProfile{}
 	if len(spec.NodePools) > 0 {
-		agentPools = append(agentPools, agentPoolProfile(spec.NodePools[0]))
+		agentPools = append(agentPools, agentPoolProfile(spec.NodePools[0], subnetID))
 	}
 
 	cluster := armcontainerservice.ManagedCluster{
@@ -90,9 +94,9 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 	return nil
 }
 
-func agentPoolProfile(pool core.NodePool) *armcontainerservice.ManagedClusterAgentPoolProfile {
+func agentPoolProfile(pool core.NodePool, subnetID string) *armcontainerservice.ManagedClusterAgentPoolProfile {
 	name := pool.Name
-	return &armcontainerservice.ManagedClusterAgentPoolProfile{
+	profile := &armcontainerservice.ManagedClusterAgentPoolProfile{
 		Name:              &name,
 		VMSize:            ptr(pool.InstanceType),
 		Count:             ptr(pool.DesiredSize),
@@ -102,6 +106,10 @@ func agentPoolProfile(pool core.NodePool) *armcontainerservice.ManagedClusterAge
 		NodeLabels:        ptrMap(pool.Labels),
 		Mode:              ptr(armcontainerservice.AgentPoolModeSystem),
 	}
+	if subnetID != "" {
+		profile.VnetSubnetID = ptr(subnetID)
+	}
+	return profile
 }
 
 // Describe reports the cluster's current state.
@@ -270,11 +278,15 @@ func (p *ClusterProvisioner) ensureNodePools(
 	}
 
 	n := names{spec}
+	subnetID := ""
+	if len(spec.Subnets) > 0 {
+		subnetID = spec.Subnets[0]
+	}
 	for _, want := range spec.NodePools {
 		current, found := findPool(existing, want.Name)
 		if !found {
 			if err := p.c.cluster.CreateOrUpdateAgentPool(
-				ctx, n.resourceGroup(), n.cluster(), want.Name, *agentPoolProfileAsPool(want),
+				ctx, n.resourceGroup(), n.cluster(), want.Name, *agentPoolProfileAsPool(want, subnetID),
 			); err != nil {
 				return fmt.Errorf("creating node pool %s: %w", want.Name, err)
 			}
@@ -288,7 +300,7 @@ func (p *ClusterProvisioner) ensureNodePools(
 		}
 
 		if err := p.c.cluster.CreateOrUpdateAgentPool(
-			ctx, n.resourceGroup(), n.cluster(), want.Name, *agentPoolProfileAsPool(want),
+			ctx, n.resourceGroup(), n.cluster(), want.Name, *agentPoolProfileAsPool(want, subnetID),
 		); err != nil {
 			return fmt.Errorf("resizing node pool %s: %w", want.Name, err)
 		}
@@ -299,8 +311,8 @@ func (p *ClusterProvisioner) ensureNodePools(
 	return nil
 }
 
-func agentPoolProfileAsPool(pool core.NodePool) *armcontainerservice.AgentPool {
-	profile := agentPoolProfile(pool)
+func agentPoolProfileAsPool(pool core.NodePool, subnetID string) *armcontainerservice.AgentPool {
+	profile := agentPoolProfile(pool, subnetID)
 	return &armcontainerservice.AgentPool{
 		Name: profile.Name,
 		Properties: &armcontainerservice.ManagedClusterAgentPoolProfileProperties{
@@ -311,6 +323,7 @@ func agentPoolProfileAsPool(pool core.NodePool) *armcontainerservice.AgentPool {
 			EnableAutoScaling: profile.EnableAutoScaling,
 			NodeLabels:        profile.NodeLabels,
 			Mode:              profile.Mode,
+			VnetSubnetID:      profile.VnetSubnetID,
 		},
 	}
 }

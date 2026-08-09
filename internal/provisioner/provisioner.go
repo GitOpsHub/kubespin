@@ -157,7 +157,14 @@ type EgressDestination struct {
 	Description string
 }
 
-// NetworkProvisioner opens the one outbound path the architecture depends on.
+// NetworkResult is what EnsureNetwork resolves a spec's subnets to.
+type NetworkResult struct {
+	SubnetIDs []string
+	Change    Change
+}
+
+// NetworkProvisioner opens the one outbound path the architecture depends on,
+// and resolves the network a cluster is created in.
 //
 // Nothing reaches into a cluster, so the status reporter's egress to the
 // Central Ingestion API is the only way fleet state escapes. Provisioning it
@@ -165,6 +172,16 @@ type EgressDestination struct {
 // without it needs a network change before it can report at all.
 type NetworkProvisioner interface {
 	Provider() core.Provider
+
+	// EnsureNetwork resolves the subnets a cluster will be created in. If
+	// spec.Subnets is already set, implementations pass it through unchanged
+	// (Change.Changed stays false) — kubespin never touches a network an
+	// operator already supplied. If empty, every implementation creates a
+	// network deterministically named from the cluster ID and adopts it on a
+	// repeated call, so a resumed or repeated apply converges rather than
+	// duplicating resources.
+	EnsureNetwork(ctx context.Context, spec core.ClusterSpec) (NetworkResult, error)
+
 	AllowEgress(ctx context.Context, spec core.ClusterSpec, dest EgressDestination) (Change, error)
 }
 

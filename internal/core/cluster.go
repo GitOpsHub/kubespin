@@ -8,6 +8,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
 )
 
@@ -140,11 +141,34 @@ type ClusterSpec struct {
 	// the provider uses: subnet IDs on AWS, a subnetwork on GCP, a subnet
 	// resource ID on Azure.
 	//
-	// kubespin does not create networks. Network topology is almost always
-	// owned by a separate team with its own IP plan, peering, and egress rules,
-	// so a cluster tool that invented its own VPCs would fight that ownership
-	// rather than fit into it.
+	// When Subnets is empty, EnsureNetwork creates a network for the cluster
+	// on every provider rather than erroring — a VPC/subnets on AWS, a VPC
+	// network/subnetwork on GCP, a VNet/subnet on Azure. Leaving Subnets empty
+	// here — in the persisted cluster.yaml, not just the CLI flag — is what
+	// durably means "kubespin manages this cluster's network." EnsureNetwork
+	// derives deterministic names from the cluster ID and is create-or-adopt,
+	// so every resumed or repeated apply converges to the same resources
+	// without kubespin ever writing a discovered subnet ID back into the spec.
+	// An operator who already owns a network's IP plan, peering, and egress
+	// rules can still supply Subnets up front, and it is passed through
+	// unchanged.
 	Subnets []string `yaml:"subnets" json:"subnets"`
+
+	// VPCCIDR sizes the VPC kubespin creates on AWS when Subnets is empty.
+	// Meaningful only for ProviderAWS with Subnets unset; ignored otherwise.
+	// Empty means "use kubespin's default."
+	VPCCIDR string `yaml:"vpcCIDR,omitempty" json:"vpcCIDR,omitempty"`
+
+	// VNetCIDR sizes the VNet kubespin creates on Azure when Subnets is
+	// empty. Meaningful only for ProviderAzure with Subnets unset; ignored
+	// otherwise. Empty means "use kubespin's default."
+	VNetCIDR string `yaml:"vnetCIDR,omitempty" json:"vnetCIDR,omitempty"`
+
+	// SubnetCIDR sizes the single subnet kubespin creates when Subnets is
+	// empty, on either Azure (its cluster subnet) or GCP (its subnetwork).
+	// Ignored on AWS, which carves two subnets out of VPCCIDR instead of
+	// taking an explicit per-subnet size. Empty means "use kubespin's default."
+	SubnetCIDR string `yaml:"subnetCIDR,omitempty" json:"subnetCIDR,omitempty"`
 
 	// Overrides is this cluster's per-cluster patch onto Profile's resolved
 	// addon set. It lives here, in the user-authored cluster.yaml, rather than
@@ -181,8 +205,23 @@ func (s ClusterSpec) Validate() error {
 	if len(s.NodePools) == 0 {
 		errs = append(errs, fmt.Errorf("%w: at least one node pool is required", ErrInvalidSpec))
 	}
-	if len(s.Subnets) == 0 {
-		errs = append(errs, fmt.Errorf("%w: at least one subnet is required", ErrInvalidSpec))
+	// Subnets is optional on every provider: EnsureNetwork creates a network
+	// when none is supplied, the same way Azure already did before AWS and
+	// GCP gained the same capability.
+	if s.VPCCIDR != "" {
+		if _, _, err := net.ParseCIDR(s.VPCCIDR); err != nil {
+			errs = append(errs, fmt.Errorf("%w: vpcCIDR %q is not a valid CIDR", ErrInvalidSpec, s.VPCCIDR))
+		}
+	}
+	if s.VNetCIDR != "" {
+		if _, _, err := net.ParseCIDR(s.VNetCIDR); err != nil {
+			errs = append(errs, fmt.Errorf("%w: vnetCIDR %q is not a valid CIDR", ErrInvalidSpec, s.VNetCIDR))
+		}
+	}
+	if s.SubnetCIDR != "" {
+		if _, _, err := net.ParseCIDR(s.SubnetCIDR); err != nil {
+			errs = append(errs, fmt.Errorf("%w: subnetCIDR %q is not a valid CIDR", ErrInvalidSpec, s.SubnetCIDR))
+		}
 	}
 
 	seen := make(map[string]struct{}, len(s.NodePools))
