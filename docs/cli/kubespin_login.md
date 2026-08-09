@@ -4,9 +4,8 @@ Authenticate to every configured cloud provider
 
 ### Synopsis
 
-login authenticates to every cloud provider kubespin talks to (AWS today;
-GCP and Azure as their providers land), skipping any provider whose session
-already looks valid.
+login authenticates to every cloud provider kubespin talks to — AWS, GCP,
+and Azure — skipping any provider whose session already looks valid.
 
 Logins run concurrently: each provider may open a browser, and there is no
 dependency between them, so waiting for them one at a time would just be a
@@ -20,13 +19,13 @@ kubespin login [flags]
 
 ```
   # Log in to every configured provider
-  kubespin login
+  ./bin/kubespin login
 
   # Only AWS and GCP
-  kubespin login --only aws,gcp
+  ./bin/kubespin login --only aws,gcp
 
   # Re-authenticate even if the session still looks valid
-  kubespin login --force
+  ./bin/kubespin login --force
 ```
 
 ### Options

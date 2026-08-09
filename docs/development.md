@@ -28,17 +28,25 @@ make
 ## Layout
 
 ```
-cmd/kubespin/          binary entrypoint; wires signals and exit codes
-cmd/ingestion/         Central Ingestion API handler, deployed to Lambda
-internal/cli/          cobra command tree and configuration resolution
-internal/core/         shared domain types
-internal/registry/     Fleet Registry client, lease primitive, in-memory implementation
-internal/orchestrator/ sequences one cluster's provisioning through the phases
-internal/provisioner/  cloud-facing interfaces; one subpackage per cloud
-internal/fleetinfra/   SDK converge engine behind `fleet bootstrap`
-internal/tools/        build-time tools (docs generation)
-internal/version/      build metadata stamped in via -ldflags
-docs/cli/              generated — never edit by hand
+cmd/kubespin/              binary entrypoint; wires signals and exit codes
+cmd/ingestion/             Central Ingestion API handler, deployed to Lambda
+cmd/fleet-status-reporter/ in-cluster CronJob; pushes signed status outward
+internal/cli/              cobra command tree and configuration resolution
+internal/core/             shared domain types
+internal/auth/             operator cloud auth behind login/status/logout
+internal/registry/         Fleet Registry client, lease primitive, in-memory implementation
+internal/orchestrator/     sequences one cluster's provisioning through the phases
+internal/provisioner/      cloud-facing interfaces; one subpackage per cloud
+internal/repo/             cluster repositories over GitHub
+internal/catalog/          profile resolution: builtin tiers and platform-profiles
+internal/argocd/           app-of-apps rendering, access-mode templating, install
+internal/fleet/            fleet-wide audit, update, and status
+internal/fleetinfra/       SDK converge engine behind `fleet bootstrap`
+internal/ingestion/        token verification and write path for the ingestion API
+internal/reporter/         the status reporter's Argo CD summary and push logic
+internal/tools/            build-time tools (docs generation)
+internal/version/          build metadata stamped in via -ldflags
+docs/cli/                  generated — never edit by hand
 ```
 
 **`internal/core` imports nothing from `internal/`.** No cloud SDKs, no I/O, no
@@ -51,8 +59,9 @@ elsewhere.
 
 Sentinel errors, wrapped, matched with `errors.Is`/`errors.As` — never by string
 comparison. Each package exposes its own: `core.ErrInvalidSpec`,
-`core.ErrInvalidTransition`, `cli.ErrConfig`, `cli.ErrNotImplemented`,
-`fleetinfra.ErrSpec`, `fleetinfra.ErrAccountMismatch`.
+`core.ErrInvalidTransition`, `cli.ErrConfig`, `fleetinfra.ErrSpec`,
+`fleetinfra.ErrAccountMismatch`, `registry.ErrNotFound`,
+`registry.ErrAlreadyExists`, `orchestrator.ErrBusy`.
 
 `wrapcheck` is enabled, so any error crossing a package boundary must be
 wrapped with context.
@@ -172,9 +181,17 @@ merge rather than misleading a reader. The generator disables cobra's
 auto-generated date tag and blanks the version string — both would otherwise
 churn the output on every run.
 
-New commands that are not implemented yet should return `ErrNotImplemented` via
-the `stub` helper in [internal/cli/root.go](../internal/cli/root.go). They exit
-3: failing loudly beats exiting 0 and implying work was done.
+A command's `Example` block is the *only* place the reference gets examples
+from, so it has to be runnable as written: every flag the command actually
+requires, spelled out. `apply` and `delete` validate a whole `ClusterSpec`,
+which means an example missing `--profile` fails before doing anything; every
+registry-touching command needs `--registry-region`, which has no default;
+and every repository-touching command needs `--github-org`. Examples are
+written as `./bin/kubespin` — the path `make build` produces — so they can be
+pasted straight into a checkout.
+
+`cmd/kubespin/main.go` exits `1` on any error from `Execute` and `0`
+otherwise; there are no other exit codes.
 
 Global flags belong in `registerGlobalFlags`, which takes a `*pflag.FlagSet`
 rather than a command so the precedence tests can exercise it without building

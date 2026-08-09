@@ -18,6 +18,12 @@ is no central Argo CD hub, and nothing ever reaches inbound into a cluster.
 The CLI reference is generated from the command tree by `make docs`. Do not edit
 it by hand — CI regenerates it and fails on any difference.
 
+Commands throughout these docs are written as `./bin/kubespin`, the path
+`make build` produces, and every example carries the flags that command
+actually requires — they are meant to run as written from a checkout. The
+`kubespin <command> [flags]` line in the generated reference is cobra's usage
+synopsis, not a runnable command.
+
 ## Where the project is
 
 **Every command is implemented: `apply`, `delete`, and every `fleet`

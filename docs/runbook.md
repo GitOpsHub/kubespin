@@ -10,10 +10,14 @@ stuck, or the Central Ingestion API itself is down.
 
 ## A cluster is stale
 
-`fleet status --stale-only` lists every cluster that has missed its
-reporting window ([`Record.Stale`](../internal/registry/registry.go),
-threshold set by `--stale-threshold`, default 10 minutes — long enough to
-tolerate a couple of missed 2-3 minute pushes without paging on noise).
+```bash
+./bin/kubespin fleet status --stale-only --registry-region us-east-1
+```
+
+That lists every cluster that has missed its reporting window
+([`Record.Stale`](../internal/registry/registry.go), threshold set by
+`--stale-threshold`, default 10 minutes — long enough to tolerate a couple of
+missed 2-3 minute pushes without paging on noise).
 
 Staleness is a statement about *missing reports*, not about reachability:
 nothing in `fleet status` ever connects to a cluster, so a stale cluster and
@@ -40,9 +44,9 @@ an unreachable one look the same from here. Work outward from that:
    logs (below).
 
 3. **If the cluster is confirmed down or decommissioned outside kubespin**,
-   don't just ignore the staleness — either restore it or run `kubespin
-   delete` so the registry reflects reality. A stale entry that stays stale
-   forever erodes trust in the whole `fleet status` view.
+   don't just ignore the staleness — either restore it or run
+   `./bin/kubespin delete` so the registry reflects reality. A stale entry
+   that stays stale forever erodes trust in the whole `fleet status` view.
 
 ## `apply` is stuck or keeps failing
 
@@ -55,8 +59,13 @@ not a special "retry" mode — it is the same command.
 If a retry doesn't help:
 
 1. **Read the phase it's stuck at.** The error names the failing step
-   (`"%s: %w"`, step name first). `apply --dry-run` reports the phase
-   without touching anything.
+   (`"%s: %w"`, step name first), and the command prints
+   `cluster <id> stopped at phase <phase>` before it. A dry run reports the
+   same phase without touching anything:
+
+   ```bash
+   ./bin/kubespin apply --spec ./cluster.yaml --registry-region us-east-1 --dry-run
+   ```
 
 2. **Check whether another run holds the lease.** `ErrBusy` means someone
    else's `apply` (or a crashed one whose lease hasn't expired yet) is
@@ -83,10 +92,16 @@ If a retry doesn't help:
 
 5. **If a cluster has been stuck at the same phase across several retries
    with the same error**, stop retrying blind and read the actual cloud
-   state (`fleet audit` for infra, or check the cluster's own repo for
-   `.state.yaml` and `addons.yaml`) before the next attempt — a retry loop
+   state before the next attempt — a retry loop
    against a genuinely broken precondition (a deleted subnet, a revoked
    credential) just wastes lease cycles.
+
+   ```bash
+   ./bin/kubespin fleet audit --provider aws \
+     --github-org "$GITHUB_ORG" --registry-region us-east-1
+   ```
+
+   Or read the cluster's own repository for `.state.yaml` and `addons.yaml`.
 
 ## The Central Ingestion API is down or rejecting pushes
 
@@ -132,6 +147,11 @@ rate limit is the constraint to watch at scale — raise `--concurrency`
 cautiously and watch for a spike in per-cluster failures in the command's
 own output (`N cluster(s), M failed`) rather than assuming higher
 concurrency is free.
+
+Both need `--github-org` and `GITHUB_TOKEN`, since both read cluster
+repositories; `fleet audit` additionally needs `--gcp-project` /
+`--azure-subscription` if the fleet holds clusters on those clouds, or those
+clusters report `FAILED` rather than being skipped.
 
 Both commands report every cluster's outcome independently
 ([`AuditResult`](../internal/fleet/fleet.go),

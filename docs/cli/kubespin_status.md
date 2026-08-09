@@ -18,10 +18,10 @@ kubespin status [flags]
 
 ```
   # Every configured provider
-  kubespin status
+  ./bin/kubespin status
 
   # Just Azure
-  kubespin status --only azure
+  ./bin/kubespin status --only azure
 ```
 
 ### Options

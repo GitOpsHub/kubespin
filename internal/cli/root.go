@@ -28,13 +28,15 @@ its own repository and its own local Argo CD instance syncing from it.
 Clusters are never reached inbound: status flows outward from an in-cluster
 reporter to the Fleet Registry.`,
 		Example: `  # Spin up the shared fleet infrastructure once, then a cluster
-  kubespin login
-  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
-  kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
-    --access private --github-org GitOpsHub
-  kubespin fleet status
+  ./bin/kubespin login
+  make lambda
+  ./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+  ./bin/kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
+    --access private --profile tier-small@1.0.0 \
+    --github-org GitOpsHub --registry-region us-east-1
+  ./bin/kubespin fleet status --registry-region us-east-1
 
-See "kubespin <command> --help" for flags and more examples on any command.`,
+See "./bin/kubespin <command> --help" for flags and more examples on any command.`,
 		Version:       version.String(),
 		SilenceUsage:  true, // usage text on a runtime error is noise
 		SilenceErrors: true, // main formats errors itself

@@ -30,13 +30,13 @@ That runs lint, tests, and builds `bin/kubespin`.
 
 | Command | Purpose |
 |---|---|
-| `kubespin login` / `status` / `logout` | Authenticate to (or check, or clear) cloud provider sessions. |
-| `kubespin fleet bootstrap` | Provision the shared fleet infrastructure. Converges, never deletes. |
-| `kubespin apply` | Create or reconcile a cluster to match its desired state. Idempotent and resumable. |
-| `kubespin delete` | Decommission a cluster; archives its repository rather than deleting it. |
-| `kubespin fleet update` | Roll a component version across every matching cluster, in waves. |
-| `kubespin fleet audit` | Diff live cloud infrastructure against each cluster's `cluster.yaml`. |
-| `kubespin fleet status` | Report sync, drift, and staleness across the fleet. |
+| `./bin/kubespin login` / `status` / `logout` | Authenticate to (or check, or clear) cloud provider sessions. |
+| `./bin/kubespin fleet bootstrap` | Provision the shared fleet infrastructure. Converges, never deletes. |
+| `./bin/kubespin apply` | Create or reconcile a cluster to match its desired state. Idempotent and resumable. |
+| `./bin/kubespin delete` | Decommission a cluster; archives its repository rather than deleting it. |
+| `./bin/kubespin fleet update` | Roll a component version across every matching cluster, in waves. |
+| `./bin/kubespin fleet audit` | Diff live cloud infrastructure against each cluster's `cluster.yaml`. |
+| `./bin/kubespin fleet status` | Report sync, drift, and staleness across the fleet. |
 
 See [Example workflows](#example-workflows) below for real invocations of
 each, or [docs/examples.md](docs/examples.md) for the full walkthrough.
@@ -44,47 +44,61 @@ each, or [docs/examples.md](docs/examples.md) for the full walkthrough.
 ## Example workflows
 
 Full detail, prerequisites, and more scenarios in
-[docs/examples.md](docs/examples.md). All three clouds follow the same
-shape: authenticate, `apply`, confirm with `fleet status`.
+[docs/examples.md](docs/examples.md). Every command is run from a repository
+checkout after `make build`. All three clouds follow the same shape:
+authenticate, `apply`, confirm with `fleet status`.
+
+Two flags recur because neither has a usable default: `--registry-region`
+(the Fleet Registry has no default region, on purpose) and `--profile`
+(`apply`/`delete` validate a full spec, and a profile reference is part of
+one). Export `KUBESPIN_REGISTRY_REGION` to drop the first.
 
 ```bash
 # AWS, private cluster
-kubespin login --only aws
-kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
-  --access private --github-org "$GITHUB_ORG"
-kubespin fleet status --phase ready
+./bin/kubespin login --only aws
+./bin/kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
+  --access private --profile tier-small@1.0.0 \
+  --github-org "$GITHUB_ORG" --registry-region us-east-1
+./bin/kubespin fleet status --phase ready --registry-region us-east-1
 ```
 
 ```bash
 # GCP, public cluster, custom node pool
-kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
-  --cluster-id demo-gcp --access public --instance-type e2-standard-4 --desired-size 3 \
-  --github-org "$GITHUB_ORG"
+./bin/kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
+  --cluster-id demo-gcp --access public --profile tier-small@1.0.0 \
+  --instance-type e2-standard-4 --desired-size 3 \
+  --github-org "$GITHUB_ORG" --registry-region us-east-1
 ```
 
 ```bash
 # Azure, resolving addons from a platform-profiles repo
-kubespin apply --provider azure --azure-subscription "$AZURE_SUBSCRIPTION_ID" \
-  --region eastus --cluster-id demo-azure --profile tier-standard@1.0.0 \
-  --profiles-repo platform-profiles --github-org "$GITHUB_ORG"
+./bin/kubespin apply --provider azure --azure-subscription "$AZURE_SUBSCRIPTION_ID" \
+  --region eastus --cluster-id demo-azure --access private \
+  --profile tier-standard@1.0.0 --profiles-repo platform-profiles \
+  --github-org "$GITHUB_ORG" --registry-region us-east-1
 ```
 
 ```bash
 # Fleet-wide: bootstrap once, then operate across every cluster
-kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
-kubespin fleet status
-kubespin fleet update --component argo-cd --version 2.11.0
-kubespin fleet audit
+make lambda
+./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+./bin/kubespin fleet status --registry-region us-east-1
+./bin/kubespin fleet update --component argo-cd --version 2.11.0 \
+  --github-org "$GITHUB_ORG" --registry-region us-east-1
+./bin/kubespin fleet audit \
+  --github-org "$GITHUB_ORG" --registry-region us-east-1
 ```
 
 ```bash
 # Tear down
-kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
-  --github-org "$GITHUB_ORG" --yes
+./bin/kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
+  --profile tier-small@1.0.0 \
+  --github-org "$GITHUB_ORG" --registry-region us-east-1 --yes
 ```
 
-Every mutating command accepts `--dry-run` to preview without touching a
-cloud, a repository, or the Fleet Registry's write path.
+`--dry-run` is a root persistent flag, but only `apply` and `fleet bootstrap`
+act on it. `delete` and `fleet update` accept it and proceed anyway — see
+[which commands honour `--dry-run`](docs/examples.md#which-commands-honour---dry-run).
 
 ## Configuration
 
@@ -110,6 +124,13 @@ Run it against a dedicated fleet account that hosts no clusters. The caller's
 real account is checked against `--account-id` before anything is created, so
 pointing it at the wrong account fails instead of half-succeeding.
 
+The ingestion handler is read from disk rather than embedded, so build it
+first:
+
+```bash
+make lambda
+```
+
 ```bash
 ./bin/kubespin fleet bootstrap --account-id <id> --registry-region <region> --dry-run
 ```
@@ -125,12 +146,23 @@ allowlist must permit.
 ## Layout
 
 ```
-cmd/kubespin/        binary entrypoint
-cmd/ingestion/       Central Ingestion API handler, deployed to Lambda
-internal/cli/        cobra command tree and configuration resolution
-internal/core/       shared domain types; dependency-free by design
-internal/fleetinfra/ SDK-driven converge engine for the fleet infrastructure
-internal/version/    build metadata stamped in via -ldflags
+cmd/kubespin/               binary entrypoint
+cmd/ingestion/              Central Ingestion API handler, deployed to Lambda
+cmd/fleet-status-reporter/  in-cluster CronJob that pushes signed status outward
+internal/cli/               cobra command tree and configuration resolution
+internal/core/              shared domain types; dependency-free by design
+internal/auth/              operator-facing cloud auth behind login/status/logout
+internal/registry/          Fleet Registry client and lease
+internal/orchestrator/      per-cluster phase state machine and reverse teardown
+internal/provisioner/       cluster/identity/network interfaces, one impl per cloud
+internal/repo/              cluster repositories over GitHub
+internal/catalog/           profile resolution
+internal/argocd/            app-of-apps rendering and Argo CD install
+internal/fleet/             fleet-wide audit, update, and status
+internal/fleetinfra/        SDK-driven converge engine for the fleet infrastructure
+internal/ingestion/         token verification and write path for the ingestion API
+internal/reporter/          the status reporter's summary and signed push logic
+internal/version/           build metadata stamped in via -ldflags
 ```
 
 ## Documentation

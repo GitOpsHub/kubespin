@@ -23,21 +23,24 @@ kubespin apply [flags]
 
 ```
   # AWS, private API server, default node pool
-  kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
-    --access private --github-org GitOpsHub
+  ./bin/kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
+    --access private --profile tier-small@1.0.0 \
+    --github-org GitOpsHub --registry-region us-east-1
 
   # GCP, public API server, larger node pool
-  kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
-    --cluster-id demo-gcp --access public --instance-type e2-standard-4 \
-    --desired-size 3 --github-org GitOpsHub
+  ./bin/kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
+    --cluster-id demo-gcp --access public --profile tier-small@1.0.0 \
+    --instance-type e2-standard-4 --desired-size 3 \
+    --github-org GitOpsHub --registry-region us-east-1
 
   # Azure, resolving addons from a platform-profiles repo instead of the builtin catalog
-  kubespin apply --provider azure --azure-subscription <subscription-id> --region eastus \
-    --cluster-id demo-azure --profile tier-standard@1.0.0 \
-    --profiles-repo platform-profiles --github-org GitOpsHub
+  ./bin/kubespin apply --provider azure --azure-subscription <subscription-id> --region eastus \
+    --cluster-id demo-azure --access private --profile tier-standard@1.0.0 \
+    --profiles-repo platform-profiles \
+    --github-org GitOpsHub --registry-region us-east-1
 
   # Preview what apply would do without touching any cloud
-  kubespin apply --spec ./cluster.yaml --dry-run
+  ./bin/kubespin apply --spec ./cluster.yaml --registry-region us-east-1 --dry-run
 ```
 
 ### Options

@@ -9,7 +9,14 @@ staged through a rate-limited worker pool.
 
 Canary-first staging (updating a canary tier before the rest of the fleet)
 is not yet implemented: every matching cluster is updated in the same wave.
-Use --profile to scope a wave to one tier by hand in the meantime.
+--provider is the only filter that currently narrows a wave; --profile is
+accepted but not yet applied, because the Fleet Registry's query filter has
+no profile dimension to select on.
+
+update does not honour the global --dry-run flag: a run commits to every
+matching cluster's repository. A cluster already at the target version
+reports "already up to date" and commits nothing, so re-running a partially
+failed wave is safe.
 
 ```
 kubespin fleet update [flags]
@@ -19,11 +26,13 @@ kubespin fleet update [flags]
 
 ```
   # Roll a new Argo CD version across every cluster, 8 at a time
-  kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8
+  ./bin/kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8 \
+    --github-org GitOpsHub --registry-region us-east-1
 
   # Scope the wave to one tier and one cloud
-  kubespin fleet update --component cert-manager --version 1.15.1 \
-    --profile tier-standard@1.0.0 --provider aws
+  ./bin/kubespin fleet update --component cert-manager --version 1.15.1 \
+    --profile tier-standard@1.0.0 --provider aws \
+    --github-org GitOpsHub --registry-region us-east-1
 ```
 
 ### Options
@@ -35,7 +44,7 @@ kubespin fleet update [flags]
       --github-org string          GitHub organization cluster repositories live in
       --github-upload-url string   GitHub Enterprise upload URL (leave empty for github.com)
   -h, --help                       help for update
-      --profile string             restrict to clusters on this profile
+      --profile string             restrict to clusters on this profile (accepted but not yet applied)
       --profiles-repo string       platform-profiles repository name to resolve profiles from (uses the builtin catalog if empty)
       --provider string            restrict to one cloud provider
       --version string             target version

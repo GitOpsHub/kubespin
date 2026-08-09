@@ -1,9 +1,10 @@
 # CI/CD: deploying AKS via GitHub Actions OIDC
 
-[.github/workflows/deploy-aks.yml](../.github/workflows/deploy-aks.yml) runs
-`kubespin apply --provider azure` from a manually dispatched GitHub Actions
-run, authenticating to both clouds it touches with short-lived OIDC tokens —
-no long-lived cloud secrets stored in GitHub at all:
+[.github/workflows/deploy-aks.yml](../.github/workflows/deploy-aks.yml) builds
+the binary with `make build` and runs
+`./bin/kubespin apply --provider azure` from a manually dispatched GitHub
+Actions run, authenticating to both clouds it touches with short-lived OIDC
+tokens — no long-lived cloud secrets stored in GitHub at all:
 
 - **AWS**, because the Fleet Registry (DynamoDB) is always AWS-hosted,
   regardless of which cloud the cluster itself runs on.
@@ -14,7 +15,7 @@ no long-lived cloud secrets stored in GitHub at all:
 `NetworkProvisioner`) is implemented, so a real (non-dry-run) run creates an
 actual AKS cluster.
 
-`kubespin apply` also always provisions the cluster's GitHub repo
+`apply` also always provisions the cluster's GitHub repo
 (`internal/repo`) regardless of cloud, so this pipeline needs a **third**
 credential beyond the two OIDC exchanges: a GitHub token with repo-create
 scope in the target org. GitHub Actions' OIDC federation authenticates to
@@ -134,7 +135,8 @@ Actions → **Deploy AKS cluster** → Run workflow, fill in `cluster-id`,
 `region`, `access`, `profile`, `kubernetes-version`. Leave `dry-run` checked
 for the first run against any new `cluster-id` — it reports the phase apply
 would resume from without touching either cloud, same as
-`kubespin apply --dry-run` locally (see [reportPlan](../internal/cli/apply.go)).
+`./bin/kubespin apply --dry-run` locally (see
+[reportPlan](../internal/cli/apply.go)).
 
 Uncheck `dry-run` once the plan looks right. The `deploy-aks-<cluster-id>`
 concurrency group serializes runs per cluster so two dispatches against the
