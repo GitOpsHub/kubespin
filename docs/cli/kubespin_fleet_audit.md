@@ -5,9 +5,11 @@ Diff live cloud infrastructure against each cluster's desired state
 ### Synopsis
 
 audit describes live infrastructure through each cloud's SDK, diffs it against
-the cluster.yaml in that cluster's repository, and writes findings to the Fleet
-Registry. It detects changes made outside kubespin, such as a manually resized
-node pool.
+the cluster.yaml in that cluster's repository, and reports findings. It
+detects changes made outside kubespin, such as a manually resized node pool.
+
+audit is read-only: it never reconciles or commits. Persisting findings back
+into the Fleet Registry is not yet implemented; this prints them.
 
 ```
 kubespin fleet audit [flags]
@@ -16,9 +18,14 @@ kubespin fleet audit [flags]
 ### Options
 
 ```
-      --concurrency int   maximum concurrent cluster audits (default 4)
-  -h, --help              help for audit
-      --provider string   restrict to one cloud provider
+      --azure-subscription string   Azure subscription hosting any Azure clusters in the fleet
+      --concurrency int             maximum concurrent cluster audits (default 4)
+      --gcp-project string          GCP project hosting any GCP clusters in the fleet
+      --github-base-url string      GitHub Enterprise API base URL (leave empty for github.com)
+      --github-org string           GitHub organization cluster repositories live in
+      --github-upload-url string    GitHub Enterprise upload URL (leave empty for github.com)
+  -h, --help                        help for audit
+      --provider string             restrict to one cloud provider
 ```
 
 ### Options inherited from parent commands

@@ -15,11 +15,12 @@ kubespin fleet status [flags]
 ### Options
 
 ```
-  -h, --help              help for status
-      --output string     output format: table or json (default "table")
-      --phase string      restrict to clusters in one phase
-      --provider string   restrict to one cloud provider
-      --stale-only        show only clusters that have missed their reporting window
+  -h, --help                       help for status
+      --output string              output format: table or json (default "table")
+      --phase string               restrict to clusters in one phase
+      --provider string            restrict to one cloud provider
+      --stale-only                 show only clusters that have missed their reporting window
+      --stale-threshold duration   how long a cluster may go without reporting before it is stale (default 10m0s)
 ```
 
 ### Options inherited from parent commands
