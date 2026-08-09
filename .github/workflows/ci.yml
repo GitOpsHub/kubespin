@@ -23,9 +23,13 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
+      # goinstall, not the release binary: the prebuilt golangci-lint is built
+      # with go1.25 and refuses a module targeting 1.26. Compiling it with the
+      # runner's toolchain also matches what `make bootstrap` does locally.
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.6.2
+          install-mode: goinstall
 
       - name: go mod tidy is committed
         run: |
