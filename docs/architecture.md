@@ -187,14 +187,30 @@ to restrict, and silently accepting the field would imply otherwise.
 implementation per cloud under `internal/provisioner/{aws,gcp,azure}`. No cloud
 conditionals leak into command or catalog code.
 
-Two shape decisions matter more than they look:
+Three shape decisions matter more than they look:
 
-- **Cluster creation is asynchronous.** It takes 10–30 minutes on every cloud.
-  `Create` returns a handle the orchestrator polls, rather than blocking — a
-  blocking call that outlives its lease is a bug generator.
+- **Cluster creation is asynchronous.** It takes 10–30 minutes on every cloud, so
+  `Create` returns as soon as the request is accepted and the caller polls
+  `Describe`. A blocking call that outlives its lease is a bug generator. It
+  follows that `Describe` returns *absent* rather than an error for a cluster
+  that does not exist — "not there yet" is a normal answer while polling.
 - **`Reconcile` reports "already correct" as data**, not by the caller diffing
   before-and-after state. The no-op guarantee above depends on being able to
   prove nothing happened.
+- **Workload identity is its own phase**, not part of creation. The cluster's
+  OIDC issuer does not exist until the control plane is up, so nothing can be
+  bound to it before then.
+
+`Reconcile` never deletes a node pool. Removing one evicts running workloads,
+which is a decision for a human rather than something a loop does because a file
+changed.
+
+The identity a component gets exists to be **proven**, not to grant cloud
+access: the status reporter signs its push with it and the ingestion API
+verifies the signature. That is why `Component` carries no permission set. On
+AWS the IRSA trust policy is scoped by both `sub` and `aud` — without `sub` any
+service account in the cluster could assume the role, and without `aud` a token
+minted for another audience would be accepted.
 
 ## Convergence without a state file
 

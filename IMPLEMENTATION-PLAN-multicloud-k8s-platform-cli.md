@@ -39,15 +39,18 @@ This plan sequences the ADR's four phases into concrete, dependency-ordered engi
 
 Build these as three parallel workstreams against one shared interface — this is where "all three clouds in parallel" actually happens.
 
-- [ ] `ClusterProvisioner` interface: `Create`, `Describe`, `Reconcile` (node pools/sizing), `Delete`
+- [~] `ClusterProvisioner` interface: `Create`, `Describe`, `Reconcile` (node pools/sizing), `Delete`
+  - Interface defined; **AWS implemented**, GCP and Azure pending.
   - **AWS:** `aws-sdk-go-v2` EKS client; handle `Access: public` (API server authorized CIDRs) vs `Access: private` (no public endpoint) at creation time
   - **GCP:** `container/apiv1` GKE client; same public/private branching via authorized networks / private cluster config
   - **Azure:** `armcontainerservice` AKS client; same via API server allowed IP ranges / private cluster flag
-- [ ] `IdentityProvisioner` interface: `ProvisionForComponent`
+- [~] `IdentityProvisioner` interface: `ProvisionForComponent`
+  - Interface defined; **AWS (OIDC + IRSA) implemented**, GCP and Azure pending.
   - **AWS:** OIDC provider setup + IRSA role/policy creation
   - **GCP:** Workload Identity binding
   - **Azure:** OIDC issuer + federated credential + managed identity
-- [ ] Network provisioning step: egress allowlist rule for `fleet-status-reporter`'s destination (Central Ingestion API domain), provisioned per-cloud as part of `Create`
+- [~] Network provisioning step: egress allowlist rule for `fleet-status-reporter`'s destination (Central Ingestion API domain), provisioned per-cloud as part of `Create`
+  - **AWS implemented** (cluster security group egress); GCP and Azure pending.
 
 **Acceptance criteria:** `mycli apply --provider {aws,gcp,azure} --access private` and `--access public` each produce a running, reachable-only-as-designed cluster with correctly bound identity, verified against a real (non-prod) account per cloud. This is the first hard gate — nothing addon-related starts until this passes on all three.
 

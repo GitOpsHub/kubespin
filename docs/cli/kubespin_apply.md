@@ -12,6 +12,9 @@ apply is idempotent and resumable. A repeat run with no changes performs no
 cloud calls and produces no commits; a failed run resumes from the phase
 recorded in the Fleet Registry.
 
+The spec may come from a cluster.yaml — the same file the cluster's repository
+holds — or from the flags below, which override the file when given.
+
 ```
 kubespin apply [flags]
 ```
@@ -19,13 +22,20 @@ kubespin apply [flags]
 ### Options
 
 ```
-      --access string       API server exposure: private or public (default "private")
-      --cluster-id string   cluster identifier (also the repository suffix)
-  -h, --help                help for apply
-      --profile string      profile reference from platform-profiles, e.g. tier-small@1.0.0
-      --provider string     cloud provider: aws, gcp, or azure
-      --region string       cloud region
-      --spec string         path to a cluster.yaml, as an alternative to the flags above
+      --access string               API server exposure: private or public (default "private")
+      --cluster-id string           cluster identifier (also the repository suffix)
+      --desired-size int32          desired size of the default node pool (default 2)
+  -h, --help                        help for apply
+      --ingestion-endpoint string   Central Ingestion API host the cluster must be able to reach
+      --instance-type string        instance type for the default node pool (default "m6i.large")
+      --kubernetes-version string   Kubernetes minor version, e.g. 1.34
+      --max-size int32              maximum size of the default node pool (default 5)
+      --min-size int32              minimum size of the default node pool (default 1)
+      --profile string              profile reference from platform-profiles, e.g. tier-small@1.0.0
+      --provider string             cloud provider: aws, gcp, or azure
+      --region string               cloud region
+      --spec string                 path to a cluster.yaml describing the cluster
+      --subnets strings             existing subnets to place the cluster in
 ```
 
 ### Options inherited from parent commands

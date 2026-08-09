@@ -34,18 +34,27 @@ works:
 - The ingestion Lambda handler, as a deliberate 501 skeleton
   ([cmd/ingestion](../cmd/ingestion))
 
-**The orchestrator's steps are no-ops.** The state machine, lease, resumption,
-and registry writes are all real and tested; the work each phase performs is not
-built yet. Cluster and identity provisioning arrive in M2, repository seeding in
-M3, and the Argo CD bootstrap in M5.
+- The provisioner interfaces and their **AWS** implementation — EKS clusters,
+  IRSA workload identity, and the status reporter's egress path
+  ([internal/provisioner](../internal/provisioner))
+- `kubespin apply`, wired end to end through the registry, the orchestrator, and
+  the AWS provisioner
 
-**The commands are still stubs.** `apply`, `delete`, `fleet update`,
-`fleet audit`, and `fleet status` parse their flags and then exit 3 with "not
-implemented yet". They fail loudly on purpose: a stub that exited 0 would imply
-it had done something.
+**M2 is half done, deliberately.** AWS is implemented first so the interfaces
+are proven against a real cloud before GCP and Azure are built against them —
+the alternative is two teams building on a shape that shifts underneath them.
+`apply --provider gcp` and `--provider azure` fail with a clear statement rather
+than a generic error.
 
-M2 is next — the `ClusterProvisioner` and `IdentityProvisioner` interfaces and
-their three cloud implementations. See
+**Two phases still do nothing.** A run reaches ready with a real cluster and a
+real workload identity, but no repository and no addons: repository seeding
+arrives in M3 and the Argo CD bootstrap in M5.
+
+**`delete` and the `fleet` subcommands other than `bootstrap` are still stubs**,
+exiting 3 with "not implemented yet". They fail loudly on purpose: a stub that
+exited 0 would imply it had done something.
+
+Next is the rest of M2 — GKE and AKS against the now-proven interfaces. See
 [EXECUTION-PLAN.md](../EXECUTION-PLAN.md) for the milestone breakdown and
 [IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md](../IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md)
 for the acceptance criteria each milestone is gated on.
