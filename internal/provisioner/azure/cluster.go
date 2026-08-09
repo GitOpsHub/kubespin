@@ -12,6 +12,15 @@ import (
 	"github.com/GitOpsHub/kubespin/internal/provisioner"
 )
 
+// serviceCIDR/dnsServiceIP are the Kubernetes service network AKS is given.
+// AKS otherwise defaults the service CIDR to 10.0.0.0/16, which collides with
+// the 10.0.0.0/16 VNet (and its 10.0.1.0/24 subnet) EnsureNetwork creates by
+// default, so an explicit, disjoint range must always be supplied.
+const (
+	serviceCIDR  = "172.16.0.0/16"
+	dnsServiceIP = "172.16.0.10"
+)
+
 // ClusterProvisioner creates and reconciles AKS clusters.
 type ClusterProvisioner struct {
 	c *Clients
@@ -81,6 +90,11 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 				WorkloadIdentity: &armcontainerservice.ManagedClusterSecurityProfileWorkloadIdentity{
 					Enabled: ptr(true),
 				},
+			},
+			NetworkProfile: &armcontainerservice.NetworkProfile{
+				NetworkPlugin: ptr(armcontainerservice.NetworkPluginAzure),
+				ServiceCidr:   ptr(serviceCIDR),
+				DNSServiceIP:  ptr(dnsServiceIP),
 			},
 		},
 	}
@@ -292,6 +306,14 @@ func (p *ClusterProvisioner) ensureNodePools(
 			}
 			record(change, fmt.Sprintf("create node pool %s", want.Name))
 			continue
+		}
+
+		if current.InstanceType != want.InstanceType {
+			return fmt.Errorf(
+				"node pool %s: instance type is %s, spec wants %s: AKS does not allow changing "+
+					"vmSize on an existing agent pool; create a differently-named node pool instead",
+				want.Name, current.InstanceType, want.InstanceType,
+			)
 		}
 
 		if current.MinSize == want.MinSize && current.MaxSize == want.MaxSize &&

@@ -32,12 +32,19 @@ type fakeGCP struct {
 
 func newFakeGCP() *fakeGCP {
 	return &fakeGCP{
-		nodePools:   map[string]*containerpb.NodePool{},
-		svcAccts:    map[string]*iam.ServiceAccount{},
-		policies:    map[string]*iam.Policy{},
-		firewalls:   map[string]*compute.Firewall{},
-		networks:    map[string]*compute.Network{},
-		subnetworks: map[string]*compute.Subnetwork{},
+		nodePools: map[string]*containerpb.NodePool{},
+		svcAccts:  map[string]*iam.ServiceAccount{},
+		policies:  map[string]*iam.Policy{},
+		firewalls: map[string]*compute.Firewall{},
+		networks:  map[string]*compute.Network{},
+		subnetworks: map[string]*compute.Subnetwork{
+			// Matches testSpec()'s Subnets entry, so ClusterProvisioner.Create
+			// can resolve its parent network the way it does against real GCP.
+			"us-central1/default": {
+				Name:    "default",
+				Network: "projects/" + testProject + "/global/networks/default",
+			},
+		},
 	}
 }
 

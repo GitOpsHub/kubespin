@@ -34,10 +34,11 @@ kubespin apply [flags]
     --github-org GitOpsHub --registry-region us-east-1
 
   # Azure, resolving addons from a platform-profiles repo instead of the builtin catalog
-  ./bin/kubespin apply --provider azure --azure-subscription 3df9adbd-ea55-4c92-964c-0252031979de --region eastus \
-    --cluster-id demo-azure --access private --profile tier-standard@1.0.0 \
-    --profiles-repo platform-profiles \
-    --github-org GitOpsHub --registry-region us-east-1
+  ./bin/kubespin apply --provider azure --azure-subscription  3df9adbd-ea55-4c92-964c-0252031979de --region eastus \
+  --cluster-id demo-azure --access private --profile tier-standard@1.0.0 \
+  --profiles-repo platform-profiles \
+  --instance-type Standard_D2s_v7 --min-size 1 --max-size 2 --desired-size 2 \
+  --github-org GitOpsHub --registry-region us-east-1
 
   # Preview what apply would do without touching any cloud
   ./bin/kubespin apply --spec ./cluster.yaml --registry-region us-east-1 --dry-run

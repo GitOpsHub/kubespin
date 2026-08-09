@@ -57,9 +57,19 @@ func (p *ClusterProvisioner) Create(ctx context.Context, spec core.ClusterSpec) 
 func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.ClusterSpec) error {
 	n := p.names(spec)
 
+	network := ""
+	if sub := subnetwork(spec); sub != "" {
+		net, err := p.subnetworkNetwork(ctx, spec, sub)
+		if err != nil {
+			return err
+		}
+		network = net
+	}
+
 	cluster := &containerpb.Cluster{
 		Name:                  n.cluster(),
 		InitialClusterVersion: spec.KubernetesVersion,
+		Network:               network,
 		Subnetwork:            subnetwork(spec),
 		ResourceLabels:        labels(spec),
 		WorkloadIdentityConfig: &containerpb.WorkloadIdentityConfig{
@@ -115,6 +125,32 @@ func subnetwork(spec core.ClusterSpec) string {
 		return ""
 	}
 	return spec.Subnets[0]
+}
+
+// subnetworkNetwork resolves the VPC network a subnetwork belongs to.
+//
+// GKE does not infer this from Subnetwork alone — an unset Network field
+// defaults to the project's "default" VPC, which a kubespin-created (or any
+// non-default) subnetwork does not belong to, and cluster creation is
+// rejected. Looking the subnetwork up directly, rather than assuming
+// kubespin's own deterministic network name, keeps this correct for
+// operator-supplied subnets too.
+func (p *ClusterProvisioner) subnetworkNetwork(ctx context.Context, spec core.ClusterSpec, subnet string) (string, error) {
+	name := subnet
+	if i := strings.LastIndex(subnet, "/"); i >= 0 {
+		name = subnet[i+1:]
+	}
+
+	sn, err := p.c.subnetworks.GetSubnetwork(ctx, p.c.project, spec.Region, name)
+	if err != nil {
+		return "", fmt.Errorf("resolving network for subnetwork %s: %w", subnet, err)
+	}
+
+	netName := sn.Network
+	if i := strings.LastIndex(netName, "/"); i >= 0 {
+		netName = netName[i+1:]
+	}
+	return fmt.Sprintf("projects/%s/global/networks/%s", p.c.project, netName), nil
 }
 
 // privateClusterConfig translates the access mode into GKE's private cluster

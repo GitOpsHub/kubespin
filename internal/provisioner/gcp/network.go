@@ -2,12 +2,25 @@ package gcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	compute "google.golang.org/api/compute/v1"
+	"google.golang.org/api/googleapi"
 
 	"github.com/GitOpsHub/kubespin/internal/core"
 	"github.com/GitOpsHub/kubespin/internal/provisioner"
+)
+
+// A freshly created VPC network can take a few seconds to propagate across
+// GCP's control plane before it accepts a subnetwork insert; until then the
+// API reports a 400 resourceNotReady rather than anything that looks
+// retryable. Retrying with a short backoff rides out that race instead of
+// failing the whole apply on it.
+const (
+	subnetworkReadyRetries = 6
+	subnetworkReadyBackoff = 3 * time.Second
 )
 
 // NetworkProvisioner opens the cluster's outbound path to the ingestion API.
@@ -73,7 +86,11 @@ func (p *NetworkProvisioner) ensureVPCNetwork(
 	err := p.c.networks.InsertNetwork(ctx, n.project, &compute.Network{
 		Name:                  name,
 		AutoCreateSubnetworks: false,
-		Description:           "kubespin-managed network for cluster " + n.spec.ID.String(),
+		// AutoCreateSubnetworks is false, its Go zero value, so it is dropped
+		// by omitempty unless forced — without it on the wire, GCP treats the
+		// request as a legacy-mode network instead of custom-mode.
+		ForceSendFields: []string{"AutoCreateSubnetworks"},
+		Description:     "kubespin-managed network for cluster " + n.spec.ID.String(),
 	})
 	if err != nil {
 		if code(err) == 409 {
@@ -98,13 +115,24 @@ func (p *NetworkProvisioner) ensureSubnetwork(
 		return fmt.Errorf("describing subnetwork %s: %w", name, err)
 	}
 
-	err := p.c.subnetworks.InsertSubnetwork(ctx, n.project, n.location(), &compute.Subnetwork{
-		Name:                  name,
-		Network:               n.networkResource(),
-		IpCidrRange:           cidr,
-		Region:                n.location(),
-		PrivateIpGoogleAccess: true,
-	})
+	var err error
+	for attempt := 1; attempt <= subnetworkReadyRetries; attempt++ {
+		err = p.c.subnetworks.InsertSubnetwork(ctx, n.project, n.location(), &compute.Subnetwork{
+			Name:                  name,
+			Network:               n.networkResource(),
+			IpCidrRange:           cidr,
+			Region:                n.location(),
+			PrivateIpGoogleAccess: true,
+		})
+		if err == nil || !isResourceNotReady(err) || attempt == subnetworkReadyRetries {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(subnetworkReadyBackoff):
+		}
+	}
 	if err != nil {
 		if code(err) == 409 {
 			return nil
@@ -115,6 +143,22 @@ func (p *NetworkProvisioner) ensureSubnetwork(
 	change.Changed = true
 	change.Details = append(change.Details, fmt.Sprintf("created subnetwork %s (%s)", name, cidr))
 	return nil
+}
+
+// isResourceNotReady reports whether err is the 400 resourceNotReady GCP
+// returns when a dependent resource (here, a just-created network) has not
+// yet propagated across the control plane.
+func isResourceNotReady(err error) bool {
+	var gerr *googleapi.Error
+	if !errors.As(err, &gerr) || gerr.Code != 400 {
+		return false
+	}
+	for _, item := range gerr.Errors {
+		if item.Reason == "resourceNotReady" {
+			return true
+		}
+	}
+	return false
 }
 
 // AllowEgress authorises outbound traffic from the cluster's network to the
