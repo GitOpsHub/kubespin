@@ -27,10 +27,13 @@ type fakeGitHub struct {
 
 	repos       map[string]*github.Repository
 	protections map[string]*github.ProtectionRequest
-	refs        map[string]string            // "org/repo/heads/branch" -> commit sha
-	commits     map[string]*github.Commit    // sha -> commit
-	trees       map[string]map[string]string // sha -> path -> content
-	seq         int
+	// protectionErr, when set, is what UpdateBranchProtection returns instead
+	// of succeeding — how tests reproduce GitHub refusing branch protection.
+	protectionErr error
+	refs          map[string]string            // "org/repo/heads/branch" -> commit sha
+	commits       map[string]*github.Commit    // sha -> commit
+	trees         map[string]map[string]string // sha -> path -> content
+	seq           int
 }
 
 func newFakeGitHub() *fakeGitHub {
@@ -148,6 +151,9 @@ func (f *fakeGitHub) UpdateBranchProtection(
 	_ context.Context, owner, repoName, branch string, preq *github.ProtectionRequest,
 ) (*github.Protection, *github.Response, error) {
 	f.record("UpdateBranchProtection")
+	if f.protectionErr != nil {
+		return nil, nil, f.protectionErr
+	}
 	f.protections[key(owner, repoName)+"/"+branch] = preq
 	return &github.Protection{}, ok200(), nil
 }
