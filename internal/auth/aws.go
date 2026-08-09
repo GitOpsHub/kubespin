@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -27,9 +28,12 @@ type AWSProvider struct {
 }
 
 // NewAWSProvider builds a provider scoped to one named profile in
-// ~/.aws/config. It succeeds even before the operator has ever logged in —
-// LoadDefaultConfig only fails on a malformed config, not on missing
-// credentials — so a fresh checkout can still run `kubespin login`.
+// ~/.aws/config. It succeeds even before the operator has ever logged in or
+// run `aws configure` at all — a profile forced via WithSharedConfigProfile
+// fails if that profile's section doesn't exist yet, so a missing "default"
+// section (a fresh checkout, a bare CI runner) falls back to the SDK's
+// unscoped default resolution instead of erroring; a named profile that
+// doesn't exist still errors, since the operator explicitly asked for it.
 func NewAWSProvider(ctx context.Context, profile string) (*AWSProvider, error) {
 	if profile == "" {
 		profile = "default"
@@ -37,7 +41,13 @@ func NewAWSProvider(ctx context.Context, profile string) (*AWSProvider, error) {
 
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithSharedConfigProfile(profile))
 	if err != nil {
-		return nil, fmt.Errorf("loading AWS config for profile %s: %w", profile, err)
+		var notExist config.SharedConfigProfileNotExistError
+		if profile == "default" && errors.As(err, &notExist) {
+			cfg, err = config.LoadDefaultConfig(ctx)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("loading AWS config for profile %s: %w", profile, err)
+		}
 	}
 
 	return &AWSProvider{
