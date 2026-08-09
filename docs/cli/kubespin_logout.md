@@ -10,10 +10,10 @@ kubespin logout [flags]
 
 ```
   # Log out of every provider
-  kubespin logout
+  ./bin/kubespin logout
 
   # Just GCP
-  kubespin logout --only gcp
+  ./bin/kubespin logout --only gcp
 ```
 
 ### Options

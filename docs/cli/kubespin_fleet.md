@@ -10,10 +10,11 @@ kubespin fleet [flags]
 
 ```
   # The typical fleet lifecycle, in order
-  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
-  kubespin fleet status
-  kubespin fleet update --component argo-cd --version 2.11.0
-  kubespin fleet audit
+  ./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+  ./bin/kubespin fleet status --registry-region us-east-1
+  ./bin/kubespin fleet update --component argo-cd --version 2.11.0 \
+    --github-org GitOpsHub --registry-region us-east-1
+  ./bin/kubespin fleet audit --github-org GitOpsHub --registry-region us-east-1
 ```
 
 ### Options

@@ -26,14 +26,17 @@ already-provisioned infrastructure reports no changes. Nothing is ever deleted.
 This provisions shared platform infrastructure and must be run against a
 dedicated fleet account that hosts no clusters. The caller's real account is
 checked against --account-id before anything is created.`,
-		Example: `  # Preview what bootstrap would create
-  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
+		Example: `  # Build the ingestion handler first: it is read from disk, not embedded
+  make lambda
+
+  # Preview what bootstrap would create
+  ./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
 
   # Provision it for real
-  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+  ./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
 
   # Re-running is safe; a converged fleet reports no changes
-  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1`,
+  ./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run`,
 		Args: cobra.NoArgs,
 		RunE: runFleetBootstrap,
 	}

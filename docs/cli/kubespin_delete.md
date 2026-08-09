@@ -18,6 +18,10 @@ The spec identifies which cluster and cloud to tear down. It may come from a
 cluster.yaml — the same file the cluster's repository holds — or from the
 flags below, which override the file when given.
 
+delete does not honour the global --dry-run flag: passing it does not make
+this command a preview. Use --yes to skip the confirmation prompt only when
+you mean it.
+
 ```
 kubespin delete [flags]
 ```
@@ -26,15 +30,17 @@ kubespin delete [flags]
 
 ```
   # AWS, prompts to type the cluster ID to confirm
-  kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
-    --github-org GitOpsHub
+  ./bin/kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
+    --profile tier-small@1.0.0 --github-org GitOpsHub --registry-region us-east-1
 
   # GCP, scripted (no interactive confirmation)
-  kubespin delete --provider gcp --gcp-project my-gcp-project --region us-central1 \
-    --cluster-id demo-gcp --github-org GitOpsHub --yes
+  ./bin/kubespin delete --provider gcp --gcp-project my-gcp-project --region us-central1 \
+    --cluster-id demo-gcp --profile tier-small@1.0.0 \
+    --github-org GitOpsHub --registry-region us-east-1 --yes
 
   # Using the same cluster.yaml apply was run with
-  kubespin delete --spec ./cluster.yaml --yes
+  ./bin/kubespin delete --spec ./cluster.yaml \
+    --github-org GitOpsHub --registry-region us-east-1 --yes
 ```
 
 ### Options

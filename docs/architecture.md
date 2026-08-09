@@ -160,9 +160,18 @@ That last case is a hard requirement, not an optimisation — it is what makes
 noise will read as drift.
 
 Addons are delivered app-of-apps: one root Argo CD Application discovers one
-Application per addon, so addons sync and fail independently. Argo CD itself is
-installed through the Helm Go library, never by shelling out to `helm` or
-`kubectl`.
+Application per addon, so addons sync and fail independently — the manifests
+are rendered by [internal/argocd](../internal/argocd) and committed with the
+rest of the repository seed.
+
+Installing Argo CD itself into the cluster is the one step of this that is
+**not yet implemented**: `ProvisioningSteps` leaves the `argocd-installed`
+phase a no-op, so a run reaches `ready` with a real cluster, a real workload
+identity, and a seeded repository, but nothing syncing yet. When it lands it
+will go through the Helm Go library, never by shelling out to `helm` or
+`kubectl`; what blocks it is acquiring a `*rest.Config` for a freshly created
+cluster, which needs a per-cloud token scheme (see
+[docs/README.md](README.md#open-questions)).
 
 ## Access mode is a first-class field
 

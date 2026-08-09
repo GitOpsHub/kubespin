@@ -16,13 +16,15 @@ kubespin fleet status [flags]
 
 ```
   # Every cluster, as a table
-  kubespin fleet status --registry-region us-east-1
+  ./bin/kubespin fleet status --registry-region us-east-1
 
   # Only clusters that have missed their reporting window
-  kubespin fleet status --stale-only --stale-threshold 30m --registry-region us-east-1
+  ./bin/kubespin fleet status --stale-only --stale-threshold 30m \
+    --registry-region us-east-1
 
   # Machine-readable output, restricted to one phase
-  kubespin fleet status --phase ready --output json --registry-region us-east-1
+  ./bin/kubespin fleet status --phase ready --output json \
+    --registry-region us-east-1
 ```
 
 ### Options

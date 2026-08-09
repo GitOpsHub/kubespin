@@ -34,21 +34,24 @@ recorded in the Fleet Registry.
 The spec may come from a cluster.yaml — the same file the cluster's repository
 holds — or from the flags below, which override the file when given.`,
 		Example: `  # AWS, private API server, default node pool
-  kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
-    --access private --github-org GitOpsHub
+  ./bin/kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
+    --access private --profile tier-small@1.0.0 \
+    --github-org GitOpsHub --registry-region us-east-1
 
   # GCP, public API server, larger node pool
-  kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
-    --cluster-id demo-gcp --access public --instance-type e2-standard-4 \
-    --desired-size 3 --github-org GitOpsHub
+  ./bin/kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
+    --cluster-id demo-gcp --access public --profile tier-small@1.0.0 \
+    --instance-type e2-standard-4 --desired-size 3 \
+    --github-org GitOpsHub --registry-region us-east-1
 
   # Azure, resolving addons from a platform-profiles repo instead of the builtin catalog
-  kubespin apply --provider azure --azure-subscription <subscription-id> --region eastus \
-    --cluster-id demo-azure --profile tier-standard@1.0.0 \
-    --profiles-repo platform-profiles --github-org GitOpsHub
+  ./bin/kubespin apply --provider azure --azure-subscription <subscription-id> --region eastus \
+    --cluster-id demo-azure --access private --profile tier-standard@1.0.0 \
+    --profiles-repo platform-profiles \
+    --github-org GitOpsHub --registry-region us-east-1
 
   # Preview what apply would do without touching any cloud
-  kubespin apply --spec ./cluster.yaml --dry-run`,
+  ./bin/kubespin apply --spec ./cluster.yaml --registry-region us-east-1 --dry-run`,
 		Args: cobra.NoArgs,
 		RunE: runApply,
 	}
@@ -201,9 +204,14 @@ func cloudAuthProviders(spec core.ClusterSpec) []string {
 
 // buildCloud assembles the provisioners for the spec's cloud.
 func buildCloud(ctx context.Context, cmd *cobra.Command, spec core.ClusterSpec) (orchestrator.Cloud, error) {
-	endpoint, err := cmd.Flags().GetString("ingestion-endpoint")
-	if err != nil {
-		return orchestrator.Cloud{}, fmt.Errorf("reading --ingestion-endpoint: %w", err)
+	// Only apply declares --ingestion-endpoint: it is the sole caller that
+	// opens egress. delete (teardown) and fleet audit (read-only Describe)
+	// share buildCloud but have no use for the destination, so the flag is
+	// looked up rather than demanded — requiring it would make those two
+	// commands fail before doing any work.
+	endpoint := ""
+	if f := cmd.Flags().Lookup("ingestion-endpoint"); f != nil {
+		endpoint = f.Value.String()
 	}
 
 	switch spec.Provider {
@@ -355,17 +363,23 @@ decommissioning on retry rather than needing to be reasoned about by hand.
 
 The spec identifies which cluster and cloud to tear down. It may come from a
 cluster.yaml — the same file the cluster's repository holds — or from the
-flags below, which override the file when given.`,
+flags below, which override the file when given.
+
+delete does not honour the global --dry-run flag: passing it does not make
+this command a preview. Use --yes to skip the confirmation prompt only when
+you mean it.`,
 		Example: `  # AWS, prompts to type the cluster ID to confirm
-  kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
-    --github-org GitOpsHub
+  ./bin/kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
+    --profile tier-small@1.0.0 --github-org GitOpsHub --registry-region us-east-1
 
   # GCP, scripted (no interactive confirmation)
-  kubespin delete --provider gcp --gcp-project my-gcp-project --region us-central1 \
-    --cluster-id demo-gcp --github-org GitOpsHub --yes
+  ./bin/kubespin delete --provider gcp --gcp-project my-gcp-project --region us-central1 \
+    --cluster-id demo-gcp --profile tier-small@1.0.0 \
+    --github-org GitOpsHub --registry-region us-east-1 --yes
 
   # Using the same cluster.yaml apply was run with
-  kubespin delete --spec ./cluster.yaml --yes`,
+  ./bin/kubespin delete --spec ./cluster.yaml \
+    --github-org GitOpsHub --registry-region us-east-1 --yes`,
 		Args: cobra.NoArgs,
 		RunE: runDelete,
 	}

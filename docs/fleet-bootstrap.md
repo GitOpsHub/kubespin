@@ -131,7 +131,7 @@ Six resources, converged in dependency order:
 | **Fleet Registry table** | DynamoDB, on-demand billing. Partition key `ClusterID`. `ProviderPhaseIndex` GSI on `Provider`+`Phase`, projecting all. Encryption at rest, point-in-time recovery, and deletion protection all on. |
 | **Log groups** | `/aws/lambda/<prefix>-ingestion` and `/aws/apigateway/<prefix>-ingestion`, created explicitly so retention can be set — an implicitly created group retains forever. |
 | **Ingestion role** | Lambda execution role with an inline policy scoped to `GetItem`/`UpdateItem` on the registry table and writes to its own log group. No `Scan`, no `Delete`, no other table. |
-| **Ingestion function** | `provided.al2023` on arm64, 256 MB, 10 s timeout. Currently a **501 skeleton** — the real handler lands in M6. |
+| **Ingestion function** | `provided.al2023` on arm64, 256 MB, 10 s timeout. Runs the real handler ([cmd/ingestion](../cmd/ingestion)): it verifies the caller's workload identity token against the OIDC issuer recorded for that `{clusterId}`, then writes the push to the registry. |
 | **Ingestion API** | HTTP API with one route: `POST /v1/clusters/{clusterId}/status`, Lambda proxy integration, auto-deploying `$default` stage with throttling and access logs. |
 | **Invoke permission** | Allows `apigateway.amazonaws.com` to invoke the function, scoped to this one API. |
 
@@ -239,4 +239,6 @@ Convergence is broken for that step — its `Plan` is detecting a difference its
 `Apply` does not fix. This is a bug. The `Details` on the report line name the
 specific field.
 
-Exit codes: `0` success, `1` failure, `3` a command that is not implemented yet.
+Exit codes: `0` success, `1` failure. Failures print to stderr prefixed with
+`kubespin:`; the converge report is printed first, even on failure, so a
+partial run always shows how far it got.

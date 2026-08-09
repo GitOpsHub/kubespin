@@ -19,10 +19,16 @@ kubespin fleet audit [flags]
 
 ```
   # Audit every cluster in the fleet
-  kubespin fleet audit
+  ./bin/kubespin fleet audit --github-org GitOpsHub --registry-region us-east-1
 
   # Audit only AWS clusters, with more concurrency
-  kubespin fleet audit --provider aws --concurrency 8
+  ./bin/kubespin fleet audit --provider aws --concurrency 8 \
+    --github-org GitOpsHub --registry-region us-east-1
+
+  # A fleet with GCP or Azure clusters needs their project/subscription too
+  ./bin/kubespin fleet audit --gcp-project my-gcp-project \
+    --azure-subscription <subscription-id> \
+    --github-org GitOpsHub --registry-region us-east-1
 ```
 
 ### Options

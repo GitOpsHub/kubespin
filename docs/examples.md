@@ -6,56 +6,109 @@ Working commands to copy, paste, and adjust. For flag-by-flag detail see the
 (permissions, what it creates, troubleshooting) see
 [Fleet bootstrap](fleet-bootstrap.md).
 
-Every example below assumes a checkout with `bin/kubespin` built
-(`make`) or `kubespin` on `PATH`. Substitute `./bin/kubespin` for `kubespin`
-if you haven't installed it.
+Every command below is written as `./bin/kubespin`, run from the root of a
+repository checkout after `make build`. Nothing here is a sketch: each
+example carries every flag the command actually requires, so it runs as
+written once the prerequisites below are in place.
+
+```bash
+make build
+```
 
 ## Prerequisites
 
+### Cloud sessions
+
 kubespin authenticates to clouds through your existing CLI sessions, not
 environment variables — run the provider's own login first, or let
-`kubespin login` do it for you (see [Auth workflows](#auth-workflows) below):
+`./bin/kubespin login` do it for you (see [Auth workflows](#auth-workflows)):
 
 ```bash
 aws sso login
-az login
+```
+
+```bash
 gcloud auth application-default login
 ```
 
-Two things every non-dry-run `apply`/`delete`/`fleet update`/`fleet audit`
-needs, from [`.env.example`](../.env.example):
+```bash
+az login
+```
 
-- **`GITHUB_TOKEN`** — a GitHub token with repo-create/push scope, read from
-  the environment (never a flag, so it never lands in shell history).
-- **`--github-org`** — the org cluster repositories are created in.
-  `GITHUB_ORG` in `.env.example` is a reminder to set this, not something
-  kubespin reads directly: export it and pass it yourself, e.g.
-  `--github-org "$GITHUB_ORG"`.
+### `--registry-region`, on nearly every command
 
-And for every command that talks to the Fleet Registry: `--registry-region`
-(or `KUBESPIN_REGISTRY_REGION`, or `registry-region` in the config file) —
-it has no default, on purpose (see
-[Fleet bootstrap troubleshooting](fleet-bootstrap.md#troubleshooting)).
+`apply`, `delete`, and every `fleet` subcommand read the Fleet Registry, and
+`--registry-region` has **no default** on purpose (see
+[Fleet bootstrap troubleshooting](fleet-bootstrap.md#troubleshooting)). Supply
+it as a flag, as `KUBESPIN_REGISTRY_REGION`, or as `registry-region` in the
+config file. The examples below pass the flag explicitly; export it once
+instead if you prefer:
+
+```bash
+export KUBESPIN_REGISTRY_REGION=us-east-1
+```
+
+### `--profile`, on `apply` and `delete`
+
+Both commands build and validate a full `ClusterSpec`, and a spec without a
+`name@version` profile reference is rejected before any cloud call. Either
+pass `--profile tier-small@1.0.0` or supply a `--spec` file whose `profile:`
+block is filled in. The builtin catalog ships `tier-small@1.0.0`,
+`tier-standard@1.0.0`, and `tier-regulated@1.0.0`.
+
+### GitHub, on everything that touches a cluster repository
+
+Real (non-dry-run) `apply`, and every `delete`, `fleet update`, and
+`fleet audit`, create or read cluster repositories. Each needs both of these,
+from [`.env.example`](../.env.example):
+
+- **`GITHUB_TOKEN`** — a token with repo-create/push scope, read from the
+  environment (never a flag, so it never lands in shell history).
+- **`--github-org`** — the org cluster repositories live in. `GITHUB_ORG` in
+  `.env.example` is a reminder to set this, not something kubespin reads
+  directly: export it and pass it yourself, e.g. `--github-org "$GITHUB_ORG"`.
+
+```bash
+export GITHUB_TOKEN=ghp_...
+```
+
+```bash
+export GITHUB_ORG=GitOpsHub
+```
+
+An `apply --dry-run` is the one exception: it only reads the Fleet Registry
+and returns before any repository client is built, so it needs neither.
 
 ## Auth workflows
 
 ```bash
-# Log in to every configured provider (AWS today; GCP and Azure as they land)
-kubespin login
+# Log in to every configured provider (AWS, GCP, Azure)
+./bin/kubespin login
+```
 
+```bash
 # Only the providers you need right now
-kubespin login --only aws,gcp
+./bin/kubespin login --only aws,gcp
+```
 
+```bash
 # Force re-authentication even if the cached session still looks valid
-kubespin login --force
+./bin/kubespin login --force
+```
 
+```bash
 # Check session state without changing anything — useful when a provisioner
 # fails and you're not sure if it's a bug or an expired session
-kubespin status
-
-# Clear a cached session
-kubespin logout --only azure
+./bin/kubespin status
 ```
+
+```bash
+# Clear a cached session
+./bin/kubespin logout --only azure
+```
+
+`status` never fails the command on an unauthenticated provider: reporting
+that is exactly what it exists for.
 
 ## Spin up a single cluster
 
@@ -63,60 +116,159 @@ Each of these is self-contained: authenticate, apply, confirm it landed.
 
 ### AWS, private cluster
 
+kubespin creates the VPC, two subnets across two AZs, an Internet Gateway,
+and a route table, because `--subnets` is omitted.
+
 ```bash
-kubespin login --only aws
+./bin/kubespin login --only aws
 
-kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
-  --access private --github-org "$GITHUB_ORG"
+./bin/kubespin apply \
+  --provider aws \
+  --region us-east-1 \
+  --cluster-id demo-aws \
+  --access private \
+  --profile tier-small@1.0.0 \
+  --github-org "$GITHUB_ORG" \
+  --registry-region us-east-1
 
-kubespin fleet status --phase ready
+./bin/kubespin fleet status --phase ready --registry-region us-east-1
 ```
 
 ### GCP, public cluster with a larger node pool
 
 ```bash
-kubespin login --only gcp
+./bin/kubespin login --only gcp
 
-kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
-  --cluster-id demo-gcp --access public --instance-type e2-standard-4 \
-  --desired-size 3 --min-size 2 --max-size 6 --github-org "$GITHUB_ORG"
+./bin/kubespin apply \
+  --provider gcp \
+  --gcp-project my-gcp-project \
+  --region us-central1 \
+  --cluster-id demo-gcp \
+  --access public \
+  --profile tier-small@1.0.0 \
+  --instance-type e2-standard-4 \
+  --min-size 2 --max-size 6 --desired-size 3 \
+  --github-org "$GITHUB_ORG" \
+  --registry-region us-east-1
 
-kubespin fleet status --phase ready
+./bin/kubespin fleet status --phase ready --registry-region us-east-1
 ```
 
-### Azure, resolving addons from a platform-profiles repo
+`--min-size`, `--max-size`, and `--desired-size` describe the single
+`default` node pool built from flags. Richer topologies belong in a
+`--spec` file.
+
+### Azure, on a subnet you already own
+
+Passing `--subnets` tells kubespin the network is yours: it is used unchanged
+and nothing about it is created or modified.
 
 ```bash
-kubespin login --only azure
+./bin/kubespin login --only azure
 
-kubespin apply --provider azure --azure-subscription "$AZURE_SUBSCRIPTION_ID" \
-  --region eastus --cluster-id demo-azure --access private \
-  --profile tier-standard@1.0.0 --profiles-repo platform-profiles \
-  --github-org "$GITHUB_ORG"
+./bin/kubespin apply \
+  --provider azure \
+  --azure-subscription "$AZURE_SUBSCRIPTION_ID" \
+  --region eastus \
+  --cluster-id demo-azure \
+  --access private \
+  --profile tier-standard@1.0.0 \
+  --profiles-repo platform-profiles \
+  --subnets "/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/my-rg/providers/Microsoft.Network/virtualNetworks/my-vnet/subnets/my-subnet" \
+  --github-org "$GITHUB_ORG" \
+  --registry-region us-east-1
 
-kubespin fleet status --phase ready
+./bin/kubespin fleet status --phase ready --registry-region us-east-1
 ```
 
 `--profile` with no `--profiles-repo` resolves against the builtin catalog —
-useful before `platform-profiles` exists yet.
+useful before `platform-profiles` exists yet. Drop `--subnets` and kubespin
+creates the resource group, VNet, and subnet itself.
+
+### Telling clusters where to push status
+
+The in-cluster reporter needs egress to the Central Ingestion API, and the
+allowlist rule is provisioned during cluster creation. Pass the host that
+`fleet bootstrap` printed:
+
+```bash
+./bin/kubespin apply \
+  --provider aws \
+  --region us-east-1 \
+  --cluster-id demo-aws \
+  --access private \
+  --profile tier-small@1.0.0 \
+  --ingestion-endpoint abc123.execute-api.us-east-1.amazonaws.com \
+  --github-org "$GITHUB_ORG" \
+  --registry-region us-east-1
+```
 
 ### From a cluster.yaml instead of flags
 
-Flags override the file when both are given, so this also works for a spec
-checked out from a cluster's own repository:
+The file is the same `cluster.yaml` a cluster's repository holds, so what you
+pass here is what gets committed. Unknown keys are rejected rather than
+silently ignored.
+
+```yaml
+# cluster.yaml
+id: demo-aws
+provider: aws
+region: us-east-1
+access: private
+profile:
+  name: tier-small
+  version: 1.0.0
+nodePools:
+  - name: default
+    instanceType: m6i.large
+    minSize: 1
+    maxSize: 5
+    desiredSize: 2
+subnets: []
+```
 
 ```bash
-kubespin apply --spec ./cluster.yaml
+./bin/kubespin apply --spec ./cluster.yaml \
+  --github-org "$GITHUB_ORG" --registry-region us-east-1
 ```
+
+An explicitly-set flag overrides the file, so a checked-out spec can be
+reused with one field changed:
+
+```bash
+./bin/kubespin apply --spec ./cluster.yaml --cluster-id demo-aws-2 \
+  --github-org "$GITHUB_ORG" --registry-region us-east-1
+```
+
+Overridable this way: `--cluster-id`, `--provider`, `--region`, `--access`,
+`--kubernetes-version`, `--profile`, `--subnets`, and the three CIDR flags.
+The node pool flags (`--instance-type`, `--min-size`, `--max-size`,
+`--desired-size`) are **not** — they only build the single `default` pool
+when the spec has no `nodePools` at all, so a file's pools are never
+partially overwritten from the command line. Edit the file to resize a pool.
 
 ### Preview before applying
 
-Every mutating command accepts `--dry-run` (a root persistent flag). A dry
-run for `apply` only reads the Fleet Registry — it never touches the
-cluster's own cloud:
+An `apply --dry-run` reads the Fleet Registry and reports the phase a real
+run would resume from. It never touches the cluster's own cloud, and never
+builds a GitHub client — so it needs neither `GITHUB_TOKEN` nor
+`--github-org`:
 
 ```bash
-kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws --dry-run
+./bin/kubespin apply \
+  --provider aws \
+  --region us-east-1 \
+  --cluster-id demo-aws \
+  --access private \
+  --profile tier-small@1.0.0 \
+  --registry-region us-east-1 \
+  --dry-run
+```
+
+On an unregistered cluster it prints:
+
+```
+cluster demo-aws is not registered; apply would create it from phase pending
 ```
 
 ## Fleet lifecycle
@@ -126,32 +278,58 @@ provisioned once per fleet account, before any cluster. Full walkthrough,
 including required IAM permissions, in [Fleet bootstrap](fleet-bootstrap.md).
 
 ```bash
-# 1. Preview
-kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
+# 1. Build the ingestion handler — bootstrap reads it from disk
+make lambda
 
-# 2. Apply
-kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+# 2. Preview
+./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
 
-# 3. Spin up clusters (repeat per cluster; see "Spin up a single cluster" above)
-kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
-  --access private --github-org "$GITHUB_ORG"
+# 3. Apply
+./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
 
-# 4. Watch the fleet
-kubespin fleet status
-kubespin fleet status --stale-only --stale-threshold 30m
-kubespin fleet status --output json
-
-# 5. Roll a component version across every matching cluster
-kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8
-
-# Scope a wave to one tier and one cloud
-kubespin fleet update --component cert-manager --version 1.15.1 \
-  --profile tier-standard@1.0.0 --provider aws
-
-# 6. Check live infra against each cluster's cluster.yaml
-kubespin fleet audit
-kubespin fleet audit --provider gcp --concurrency 8
+# 4. Re-run the preview: everything must now report in sync
+./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
 ```
+
+```bash
+# 5. Spin up clusters (repeat per cluster; see "Spin up a single cluster")
+./bin/kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
+  --access private --profile tier-small@1.0.0 \
+  --github-org "$GITHUB_ORG" --registry-region us-east-1
+```
+
+```bash
+# 6. Watch the fleet — read-only, never connects to a cluster
+./bin/kubespin fleet status --registry-region us-east-1
+./bin/kubespin fleet status --stale-only --stale-threshold 30m --registry-region us-east-1
+./bin/kubespin fleet status --output json --registry-region us-east-1
+./bin/kubespin fleet status --provider aws --phase ready --registry-region us-east-1
+```
+
+```bash
+# 7. Roll a component version across every matching cluster
+./bin/kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8 \
+  --github-org "$GITHUB_ORG" --registry-region us-east-1
+
+# Scope a wave to one cloud
+./bin/kubespin fleet update --component cert-manager --version 1.15.1 --provider aws \
+  --github-org "$GITHUB_ORG" --registry-region us-east-1
+```
+
+```bash
+# 8. Check live infra against each cluster's cluster.yaml
+./bin/kubespin fleet audit \
+  --github-org "$GITHUB_ORG" --registry-region us-east-1
+
+./bin/kubespin fleet audit --provider gcp --concurrency 8 \
+  --gcp-project my-gcp-project \
+  --github-org "$GITHUB_ORG" --registry-region us-east-1
+```
+
+`fleet audit` describes live infrastructure through each cloud's SDK, so a
+fleet containing GCP or Azure clusters needs `--gcp-project` /
+`--azure-subscription` even when they are not the audit's focus — without
+them, those clusters report `FAILED` rather than being skipped.
 
 ## Tear down
 
@@ -161,23 +339,90 @@ than the inverse of a Terraform destroy.
 
 ```bash
 # Interactive: prompts to type the cluster ID to confirm
-kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
-  --github-org "$GITHUB_ORG"
-
-# Scripted: skip the confirmation prompt
-kubespin delete --provider gcp --gcp-project my-gcp-project --region us-central1 \
-  --cluster-id demo-gcp --github-org "$GITHUB_ORG" --yes
-
-# Using the same cluster.yaml apply was run with
-kubespin delete --spec ./cluster.yaml --yes
+./bin/kubespin delete \
+  --provider aws \
+  --region us-east-1 \
+  --cluster-id demo-aws \
+  --profile tier-small@1.0.0 \
+  --github-org "$GITHUB_ORG" \
+  --registry-region us-east-1
 ```
+
+```bash
+# Scripted: skip the confirmation prompt
+./bin/kubespin delete \
+  --provider gcp \
+  --gcp-project my-gcp-project \
+  --region us-central1 \
+  --cluster-id demo-gcp \
+  --profile tier-small@1.0.0 \
+  --github-org "$GITHUB_ORG" \
+  --registry-region us-east-1 \
+  --yes
+```
+
+```bash
+# Using the same cluster.yaml apply was run with
+./bin/kubespin delete --spec ./cluster.yaml \
+  --github-org "$GITHUB_ORG" --registry-region us-east-1 --yes
+```
+
+`delete` validates a full spec exactly like `apply`, which is why
+`--profile` appears here too even though teardown never resolves addons.
+Several other flags (`--instance-type`, `--min-size`, `--max-size`,
+`--desired-size`, `--kubernetes-version`, the CIDR flags) are accepted for
+spec compatibility and ignored.
 
 There is no fleet-infrastructure teardown command, deliberately — see
 [Fleet bootstrap: re-running, resuming, and tearing down](fleet-bootstrap.md#re-running-resuming-and-tearing-down).
 
-## Dry-run everywhere
+## Which commands honour `--dry-run`
 
-`--dry-run` is a root persistent flag, so it composes with any mutating
-command: `apply`, `delete`, and `fleet bootstrap` all honor it, reporting
-what they would do without touching a cloud, a repository, or the Fleet
-Registry's write path.
+`--dry-run` is a root persistent flag, so every command *accepts* it, but only
+two act on it:
+
+| Command | `--dry-run` |
+|---|---|
+| `fleet bootstrap` | **Honoured.** `Plan` is strictly read-only; the test fakes fail the build if a dry run makes a mutating call. |
+| `apply` | **Honoured.** Reads the Fleet Registry and reports the phase a run would resume from; touches no cloud and no repository. |
+| `delete` | **Ignored.** The teardown runs. |
+| `fleet update` | **Ignored.** The wave commits. |
+| `fleet audit` | Not applicable — read-only by construction. |
+| `fleet status` | Not applicable — read-only by construction. |
+
+Passing `--dry-run` still logs `dry run: no changes will be made` on every
+command, because that line is emitted by the shared root pre-run. On `delete`
+and `fleet update` it does not reflect what the command then does.
+
+## Global flags and configuration
+
+Precedence is **flags > `KUBESPIN_*` environment variables > config file >
+defaults**.
+
+```bash
+./bin/kubespin fleet status --registry-region us-east-1 \
+  --log-level debug --log-format json
+```
+
+Logs go to stderr and command output to stdout, so the two can be separated:
+
+```bash
+./bin/kubespin fleet status --registry-region us-east-1 --output json 2>/dev/null
+```
+
+A config file at `$XDG_CONFIG_HOME/kubespin/config.yaml` or `./config.yaml`
+(or wherever `--config` points) removes the repeated flags entirely:
+
+```yaml
+log-level: info
+log-format: text
+registry-table: kubespin-fleet-registry
+registry-region: us-east-1
+```
+
+With that in place, every example above works without `--registry-region`.
+
+## Exit codes
+
+`0` on success, `1` on any failure. Failures are printed to stderr prefixed
+with `kubespin:`.
