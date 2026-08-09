@@ -11,8 +11,44 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 )
+
+// options carries settings shared by this package's constructors.
+type options struct {
+	logger *slog.Logger
+}
+
+// Option configures a reporter component.
+type Option func(*options)
+
+// WithLogger sets the logger. Without it, a component logs to slog.Default().
+func WithLogger(logger *slog.Logger) Option {
+	return func(o *options) {
+		if logger != nil {
+			o.logger = logger
+		}
+	}
+}
+
+// resolve applies opts over the defaults.
+func resolve(opts []Option) options {
+	o := options{logger: slog.Default()}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
+// loggerOr keeps a component built as a bare struct literal from panicking on
+// a nil logger.
+func loggerOr(logger *slog.Logger) *slog.Logger {
+	if logger == nil {
+		return slog.Default()
+	}
+	return logger
+}
 
 // Summary is the compact status this package extracts from Argo CD: counts,
 // not the full application list. The Central Ingestion API and Fleet
@@ -56,6 +92,7 @@ type HTTPArgoCDClient struct {
 	client  *http.Client
 	baseURL string
 	token   string
+	logger  *slog.Logger
 }
 
 // NewHTTPArgoCDClient builds a client against baseURL (typically
@@ -63,15 +100,19 @@ type HTTPArgoCDClient struct {
 // CD's own API token, not the workload identity token this package later
 // signs its push to the ingestion API with; the two prove different things
 // to different services.
-func NewHTTPArgoCDClient(client *http.Client, baseURL, token string) *HTTPArgoCDClient {
+func NewHTTPArgoCDClient(client *http.Client, baseURL, token string, opts ...Option) *HTTPArgoCDClient {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return &HTTPArgoCDClient{client: client, baseURL: baseURL, token: token}
+	o := resolve(opts)
+	return &HTTPArgoCDClient{client: client, baseURL: baseURL, token: token, logger: o.logger}
 }
 
 // Summarize implements ArgoCDClient.
 func (c *HTTPArgoCDClient) Summarize(ctx context.Context) (Summary, error) {
+	logger := loggerOr(c.logger)
+	logger.Info("querying local Argo CD", "url", c.baseURL)
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/applications", nil)
 	if err != nil {
 		return Summary{}, fmt.Errorf("building request: %w", err)
@@ -95,7 +136,15 @@ func (c *HTTPArgoCDClient) Summarize(ctx context.Context) (Summary, error) {
 		return Summary{}, fmt.Errorf("decoding applications: %w", err)
 	}
 
-	return summarize(list), nil
+	summary := summarize(list)
+	logger.Info("summarized Argo CD applications",
+		"applications", len(list.Items), "synced", summary.SyncedApps,
+		"healthy", summary.HealthyApps, "degraded", summary.DegradedApps,
+		"commit", summary.CommitSHA)
+	if summary.DegradedApps > 0 {
+		logger.Warn("Argo CD reports degraded applications", "degraded", summary.DegradedApps)
+	}
+	return summary, nil
 }
 
 // summarize counts application by sync/health status. Degraded is counted

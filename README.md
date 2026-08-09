@@ -70,6 +70,16 @@ one). Export `KUBESPIN_REGISTRY_REGION` to drop the first.
   --github-org "$GITHUB_ORG" --registry-region us-east-1
 ```
 
+> A GKE cluster whose `--region` is a region (not a zone) replicates the
+> default node pool across 3 zones, and quota is consumed per zone: the
+> command above requests 36 vCPU, and — independent of `--instance-type` —
+> 900Gi of boot disk, since GKE's default boot disk is a fixed 100Gi
+> regardless of machine type. Low-quota projects should size both down, e.g.
+> `--instance-type e2-standard-2 --min-size 1 --max-size 3 --desired-size 1
+> --disk-size 30` (6 vCPU, 90Gi total), or request a `CPUS_ALL_REGIONS` /
+> `SSD_TOTAL_GB` quota increase for the region first. See
+> [docs/examples.md](docs/examples.md#gcp-public-cluster-with-a-larger-node-pool).
+
 ```bash
 # Azure, resolving addons from a platform-profiles repo
 ./bin/kubespin apply --provider azure --azure-subscription "$AZURE_SUBSCRIPTION_ID" \

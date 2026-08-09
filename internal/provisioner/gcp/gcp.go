@@ -9,6 +9,7 @@ package gcp
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	container "cloud.google.com/go/container/apiv1"
 	"cloud.google.com/go/container/apiv1/containerpb"
@@ -76,10 +77,22 @@ type Clients struct {
 	firewalls   firewallsAPI
 	networks    networksAPI
 	subnetworks subnetworksAPI
+	tokens      tokenAPI
+
+	logger *slog.Logger
+}
+
+// Option configures Clients.
+type Option func(*Clients)
+
+// WithLogger sets the logger every provisioner built over these Clients logs
+// through. Defaults to slog.Default() when not given.
+func WithLogger(logger *slog.Logger) Option {
+	return func(c *Clients) { c.logger = logger }
 }
 
 // NewClients builds real GCP clients for a project.
-func NewClients(ctx context.Context, project string) (*Clients, error) {
+func NewClients(ctx context.Context, project string, opts ...Option) (*Clients, error) {
 	if project == "" {
 		return nil, fmt.Errorf("gcp: project is required")
 	}
@@ -99,14 +112,20 @@ func NewClients(ctx context.Context, project string) (*Clients, error) {
 		return nil, fmt.Errorf("building Compute client: %w", err)
 	}
 
-	return &Clients{
+	c := &Clients{
 		project:     project,
 		cluster:     cm,
 		svcAccts:    realServiceAccounts{iamSvc.Projects.ServiceAccounts},
 		firewalls:   realFirewalls{computeSvc.Firewalls},
 		networks:    realNetworks{computeSvc.Networks},
 		subnetworks: realSubnetworks{computeSvc.Subnetworks},
-	}, nil
+		tokens:      applicationDefaultTokens{},
+		logger:      slog.Default(),
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c, nil
 }
 
 // realServiceAccounts adapts the fluent iam/v1 client to serviceAccountsAPI.

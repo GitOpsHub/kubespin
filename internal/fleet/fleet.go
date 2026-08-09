@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/GitOpsHub/kubespin/internal/core"
@@ -10,6 +11,36 @@ import (
 	"github.com/GitOpsHub/kubespin/internal/registry"
 	"github.com/GitOpsHub/kubespin/internal/repo"
 )
+
+// Option configures a fleet-wide operation.
+//
+// Options are variadic on Status, Audit, and Update so those functions keep
+// their existing positional signatures; today the only one is WithLogger.
+type Option func(*options)
+
+type options struct {
+	logger *slog.Logger
+}
+
+// WithLogger sets the logger. Fleet logging is supplementary diagnostic
+// detail for operators running with --log-level debug: the commands in
+// internal/cli do their own user-facing reporting, so nothing logged here
+// duplicates that.
+func WithLogger(logger *slog.Logger) Option {
+	return func(o *options) {
+		if logger != nil {
+			o.logger = logger
+		}
+	}
+}
+
+func resolveOptions(opts []Option) options {
+	o := options{logger: slog.Default()}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
 
 // ClusterProvisionerFactory builds the ClusterProvisioner for one cluster's
 // provider and region. The CLI supplies one that constructs real cloud SDK
@@ -34,8 +65,10 @@ type AuditResult struct {
 // its own AuditResult rather than the first error stopping everything.
 func Audit(
 	ctx context.Context, reg registry.Registry, filter registry.Filter,
-	clusters ClusterProvisionerFactory, repoProv repo.Provisioner, concurrency int,
+	clusters ClusterProvisionerFactory, repoProv repo.Provisioner, concurrency int, opts ...Option,
 ) ([]AuditResult, error) {
+	logger := resolveOptions(opts).logger
+
 	records, err := reg.List(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("listing fleet registry: %w", err)
@@ -43,6 +76,9 @@ func Audit(
 	if concurrency < 1 {
 		concurrency = 1
 	}
+	logger.Debug("auditing fleet",
+		"clusters", len(records), "provider_filter", filter.Provider, "phase_filter", filter.Phase,
+		"concurrency", concurrency)
 
 	results := make([]AuditResult, len(records))
 	sem := make(chan struct{}, concurrency)
@@ -55,7 +91,7 @@ func Audit(
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			results[i] = auditRecord(ctx, rec, clusters, repoProv)
+			results[i] = auditRecord(ctx, rec, clusters, repoProv, logger)
 		}(i, rec)
 	}
 	wg.Wait()
@@ -65,12 +101,24 @@ func Audit(
 
 func auditRecord(
 	ctx context.Context, rec registry.Record, clusters ClusterProvisionerFactory, repoProv repo.Provisioner,
+	logger *slog.Logger,
 ) AuditResult {
+	logger.Debug("auditing cluster", "cluster", rec.ClusterID, "provider", rec.Provider, "region", rec.Region)
+
 	cluster, err := clusters(ctx, rec.Provider, rec.Region)
 	if err != nil {
+		logger.Debug("cluster audit skipped: no provisioner", "cluster", rec.ClusterID, "error", err)
 		return AuditResult{ClusterID: rec.ClusterID, Err: fmt.Errorf("building provisioner for %s: %w", rec.ClusterID, err)}
 	}
 
 	findings, err := AuditOne(ctx, cluster, repoProv, rec.ClusterID, rec.Provider, rec.Region)
+	switch {
+	case err != nil:
+		logger.Debug("cluster audit failed", "cluster", rec.ClusterID, "error", err)
+	case len(findings) > 0:
+		logger.Debug("cluster drifted", "cluster", rec.ClusterID, "findings", len(findings))
+	default:
+		logger.Debug("cluster has no drift", "cluster", rec.ClusterID)
+	}
 	return AuditResult{ClusterID: rec.ClusterID, Findings: findings, Err: err}
 }

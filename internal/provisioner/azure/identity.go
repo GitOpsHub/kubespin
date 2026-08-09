@@ -91,6 +91,7 @@ func (p *IdentityProvisioner) ensureIdentity(
 	if err != nil {
 		return "", fmt.Errorf("creating managed identity %s: %w", name, err)
 	}
+	p.c.logger.Info("created managed identity", "identity", name, "component", comp.Name, "cluster", spec.ID)
 	return deref(created.Properties.ClientID), nil
 }
 
@@ -128,6 +129,7 @@ func (p *IdentityProvisioner) ensureFederatedCredential(
 	); err != nil {
 		return fmt.Errorf("binding workload identity for %s: %w", comp.Name, err)
 	}
+	p.c.logger.Info("bound workload identity", "identity", n.identity(comp.Name), "component", comp.Name, "issuer", issuer)
 	return nil
 }
 
@@ -153,5 +155,6 @@ func (p *IdentityProvisioner) Deprovision(
 		}
 		return fmt.Errorf("deleting managed identity %s: %w", n.identity(comp.Name), err)
 	}
+	p.c.logger.Info("deleted managed identity", "identity", n.identity(comp.Name), "component", comp.Name, "cluster", spec.ID)
 	return nil
 }

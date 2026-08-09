@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -44,17 +45,23 @@ type Pusher struct {
 	endpoint  string
 	clusterID core.ClusterID
 	tokens    TokenSource
+	logger    *slog.Logger
 }
 
 // NewPusher builds a Pusher that reports clusterID's status to endpoint
 // (the Central Ingestion API's base URL, e.g.
 // "https://ingest.kubespin.example.com"), signing each push with a token
 // from tokens.
-func NewPusher(client *http.Client, endpoint string, clusterID core.ClusterID, tokens TokenSource) *Pusher {
+func NewPusher(
+	client *http.Client, endpoint string, clusterID core.ClusterID, tokens TokenSource, opts ...Option,
+) *Pusher {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return &Pusher{client: client, endpoint: endpoint, clusterID: clusterID, tokens: tokens}
+	o := resolve(opts)
+	return &Pusher{
+		client: client, endpoint: endpoint, clusterID: clusterID, tokens: tokens, logger: o.logger,
+	}
 }
 
 // Push queries argocd for a status summary and pushes it.
@@ -65,15 +72,21 @@ func NewPusher(client *http.Client, endpoint string, clusterID core.ClusterID, t
 // decides how to react to, the same way HandleStatus on the receiving end
 // returns a status code rather than only an error.
 func (p *Pusher) Push(ctx context.Context, argocd ArgoCDClient) (accepted bool, err error) {
+	logger := loggerOr(p.logger)
+
 	summary, err := argocd.Summarize(ctx)
 	if err != nil {
 		return false, fmt.Errorf("summarizing Argo CD state: %w", err)
 	}
+	logger.Info("obtained Argo CD status summary",
+		"cluster", p.clusterID, "synced", summary.SyncedApps,
+		"healthy", summary.HealthyApps, "degraded", summary.DegradedApps)
 
 	token, err := p.tokens.Token()
 	if err != nil {
 		return false, fmt.Errorf("reading workload identity token: %w", err)
 	}
+	logger.Info("signed status payload with workload identity token", "cluster", p.clusterID)
 
 	payload, err := json.Marshal(ingestion.StatusPayload{
 		SyncedApps: summary.SyncedApps, HealthyApps: summary.HealthyApps,
@@ -97,5 +110,16 @@ func (p *Pusher) Push(ctx context.Context, argocd ArgoCDClient) (accepted bool, 
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	return resp.StatusCode >= 200 && resp.StatusCode < 300, nil
+	accepted = resp.StatusCode >= 200 && resp.StatusCode < 300
+	if accepted {
+		logger.Info("pushed status to ingestion API",
+			"cluster", p.clusterID, "endpoint", p.endpoint, "status", resp.StatusCode)
+	} else {
+		// Not an error from this method's perspective (see the doc comment), but
+		// the operator still needs to see that the fleet's view of this cluster
+		// is about to go stale.
+		logger.Warn("ingestion API rejected status push",
+			"cluster", p.clusterID, "endpoint", p.endpoint, "status", resp.StatusCode)
+	}
+	return accepted, nil
 }

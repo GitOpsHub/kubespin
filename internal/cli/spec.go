@@ -165,6 +165,10 @@ func applyNodePoolFlags(cmd *cobra.Command, spec *core.ClusterSpec) error {
 	if err != nil {
 		return fmt.Errorf("reading --desired-size: %w", err)
 	}
+	diskSize, err := flags.GetInt32("disk-size")
+	if err != nil {
+		return fmt.Errorf("reading --disk-size: %w", err)
+	}
 
 	spec.NodePools = []core.NodePool{{
 		Name:         defaultPoolName,
@@ -172,6 +176,7 @@ func applyNodePoolFlags(cmd *cobra.Command, spec *core.ClusterSpec) error {
 		MinSize:      minSize,
 		MaxSize:      maxSize,
 		DesiredSize:  desired,
+		DiskSizeGB:   diskSize,
 	}}
 	return nil
 }

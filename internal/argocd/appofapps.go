@@ -79,7 +79,9 @@ func RenderAddonApplication(addon core.AddonRef) ([]byte, error) {
 
 // RenderAddonApplications renders every addon in profile, keyed by the path
 // each should be committed to under AppsDir in the cluster's own repository.
-func RenderAddonApplications(profile core.Profile) (map[string][]byte, error) {
+func RenderAddonApplications(profile core.Profile, opts ...Option) (map[string][]byte, error) {
+	o := resolve(opts)
+
 	out := make(map[string][]byte, len(profile.Addons))
 	for _, addon := range profile.Addons {
 		rendered, err := RenderAddonApplication(addon)
@@ -87,6 +89,12 @@ func RenderAddonApplications(profile core.Profile) (map[string][]byte, error) {
 			return nil, err
 		}
 		out[AppsDir+"/"+addon.Name+".yaml"] = rendered
+		o.logger.Debug("rendered addon Application",
+			"addon", addon.Name, "chart", addon.Chart, "version", addon.Version,
+			"namespace", addon.Namespace)
 	}
+
+	o.logger.Info("rendered app-of-apps addon Applications",
+		"profile", profile.Name, "addons", len(out))
 	return out, nil
 }

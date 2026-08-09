@@ -84,12 +84,21 @@ func ApplyIngressDefaults(access core.Access, addon core.AddonRef) core.AddonRef
 // an addon with no opinion about ingress should not gain an empty
 // ingress:{...} block in its rendered Application just because some other
 // addon in the profile happens to be a load balancer.
-func ApplyProfileIngressDefaults(access core.Access, profile core.Profile) core.Profile {
+func ApplyProfileIngressDefaults(access core.Access, profile core.Profile, opts ...Option) core.Profile {
+	o := resolve(opts)
+
 	patched := profile
 	patched.Addons = make([]core.AddonRef, len(profile.Addons))
 	for i, addon := range profile.Addons {
 		if _, ok := addon.Values["ingress"]; ok {
+			requested := requestedExposure(addon.Values)
 			addon = ApplyIngressDefaults(access, addon)
+			if requested == ExposureExternal && ResolveExposure(access, requested) == ExposureInternal {
+				// Worth saying out loud: the operator asked for an external
+				// load balancer and is not getting one.
+				o.logger.Warn("addon requested external exposure; forced internal by cluster access mode",
+					"addon", addon.Name, "access", access)
+			}
 		}
 		patched.Addons[i] = addon
 	}

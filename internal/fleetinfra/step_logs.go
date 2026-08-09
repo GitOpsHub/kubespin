@@ -3,6 +3,7 @@ package fleetinfra
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
@@ -17,6 +18,7 @@ import (
 type logGroupsStep struct {
 	c    *Clients
 	spec Spec
+	log  *slog.Logger
 
 	pending []logGroupFix
 }
@@ -27,8 +29,8 @@ type logGroupFix struct {
 	setRetention bool
 }
 
-func newLogGroupsStep(c *Clients, spec Spec) *logGroupsStep {
-	return &logGroupsStep{c: c, spec: spec}
+func newLogGroupsStep(c *Clients, spec Spec, log *slog.Logger) *logGroupsStep {
+	return &logGroupsStep{c: c, spec: spec, log: stepLogger(log, "log groups")}
 }
 
 func (s *logGroupsStep) Name() string { return "log groups" }
@@ -91,6 +93,7 @@ func (s *logGroupsStep) Apply(ctx context.Context, _ Action) error {
 			if err != nil {
 				return fmt.Errorf("creating log group %s: %w", fix.name, err)
 			}
+			s.log.Info("created log group", "log_group", fix.name)
 		}
 		if fix.setRetention {
 			_, err := s.c.logs.PutRetentionPolicy(ctx, &cloudwatchlogs.PutRetentionPolicyInput{
@@ -100,6 +103,8 @@ func (s *logGroupsStep) Apply(ctx context.Context, _ Action) error {
 			if err != nil {
 				return fmt.Errorf("setting retention on %s: %w", fix.name, err)
 			}
+			s.log.Info("set log group retention",
+				"log_group", fix.name, "retention_days", s.spec.LogRetentionDays)
 		}
 	}
 	return nil

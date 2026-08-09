@@ -141,6 +141,7 @@ func (p *NetworkProvisioner) ensureVPC(
 		return "", fmt.Errorf("enabling DNS hostnames on %s: %w", vpcID, err)
 	}
 
+	p.c.logger.Info("created VPC", "vpc", vpcID, "cidr", cidr)
 	change.Changed = true
 	change.Details = append(change.Details, fmt.Sprintf("created VPC %s (%s)", vpcID, cidr))
 	return vpcID, nil
@@ -189,6 +190,7 @@ func (p *NetworkProvisioner) ensureSubnet(
 		return "", fmt.Errorf("creating subnet %s: %w", name, err)
 	}
 
+	p.c.logger.Info("created subnet", "subnet", name, "cidr", cidr)
 	change.Changed = true
 	change.Details = append(change.Details, fmt.Sprintf("created subnet %s (%s)", name, cidr))
 	return aws.ToString(created.Subnet.SubnetId), nil
@@ -224,6 +226,7 @@ func (p *NetworkProvisioner) ensureInternetGateway(
 		return "", fmt.Errorf("attaching internet gateway %s to %s: %w", igwID, vpcID, err)
 	}
 
+	p.c.logger.Info("created internet gateway", "gateway", igwID)
 	change.Changed = true
 	change.Details = append(change.Details, fmt.Sprintf("created internet gateway %s", igwID))
 	return igwID, nil
@@ -276,6 +279,7 @@ func (p *NetworkProvisioner) ensureRouteTable(
 		}
 	}
 
+	p.c.logger.Info("created route table", "table", rtID, "gateway", igwID)
 	change.Changed = true
 	change.Details = append(change.Details,
 		fmt.Sprintf("created route table %s with default route via %s", rtID, igwID))
@@ -390,6 +394,7 @@ func (p *NetworkProvisioner) AllowEgress(
 			state.NetworkID, cidr, port, err)
 	}
 
+	p.c.logger.Info("opened egress rule", "cluster", spec.ID, "cidr", cidr, "port", port, "destination", dest.Host)
 	change.Changed = true
 	change.Details = append(change.Details,
 		fmt.Sprintf("allow egress to %s:%d for %s", cidr, port, dest.Host))

@@ -96,6 +96,7 @@ func (p *IdentityProvisioner) ensureServiceAccount(ctx context.Context, n names,
 		}
 		return fmt.Errorf("creating service account %s: %w", n.serviceAccountEmail(comp.Name), err)
 	}
+	p.c.logger.Info("created service account", "account", n.serviceAccountEmail(comp.Name), "component", comp.Name, "cluster", n.spec.ID)
 	return nil
 }
 
@@ -135,6 +136,7 @@ func (p *IdentityProvisioner) bindWorkloadIdentity(
 	if _, err := p.c.svcAccts.SetIamPolicy(ctx, resource, &iam.SetIamPolicyRequest{Policy: policy}); err != nil {
 		return fmt.Errorf("binding workload identity for %s: %w", n.serviceAccountEmail(comp.Name), err)
 	}
+	p.c.logger.Info("bound workload identity", "account", n.serviceAccountEmail(comp.Name), "member", member)
 	return nil
 }
 
@@ -172,6 +174,7 @@ func (p *IdentityProvisioner) Deprovision(
 		}
 		return fmt.Errorf("deleting service account %s: %w", n.serviceAccountEmail(comp.Name), err)
 	}
+	p.c.logger.Info("deleted service account", "account", n.serviceAccountEmail(comp.Name), "component", comp.Name, "cluster", spec.ID)
 	return nil
 }
 

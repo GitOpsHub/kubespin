@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -32,15 +33,43 @@ type DynamoDB struct {
 	client dynamoAPI
 	table  string
 	now    func() time.Time
+	logger *slog.Logger
+}
+
+// Option configures a DynamoDB registry client.
+type Option func(*DynamoDB)
+
+// WithLogger sets the logger. Registry logging is diagnostic detail — the
+// commands do their own user-facing reporting — so it is Debug except for a
+// lease conflict, which is the race the lease exists to catch.
+func WithLogger(logger *slog.Logger) Option {
+	return func(d *DynamoDB) {
+		if logger != nil {
+			d.logger = logger
+		}
+	}
 }
 
 // NewDynamoDB builds a registry client against the named table.
-func NewDynamoDB(ctx context.Context, region, table string) (*DynamoDB, error) {
+func NewDynamoDB(ctx context.Context, region, table string, opts ...Option) (*DynamoDB, error) {
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
 	if err != nil {
 		return nil, fmt.Errorf("loading AWS config: %w", err)
 	}
-	return &DynamoDB{client: dynamodb.NewFromConfig(cfg), table: table, now: time.Now}, nil
+	d := &DynamoDB{client: dynamodb.NewFromConfig(cfg), table: table, now: time.Now, logger: slog.Default()}
+	for _, opt := range opts {
+		opt(d)
+	}
+	return d, nil
+}
+
+// log returns the client's logger, defaulting when the struct was built
+// directly (as the package's own tests do) rather than through NewDynamoDB.
+func (d *DynamoDB) log() *slog.Logger {
+	if d.logger == nil {
+		return slog.Default()
+	}
+	return d.logger
 }
 
 // Get returns a cluster's record.
@@ -58,7 +87,12 @@ func (d *DynamoDB) Get(ctx context.Context, id core.ClusterID) (Record, error) {
 	if len(out.Item) == 0 {
 		return Record{}, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
-	return unmarshalRecord(out.Item)
+	rec, err := unmarshalRecord(out.Item)
+	if err != nil {
+		return Record{}, err
+	}
+	d.log().Debug("read registry record", "cluster", id, "phase", rec.Phase, "version", rec.Version)
+	return rec, nil
 }
 
 // Create registers a new cluster.
@@ -84,6 +118,7 @@ func (d *DynamoDB) Create(ctx context.Context, rec Record) (Record, error) {
 		}
 		return Record{}, fmt.Errorf("creating cluster %s: %w", rec.ClusterID, err)
 	}
+	d.log().Debug("created registry record", "cluster", rec.ClusterID, "phase", rec.Phase, "provider", rec.Provider)
 	return rec, nil
 }
 
@@ -131,7 +166,13 @@ func (d *DynamoDB) UpdatePhase(ctx context.Context, rec Record, to core.Phase) (
 		return Record{}, fmt.Errorf("updating phase for %s: %w", rec.ClusterID, err)
 	}
 
-	return unmarshalRecord(out.Attributes)
+	updated, err := unmarshalRecord(out.Attributes)
+	if err != nil {
+		return Record{}, err
+	}
+	d.log().Debug("recorded phase transition",
+		"cluster", rec.ClusterID, "from", rec.Phase, "to", to, "version", updated.Version)
+	return updated, nil
 }
 
 // Touch records a status report.
@@ -157,6 +198,7 @@ func (d *DynamoDB) Touch(ctx context.Context, id core.ClusterID, at time.Time) e
 		}
 		return fmt.Errorf("recording status for %s: %w", id, err)
 	}
+	d.log().Debug("recorded status report", "cluster", id, "at", at)
 	return nil
 }
 
@@ -183,6 +225,7 @@ func (d *DynamoDB) RecordOIDCIssuer(ctx context.Context, id core.ClusterID, issu
 		}
 		return fmt.Errorf("recording OIDC issuer for %s: %w", id, err)
 	}
+	d.log().Debug("recorded OIDC issuer", "cluster", id, "issuer", issuer)
 	return nil
 }
 
@@ -309,10 +352,18 @@ func (d *DynamoDB) AcquireLease(ctx context.Context, id core.ClusterID, holder s
 	})
 	if err != nil {
 		if item, failed := conditionFailure(err); failed {
-			return Lease{}, leaseConflict(id, item, ErrLeaseHeld)
+			conflict := leaseConflict(id, item, ErrLeaseHeld)
+			if errors.Is(conflict, ErrLeaseHeld) {
+				// The exact race the lease exists to catch: another apply is
+				// already provisioning this cluster.
+				d.log().Warn("lease acquisition conflicted with another run",
+					"cluster", id, "holder", holder, "held_by", stringAttr(item, attrLeaseHolder))
+			}
+			return Lease{}, conflict
 		}
 		return Lease{}, fmt.Errorf("acquiring lease on %s: %w", id, err)
 	}
+	d.log().Debug("acquired lease", "cluster", id, "holder", holder, "expires_at", lease.ExpiresAt)
 	return lease, nil
 }
 
@@ -346,6 +397,7 @@ func (d *DynamoDB) RenewLease(ctx context.Context, id core.ClusterID, holder str
 		}
 		return Lease{}, fmt.Errorf("renewing lease on %s: %w", id, err)
 	}
+	d.log().Debug("renewed lease", "cluster", id, "holder", holder, "expires_at", lease.ExpiresAt)
 	return lease, nil
 }
 
@@ -372,6 +424,7 @@ func (d *DynamoDB) ReleaseLease(ctx context.Context, id core.ClusterID, holder s
 		}
 		return fmt.Errorf("releasing lease on %s: %w", id, err)
 	}
+	d.log().Debug("released lease", "cluster", id, "holder", holder)
 	return nil
 }
 

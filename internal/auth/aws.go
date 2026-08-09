@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -25,6 +26,7 @@ type AWSProvider struct {
 	profile string
 	sts     stsAPI
 	run     commandRunner
+	logger  *slog.Logger
 }
 
 // NewAWSProvider builds a provider scoped to one named profile in
@@ -34,7 +36,9 @@ type AWSProvider struct {
 // section (a fresh checkout, a bare CI runner) falls back to the SDK's
 // unscoped default resolution instead of erroring; a named profile that
 // doesn't exist still errors, since the operator explicitly asked for it.
-func NewAWSProvider(ctx context.Context, profile string) (*AWSProvider, error) {
+func NewAWSProvider(ctx context.Context, profile string, opts ...Option) (*AWSProvider, error) {
+	o := resolve(opts)
+
 	if profile == "" {
 		profile = "default"
 	}
@@ -54,18 +58,25 @@ func NewAWSProvider(ctx context.Context, profile string) (*AWSProvider, error) {
 		profile: profile,
 		sts:     sts.NewFromConfig(cfg),
 		run:     execRunner,
+		logger:  o.logger,
 	}, nil
 }
 
 // Name identifies this provider for --only and status output.
 func (p *AWSProvider) Name() string { return "aws" }
 
+func (p *AWSProvider) log() *slog.Logger { return loggerOr(p.logger) }
+
 // IsAuthenticated calls GetCallerIdentity rather than just checking for a
 // cached token file, so an expired or revoked session is reported accurately
 // instead of a stale "yes" that fails moments later mid-apply.
 func (p *AWSProvider) IsAuthenticated(ctx context.Context) (bool, StatusDetail, error) {
+	p.log().Debug("checking aws session", "provider", "aws", "profile", p.profile)
+
 	out, err := p.sts.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
+		p.log().Debug("aws session is not usable",
+			"provider", "aws", "profile", p.profile, "error", err)
 		// Not authenticated is the overwhelmingly common reason this call
 		// fails (expired SSO token, never logged in), and distinguishing it
 		// from a transient network error isn't something the SDK error gives
@@ -85,6 +96,7 @@ func (p *AWSProvider) Login(ctx context.Context) error {
 	if err := checkBinary("aws", awsInstallHint); err != nil {
 		return err
 	}
+	p.log().Debug("shelling out to aws sso login", "provider", "aws", "profile", p.profile)
 	return p.run(ctx, "aws", "sso", "login", "--profile", p.profile)
 }
 
@@ -93,5 +105,6 @@ func (p *AWSProvider) Logout(ctx context.Context) error {
 	if err := checkBinary("aws", awsInstallHint); err != nil {
 		return err
 	}
+	p.log().Debug("shelling out to aws sso logout", "provider", "aws", "profile", p.profile)
 	return p.run(ctx, "aws", "sso", "logout")
 }

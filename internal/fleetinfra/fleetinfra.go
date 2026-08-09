@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 )
@@ -166,6 +167,44 @@ func (a Action) String() string {
 	return fmt.Sprintf("%-24s %s (%s)", a.Resource, a.Kind, strings.Join(a.Details, "; "))
 }
 
+// options carries per-run configuration set through Option values.
+type options struct {
+	logger *slog.Logger
+}
+
+// Option configures a converge run. Options are variadic and appended to
+// Converge's existing parameters, so callers that pass none are unaffected.
+type Option func(*options)
+
+// WithLogger sets the logger the converge run narrates itself through.
+// A nil logger is ignored, leaving slog.Default() in place.
+func WithLogger(logger *slog.Logger) Option {
+	return func(o *options) {
+		if logger != nil {
+			o.logger = logger
+		}
+	}
+}
+
+// stepLogger tags a logger with the step it belongs to, tolerating a nil logger
+// so a step constructed outside Converge (in a test, say) still logs safely.
+func stepLogger(logger *slog.Logger, name string) *slog.Logger {
+	if logger == nil {
+		logger = slog.Default().With("component", "fleetinfra")
+	}
+	return logger.With("step", name)
+}
+
+func resolveOptions(opts []Option) options {
+	cfg := options{logger: slog.Default()}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+	return cfg
+}
+
 // step is one resource's converge logic. Plan must be strictly read-only: it is
 // what --dry-run runs, and the only difference between a dry and a real run is
 // whether Apply is then called.
@@ -202,7 +241,9 @@ func (r Report) Changed() int {
 // runs. Steps execute in dependency order and stop at the first error, so a
 // failure leaves earlier resources created and later ones untouched — re-running
 // resumes, because every step is create-or-update.
-func Converge(ctx context.Context, c *Clients, spec Spec, dryRun bool) (Report, error) {
+func Converge(ctx context.Context, c *Clients, spec Spec, dryRun bool, opts ...Option) (Report, error) {
+	logger := resolveOptions(opts).logger.With("component", "fleetinfra")
+
 	spec = spec.withDefaults()
 	if err := spec.Validate(); err != nil {
 		return Report{}, err
@@ -211,32 +252,64 @@ func Converge(ctx context.Context, c *Clients, spec Spec, dryRun bool) (Report, 
 		return Report{}, err
 	}
 
-	api := newAPIStep(c, spec)
+	logger.Info("converge starting",
+		"account_id", spec.AccountID,
+		"region", spec.Region,
+		"name_prefix", spec.NamePrefix,
+		"registry_table", spec.RegistryTable,
+		"dry_run", dryRun)
+
+	api := newAPIStep(c, spec, logger)
 	steps := []step{
-		newRegistryTableStep(c, spec),
-		newLogGroupsStep(c, spec),
-		newRoleStep(c, spec),
-		newFunctionStep(c, spec),
+		newRegistryTableStep(c, spec, logger),
+		newLogGroupsStep(c, spec, logger),
+		newRoleStep(c, spec, logger),
+		newFunctionStep(c, spec, logger),
 		api,
-		newPermissionStep(c, spec, api),
+		newPermissionStep(c, spec, api, logger),
 	}
 
 	report := Report{DryRun: dryRun}
 	for _, s := range steps {
+		stepLog := logger.With("step", s.Name())
+
 		action, err := s.Plan(ctx)
 		if err != nil {
+			stepLog.Error("plan failed", "error", err)
 			return report, fmt.Errorf("planning %s: %w", s.Name(), err)
 		}
 		report.Actions = append(report.Actions, action)
 
-		if dryRun || action.Kind == ActionNone {
+		// Debug rather than Info: a converged run must stay quiet, and this is
+		// the line that makes "no changes" verifiable rather than merely claimed.
+		if action.Kind == ActionNone {
+			stepLog.Debug("already converged", "resource", action.Resource)
 			continue
 		}
+		if dryRun {
+			stepLog.Info("change required (dry run, not applied)",
+				"resource", action.Resource,
+				"action", action.Kind.String(),
+				"details", strings.Join(action.Details, "; "))
+			continue
+		}
+
+		stepLog.Info("applying",
+			"resource", action.Resource,
+			"action", action.Kind.String(),
+			"details", strings.Join(action.Details, "; "))
 		if err := s.Apply(ctx, action); err != nil {
+			stepLog.Error("apply failed", "resource", action.Resource, "error", err)
 			return report, fmt.Errorf("applying %s: %w", s.Name(), err)
 		}
+		stepLog.Info("applied", "resource", action.Resource, "action", action.Kind.String())
 	}
 
 	report.IngestionURL = api.endpoint()
+	logger.Info("converge complete",
+		"steps", len(report.Actions),
+		"changed", report.Changed(),
+		"dry_run", dryRun,
+		"ingestion_url", report.IngestionURL)
 	return report, nil
 }

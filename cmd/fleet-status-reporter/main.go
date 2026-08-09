@@ -13,7 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -42,12 +42,17 @@ const (
 )
 
 func main() {
-	if err := run(); err != nil {
-		log.Fatalf("fleet-status-reporter: %v", err)
+	// JSON, because this runs as a CronJob pod whose stderr is scraped into
+	// the cluster's log pipeline, where structured fields stay queryable.
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	if err := run(logger); err != nil {
+		logger.Error("fleet-status-reporter failed", "error", err)
+		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(logger *slog.Logger) error {
 	clusterID := os.Getenv(envClusterID)
 	argoCDServer := os.Getenv(envArgoCDServer)
 	ingestionURL := os.Getenv(envIngestionURL)
@@ -59,6 +64,12 @@ func run() error {
 	if tokenPath == "" {
 		tokenPath = defaultTokenPath
 	}
+
+	logger.Info("pushing cluster status",
+		"cluster", clusterID,
+		"argocd_server", argoCDServer,
+		"ingestion_url", ingestionURL,
+	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultPushDeadline)
 	defer cancel()
@@ -74,6 +85,6 @@ func run() error {
 		return errRejected
 	}
 
-	log.Printf("fleet-status-reporter: pushed status for %s", clusterID)
+	logger.Info("status accepted by the Central Ingestion API", "cluster", clusterID)
 	return nil
 }

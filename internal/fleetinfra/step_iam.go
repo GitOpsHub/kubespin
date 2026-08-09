@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"reflect"
 
@@ -23,13 +24,14 @@ const inlinePolicyName = "ingestion"
 type roleStep struct {
 	c    *Clients
 	spec Spec
+	log  *slog.Logger
 
 	create    bool
 	fixPolicy bool
 }
 
-func newRoleStep(c *Clients, spec Spec) *roleStep {
-	return &roleStep{c: c, spec: spec}
+func newRoleStep(c *Clients, spec Spec, log *slog.Logger) *roleStep {
+	return &roleStep{c: c, spec: spec, log: stepLogger(log, "ingestion role")}
 }
 
 func (s *roleStep) Name() string { return "ingestion role" }
@@ -104,6 +106,7 @@ func (s *roleStep) Apply(ctx context.Context, _ Action) error {
 		if err != nil {
 			return fmt.Errorf("creating role: %w", err)
 		}
+		s.log.Info("created IAM role", "role", s.spec.roleName(), "role_arn", s.spec.roleARN())
 	}
 
 	if s.fixPolicy {
@@ -120,6 +123,8 @@ func (s *roleStep) Apply(ctx context.Context, _ Action) error {
 		if err != nil {
 			return fmt.Errorf("putting inline policy: %w", err)
 		}
+		s.log.Info("wrote inline role policy",
+			"role", s.spec.roleName(), "policy", inlinePolicyName)
 	}
 	return nil
 }

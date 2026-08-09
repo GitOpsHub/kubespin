@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -19,6 +20,7 @@ import (
 type registryTableStep struct {
 	c    *Clients
 	spec Spec
+	log  *slog.Logger
 
 	// Populated by Plan, consumed by Apply.
 	create              bool
@@ -31,8 +33,8 @@ type registryTableStep struct {
 	pollInterval time.Duration
 }
 
-func newRegistryTableStep(c *Clients, spec Spec) *registryTableStep {
-	return &registryTableStep{c: c, spec: spec, pollInterval: 5 * time.Second}
+func newRegistryTableStep(c *Clients, spec Spec, log *slog.Logger) *registryTableStep {
+	return &registryTableStep{c: c, spec: spec, log: stepLogger(log, "registry table"), pollInterval: 5 * time.Second}
 }
 
 func (s *registryTableStep) Name() string { return "registry table" }
@@ -133,12 +135,15 @@ func (s *registryTableStep) Apply(ctx context.Context, _ Action) error {
 		if err != nil {
 			return fmt.Errorf("enabling point-in-time recovery: %w", err)
 		}
+		s.log.Info("enabled point-in-time recovery", "table", s.spec.RegistryTable)
 	}
 
 	return nil
 }
 
 func (s *registryTableStep) createTable(ctx context.Context) error {
+	s.log.Info("creating registry table", "table", s.spec.RegistryTable, "index", gsiName)
+
 	_, err := s.c.dynamo.CreateTable(ctx, &dynamodb.CreateTableInput{
 		TableName:   aws.String(s.spec.RegistryTable),
 		BillingMode: dynamotypes.BillingModePayPerRequest,
@@ -164,6 +169,7 @@ func (s *registryTableStep) createTable(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("creating table: %w", err)
 	}
+	s.log.Info("created registry table", "table", s.spec.RegistryTable, "table_arn", s.spec.tableARN())
 	return nil
 }
 
@@ -194,6 +200,11 @@ func (s *registryTableStep) updateTable(ctx context.Context) error {
 	if _, err := s.c.dynamo.UpdateTable(ctx, in); err != nil {
 		return fmt.Errorf("updating table: %w", err)
 	}
+	s.log.Info("updated registry table",
+		"table", s.spec.RegistryTable,
+		"added_index", s.addGSI,
+		"enabled_encryption", s.enableSSE,
+		"enabled_deletion_protection", s.enableDeletionGuard)
 	return nil
 }
 
@@ -209,6 +220,9 @@ func (s *registryTableStep) waitActive(ctx context.Context) error {
 		if out.Table != nil && out.Table.TableStatus == dynamotypes.TableStatusActive {
 			return nil
 		}
+
+		s.log.Debug("waiting for table to become active",
+			"table", s.spec.RegistryTable, "retry_in", s.pollInterval)
 
 		select {
 		case <-ctx.Done():

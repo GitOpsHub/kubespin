@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -39,6 +40,13 @@ type clusterAPI interface {
 	GetAgentPool(ctx context.Context, resourceGroup, cluster, pool string) (*armcontainerservice.AgentPool, error)
 	ListAgentPools(ctx context.Context, resourceGroup, cluster string) ([]*armcontainerservice.AgentPool, error)
 	CreateOrUpdateAgentPool(ctx context.Context, resourceGroup, cluster, pool string, ap armcontainerservice.AgentPool) error
+
+	// ListClusterUserCredentials returns the raw kubeconfig AKS generates for
+	// the cluster, the same one `az aks get-credentials` writes to disk. It
+	// already carries the cluster's CA data and, for an AAD-enabled cluster,
+	// an exec-plugin entry for token refresh — RESTConfig parses it rather
+	// than re-deriving the same information from separate calls.
+	ListClusterUserCredentials(ctx context.Context, resourceGroup, name string) ([]byte, error)
 }
 
 // identityAPI covers the user-assigned managed identity Workload Identity
@@ -86,12 +94,23 @@ type Clients struct {
 	identity       identityAPI
 	network        networkAPI
 	resourceGroups resourceGroupAPI
+
+	logger *slog.Logger
+}
+
+// Option configures Clients.
+type Option func(*Clients)
+
+// WithLogger sets the logger every provisioner built over these Clients logs
+// through. Defaults to slog.Default() when not given.
+func WithLogger(logger *slog.Logger) Option {
+	return func(c *Clients) { c.logger = logger }
 }
 
 // NewClients builds real Azure clients for a subscription, authenticating
 // with the default credential chain (managed identity in-cluster, az CLI
 // locally, environment variables in CI).
-func NewClients(subscription string) (*Clients, error) {
+func NewClients(subscription string, opts ...Option) (*Clients, error) {
 	if subscription == "" {
 		return nil, fmt.Errorf("azure: subscription is required")
 	}
@@ -138,7 +157,7 @@ func NewClients(subscription string) (*Clients, error) {
 		return nil, fmt.Errorf("building resource groups client: %w", err)
 	}
 
-	return &Clients{
+	c := &Clients{
 		subscription: subscription,
 		cluster:      realCluster{clusters: clusters, agentPools: agentPools},
 		identity:     realIdentity{identities: identities, federated: federated},
@@ -146,7 +165,12 @@ func NewClients(subscription string) (*Clients, error) {
 			groups: securityGroups, rules: securityRules, vnets: vnets, subnets: subnets,
 		},
 		resourceGroups: realResourceGroups{groups: resourceGroups},
-	}, nil
+		logger:         slog.Default(),
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c, nil
 }
 
 // realCluster adapts the poller-returning AKS clients to clusterAPI.
@@ -205,6 +229,19 @@ func (r realCluster) CreateOrUpdateAgentPool(
 		return fmt.Errorf("aks: create or update agent pool %s/%s/%s: %w", rg, cluster, pool, err)
 	}
 	return nil
+}
+
+func (r realCluster) ListClusterUserCredentials(ctx context.Context, rg, name string) ([]byte, error) {
+	resp, err := r.clusters.ListClusterUserCredentials(ctx, rg, name, nil)
+	if err != nil {
+		return nil, fmt.Errorf("aks: list user credentials for %s/%s: %w", rg, name, err)
+	}
+	for _, kc := range resp.Kubeconfigs {
+		if kc != nil && len(kc.Value) > 0 {
+			return kc.Value, nil
+		}
+	}
+	return nil, fmt.Errorf("aks: no kubeconfig returned for %s/%s", rg, name)
 }
 
 // realIdentity adapts the synchronous MSI clients to identityAPI. Unlike AKS,

@@ -33,16 +33,27 @@ type ClusterStatus struct {
 // Ingestion API accepts, not by reaching out here.
 func Status(
 	ctx context.Context, reg registry.Registry, filter registry.Filter, staleOnly bool, threshold time.Duration, now time.Time,
+	opts ...Option,
 ) ([]ClusterStatus, error) {
+	logger := resolveOptions(opts).logger
+
 	records, err := reg.List(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("listing fleet registry: %w", err)
 	}
+	logger.Debug("reporting fleet status",
+		"clusters", len(records), "provider_filter", filter.Provider, "phase_filter", filter.Phase,
+		"stale_only", staleOnly, "stale_threshold", threshold)
 
 	out := make([]ClusterStatus, 0, len(records))
 	for _, rec := range records {
 		stale := rec.Stale(now, threshold)
+		if stale {
+			logger.Debug("cluster is stale",
+				"cluster", rec.ClusterID, "phase", rec.Phase, "last_reported_at", rec.LastReportedAt)
+		}
 		if staleOnly && !stale {
+			logger.Debug("cluster skipped: not stale", "cluster", rec.ClusterID)
 			continue
 		}
 		out = append(out, ClusterStatus{

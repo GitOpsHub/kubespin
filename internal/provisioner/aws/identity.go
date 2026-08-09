@@ -107,6 +107,7 @@ func (p *IdentityProvisioner) ensureOIDCProvider(ctx context.Context, issuer str
 		}
 		return "", fmt.Errorf("creating OIDC provider for %s: %w", issuer, err)
 	}
+	p.c.logger.Info("registered OIDC provider", "issuer", issuer)
 	return aws.ToString(created.OpenIDConnectProviderArn), nil
 }
 
@@ -155,6 +156,7 @@ func (p *IdentityProvisioner) ensureIRSARole(
 		}); err != nil {
 			return "", fmt.Errorf("updating trust policy for %s: %w", name, err)
 		}
+		p.c.logger.Debug("refreshed IRSA trust policy", "role", name)
 		return aws.ToString(out.Role.Arn), nil
 	}
 
@@ -172,6 +174,7 @@ func (p *IdentityProvisioner) ensureIRSARole(
 	if err != nil {
 		return "", fmt.Errorf("creating role %s: %w", name, err)
 	}
+	p.c.logger.Info("created IRSA role", "role", name, "component", comp.Name, "cluster", spec.ID)
 	return aws.ToString(created.Role.Arn), nil
 }
 
@@ -240,5 +243,6 @@ func (p *IdentityProvisioner) Deprovision(
 		}
 		return fmt.Errorf("deleting role %s: %w", name, err)
 	}
+	p.c.logger.Info("deleted IRSA role", "role", name, "component", comp.Name, "cluster", spec.ID)
 	return nil
 }

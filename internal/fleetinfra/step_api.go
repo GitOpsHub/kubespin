@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/apigatewayv2"
@@ -21,6 +22,7 @@ const stageName = "$default"
 type apiStep struct {
 	c    *Clients
 	spec Spec
+	log  *slog.Logger
 
 	// Resolved during Plan, or filled in by Apply when it creates them.
 	apiID         string
@@ -34,8 +36,8 @@ type apiStep struct {
 	updateStage       bool
 }
 
-func newAPIStep(c *Clients, spec Spec) *apiStep {
-	return &apiStep{c: c, spec: spec}
+func newAPIStep(c *Clients, spec Spec, log *slog.Logger) *apiStep {
+	return &apiStep{c: c, spec: spec, log: stepLogger(log, "ingestion API")}
 }
 
 func (s *apiStep) Name() string { return "ingestion API" }
@@ -179,6 +181,8 @@ func (s *apiStep) Apply(ctx context.Context, _ Action) error {
 		}
 		s.apiID = aws.ToString(out.ApiId)
 		s.apiEndpoint = aws.ToString(out.ApiEndpoint)
+		s.log.Info("created HTTP API",
+			"api", s.spec.apiName(), "api_id", s.apiID, "endpoint", s.apiEndpoint)
 	}
 
 	if s.createIntegration {
@@ -192,6 +196,8 @@ func (s *apiStep) Apply(ctx context.Context, _ Action) error {
 			return fmt.Errorf("creating integration: %w", err)
 		}
 		s.integrationID = aws.ToString(out.IntegrationId)
+		s.log.Info("created lambda proxy integration",
+			"api_id", s.apiID, "integration_id", s.integrationID, "integration_uri", s.spec.invokeARN())
 	}
 
 	if s.createRoute {
@@ -207,6 +213,7 @@ func (s *apiStep) Apply(ctx context.Context, _ Action) error {
 		if err != nil {
 			return fmt.Errorf("creating route: %w", err)
 		}
+		s.log.Info("created route", "api_id", s.apiID, "route_key", StatusRouteKey)
 	}
 
 	if s.createStage {
@@ -220,6 +227,9 @@ func (s *apiStep) Apply(ctx context.Context, _ Action) error {
 		if err != nil {
 			return fmt.Errorf("creating stage: %w", err)
 		}
+		s.log.Info("created stage",
+			"api_id", s.apiID, "stage", stageName,
+			"throttle_burst", s.spec.ThrottleBurst, "throttle_rate", s.spec.ThrottleRate)
 	} else if s.updateStage {
 		_, err := s.c.apiGateway.UpdateStage(ctx, &apigatewayv2.UpdateStageInput{
 			ApiId:                aws.String(s.apiID),
@@ -229,6 +239,9 @@ func (s *apiStep) Apply(ctx context.Context, _ Action) error {
 		if err != nil {
 			return fmt.Errorf("updating stage: %w", err)
 		}
+		s.log.Info("updated stage throttle limits",
+			"api_id", s.apiID, "stage", stageName,
+			"throttle_burst", s.spec.ThrottleBurst, "throttle_rate", s.spec.ThrottleRate)
 	}
 
 	return nil

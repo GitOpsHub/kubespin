@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"time"
 
+	"k8s.io/client-go/rest"
+
 	"github.com/GitOpsHub/kubespin/internal/core"
 )
 
@@ -62,6 +64,27 @@ type ClusterState struct {
 	// NetworkID identifies the cluster's network scope for egress rules: the
 	// security group on AWS, the network on GCP, the NSG on Azure.
 	NetworkID string
+
+	// CertificateAuthorityData is the cluster API server's CA certificate, PEM
+	// or DER as each cloud's SDK returns it (already base64-decoded — callers
+	// never need to decode it again). Populated once the cluster is active;
+	// RESTConfigProvisioner uses it to build a *rest.Config without a second
+	// round trip.
+	CertificateAuthorityData []byte
+}
+
+// RESTConfigProvisioner builds a Kubernetes REST client configuration for a
+// cluster this cloud created, so the Argo CD installer (M5) can reach it
+// without any credential ever being stored: the bearer token is minted fresh
+// from the same cloud-native identity Login already established (AWS STS,
+// GCP ADC, or Azure AD), the same way each cloud's own CLI does when a human
+// runs `aws eks get-token` / `gcloud container clusters get-credentials` /
+// `az aks get-credentials`.
+type RESTConfigProvisioner interface {
+	// RESTConfig returns a config for calling the cluster's API server. The
+	// cluster must be active — its endpoint and CA data are read from the
+	// same Describe this interface's implementation already backs.
+	RESTConfig(ctx context.Context, spec core.ClusterSpec) (*rest.Config, error)
 }
 
 // Change is the outcome of a Reconcile.

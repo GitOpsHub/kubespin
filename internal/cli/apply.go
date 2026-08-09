@@ -80,6 +80,7 @@ holds — or from the flags below, which override the file when given.`,
 	fs.Int32("min-size", 1, "minimum size of the default node pool")
 	fs.Int32("max-size", 5, "maximum size of the default node pool")
 	fs.Int32("desired-size", 2, "desired size of the default node pool")
+	fs.Int32("disk-size", 0, "boot disk size in GB for the default node pool's nodes (0 = cloud default; GKE regional clusters multiply this by the number of zones, so it is worth setting explicitly on quota-constrained projects)")
 
 	return cmd
 }
@@ -112,7 +113,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	reg, err := registry.NewDynamoDB(ctx, cfg.Registry.Region, cfg.Registry.Table)
+	reg, err := registry.NewDynamoDB(ctx, cfg.Registry.Region, cfg.Registry.Table, registry.WithLogger(logger))
 	if err != nil {
 		return fmt.Errorf("connecting to the Fleet Registry: %w", err)
 	}
@@ -130,7 +131,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	repoProv := repo.NewProvisioner(repoClients)
+	repoProv := repo.NewProvisioner(repoClients, repo.WithLogger(logger))
 
 	resolver, err := buildResolver(cmd, repoClients)
 	if err != nil {
@@ -214,9 +215,11 @@ func buildCloud(ctx context.Context, cmd *cobra.Command, spec core.ClusterSpec) 
 		endpoint = f.Value.String()
 	}
 
+	logger := LoggerFrom(ctx)
+
 	switch spec.Provider {
 	case core.ProviderAWS:
-		clients, err := awsprov.NewClients(ctx, spec.Region)
+		clients, err := awsprov.NewClients(ctx, spec.Region, awsprov.WithLogger(logger))
 		if err != nil {
 			return orchestrator.Cloud{}, fmt.Errorf("building AWS clients: %w", err)
 		}
@@ -242,7 +245,7 @@ func buildCloud(ctx context.Context, cmd *cobra.Command, spec core.ClusterSpec) 
 			return orchestrator.Cloud{}, fmt.Errorf("%w: --gcp-project is required for provider gcp", core.ErrInvalidSpec)
 		}
 
-		clients, err := gcpprov.NewClients(ctx, project)
+		clients, err := gcpprov.NewClients(ctx, project, gcpprov.WithLogger(logger))
 		if err != nil {
 			return orchestrator.Cloud{}, fmt.Errorf("building GCP clients: %w", err)
 		}
@@ -269,7 +272,7 @@ func buildCloud(ctx context.Context, cmd *cobra.Command, spec core.ClusterSpec) 
 				"%w: --azure-subscription is required for provider azure", core.ErrInvalidSpec)
 		}
 
-		clients, err := azureprov.NewClients(subscription)
+		clients, err := azureprov.NewClients(subscription, azureprov.WithLogger(logger))
 		if err != nil {
 			return orchestrator.Cloud{}, fmt.Errorf("building Azure clients: %w", err)
 		}
@@ -405,6 +408,7 @@ you mean it.`,
 	fs.Int32("min-size", 1, "minimum size of the default node pool (unused by delete, kept for spec compatibility)")
 	fs.Int32("max-size", 5, "maximum size of the default node pool (unused by delete, kept for spec compatibility)")
 	fs.Int32("desired-size", 2, "desired size of the default node pool (unused by delete, kept for spec compatibility)")
+	fs.Int32("disk-size", 0, "boot disk size in GB for the default node pool's nodes (unused by delete, kept for spec compatibility)")
 	fs.Bool("yes", false, "skip the interactive confirmation prompt")
 
 	return cmd
@@ -446,7 +450,7 @@ func runDelete(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	reg, err := registry.NewDynamoDB(ctx, cfg.Registry.Region, cfg.Registry.Table)
+	reg, err := registry.NewDynamoDB(ctx, cfg.Registry.Region, cfg.Registry.Table, registry.WithLogger(logger))
 	if err != nil {
 		return fmt.Errorf("connecting to the Fleet Registry: %w", err)
 	}
@@ -460,7 +464,7 @@ func runDelete(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	repoProv := repo.NewProvisioner(repoClients)
+	repoProv := repo.NewProvisioner(repoClients, repo.WithLogger(logger))
 
 	o := orchestrator.New(reg, orchestrator.WithLogger(logger))
 

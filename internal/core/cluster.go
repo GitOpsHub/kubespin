@@ -92,6 +92,7 @@ type NodePool struct {
 	MinSize      int32             `yaml:"minSize" json:"minSize"`
 	MaxSize      int32             `yaml:"maxSize" json:"maxSize"`
 	DesiredSize  int32             `yaml:"desiredSize" json:"desiredSize"`
+	DiskSizeGB   int32             `yaml:"diskSizeGB,omitempty" json:"diskSizeGB,omitempty"`
 	Labels       map[string]string `yaml:"labels,omitempty" json:"labels,omitempty"`
 }
 
@@ -118,6 +119,9 @@ func (np NodePool) Validate() error {
 	if np.DesiredSize < np.MinSize || np.DesiredSize > np.MaxSize {
 		errs = append(errs, fmt.Errorf("%w: node pool %q: desiredSize %d is outside [%d, %d]",
 			ErrInvalidSpec, np.Name, np.DesiredSize, np.MinSize, np.MaxSize))
+	}
+	if np.DiskSizeGB < 0 {
+		errs = append(errs, fmt.Errorf("%w: node pool %q: diskSizeGB must not be negative", ErrInvalidSpec, np.Name))
 	}
 	return errors.Join(errs...)
 }

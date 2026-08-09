@@ -36,6 +36,20 @@ func TestBuiltinResolver_ResolvesEveryTier(t *testing.T) {
 	}
 }
 
+func TestTierSmall_CarriesTheFullNamedAddonSet(t *testing.T) {
+	small := addonNames(tierSmall)
+	for _, want := range []string{
+		"cilium", "cert-manager", "gateway-api", "external-secrets",
+		"kyverno", "kyverno-policies", "cluster-autoscaler",
+		"kube-prometheus-stack", "fluent-bit", "opencost", "external-dns",
+		"ingress-nginx", "fleet-status-reporter",
+	} {
+		if !small[want] {
+			t.Errorf("tier-small is missing %s", want)
+		}
+	}
+}
+
 func TestTierStandard_IsASupersetOfTierSmall(t *testing.T) {
 	small := addonNames(tierSmall)
 	standard := addonNames(tierStandard)

@@ -2,8 +2,10 @@ package aws
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"slices"
 	"strings"
@@ -98,7 +100,16 @@ func (f *fakeAWS) assertNoMutations(t *testing.T) {
 	}
 }
 
-func (f *fakeAWS) clients() *Clients { return &Clients{eks: f, iam: f, ec2: f} }
+func (f *fakeAWS) clients() *Clients {
+	return &Clients{eks: f, iam: f, ec2: f, sts: f, logger: slog.Default()}
+}
+
+// PresignGetCallerIdentityURL fakes stsPresignAPI without ever contacting
+// AWS: RESTConfig only cares that a token was minted for the right cluster.
+func (f *fakeAWS) PresignGetCallerIdentityURL(_ context.Context, clusterName string) (string, error) {
+	f.record("PresignGetCallerIdentity")
+	return "https://sts.amazonaws.com/?Action=GetCallerIdentity&x-k8s-aws-id=" + clusterName, nil
+}
 
 // --- EKS ---
 
@@ -533,6 +544,9 @@ func (f *fakeAWS) activeCluster(spec core.ClusterSpec) {
 		Status:   ekstypes.ClusterStatusActive,
 		Endpoint: aws.String("https://example.eks.amazonaws.com"),
 		Identity: &ekstypes.Identity{Oidc: &ekstypes.OIDC{Issuer: aws.String(testIssuer)}},
+		CertificateAuthority: &ekstypes.Certificate{
+			Data: aws.String(base64.StdEncoding.EncodeToString([]byte("fake-ca-cert"))),
+		},
 		ResourcesVpcConfig: &ekstypes.VpcConfigResponse{
 			SubnetIds:              spec.Subnets,
 			EndpointPublicAccess:   spec.Access == core.AccessPublic,

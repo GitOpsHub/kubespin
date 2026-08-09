@@ -105,6 +105,7 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 	if err := p.c.cluster.CreateOrUpdate(ctx, n.resourceGroup(), n.cluster(), cluster); err != nil {
 		return fmt.Errorf("creating AKS cluster %s: %w", spec.ID, err)
 	}
+	p.c.logger.Info("requested AKS cluster", "cluster", spec.ID, "region", spec.Region)
 	return nil
 }
 
@@ -122,6 +123,9 @@ func agentPoolProfile(pool core.NodePool, subnetID string) *armcontainerservice.
 	}
 	if subnetID != "" {
 		profile.VnetSubnetID = ptr(subnetID)
+	}
+	if pool.DiskSizeGB > 0 {
+		profile.OSDiskSizeGB = ptr(pool.DiskSizeGB)
 	}
 	return profile
 }
@@ -216,6 +220,7 @@ func (p *ClusterProvisioner) describeNodePools(ctx context.Context, spec core.Cl
 			MinSize:      derefInt32(ap.Properties.MinCount),
 			MaxSize:      derefInt32(ap.Properties.MaxCount),
 			DesiredSize:  derefInt32(ap.Properties.Count),
+			DiskSizeGB:   derefInt32(ap.Properties.OSDiskSizeGB),
 			Labels:       derefMap(ap.Properties.NodeLabels),
 		}
 		pools = append(pools, pool)
@@ -273,6 +278,7 @@ func (p *ClusterProvisioner) reconcileAccess(
 	if err := p.c.cluster.CreateOrUpdate(ctx, n.resourceGroup(), n.cluster(), *cluster); err != nil {
 		return provisioner.Change{}, fmt.Errorf("updating access mode for %s: %w", spec.ID, err)
 	}
+	p.c.logger.Info("updated cluster access mode", "cluster", spec.ID, "from", state.Access, "to", spec.Access)
 
 	return provisioner.Change{
 		Changed: true,
@@ -304,6 +310,7 @@ func (p *ClusterProvisioner) ensureNodePools(
 			); err != nil {
 				return fmt.Errorf("creating node pool %s: %w", want.Name, err)
 			}
+			p.c.logger.Info("created node pool", "cluster", spec.ID, "pool", want.Name)
 			record(change, fmt.Sprintf("create node pool %s", want.Name))
 			continue
 		}
@@ -326,6 +333,8 @@ func (p *ClusterProvisioner) ensureNodePools(
 		); err != nil {
 			return fmt.Errorf("resizing node pool %s: %w", want.Name, err)
 		}
+		p.c.logger.Info("resized node pool", "cluster", spec.ID, "pool", want.Name,
+			"min", want.MinSize, "desired", want.DesiredSize, "max", want.MaxSize)
 		record(change, fmt.Sprintf("resize node pool %s to %d/%d/%d",
 			want.Name, want.MinSize, want.DesiredSize, want.MaxSize))
 	}
@@ -346,6 +355,7 @@ func agentPoolProfileAsPool(pool core.NodePool, subnetID string) *armcontainerse
 			NodeLabels:        profile.NodeLabels,
 			Mode:              profile.Mode,
 			VnetSubnetID:      profile.VnetSubnetID,
+			OSDiskSizeGB:      profile.OSDiskSizeGB,
 		},
 	}
 }
@@ -377,6 +387,7 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 		}
 		return fmt.Errorf("deleting AKS cluster %s: %w", spec.ID, err)
 	}
+	p.c.logger.Info("requested AKS cluster deletion", "cluster", spec.ID)
 	return nil
 }
 

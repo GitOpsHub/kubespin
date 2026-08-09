@@ -158,6 +158,43 @@ and a route table, because `--subnets` is omitted.
 `default` node pool built from flags. Richer topologies belong in a
 `--spec` file.
 
+#### Quota on low-quota / sandbox GCP projects
+
+GKE treats a region (as opposed to a zone) `--region` as a **regional
+cluster**, which replicates the default node pool across 3 zones. Quota is
+consumed per zone, not per cluster:
+
+- **CPU**: `--desired-size 3` at `e2-standard-4` is `3 nodes × 4 vCPU × 3
+  zones = 36 vCPU`, not the 12 vCPU it looks like at a glance.
+- **Disk**: GKE's node boot disk defaults to a **fixed 100Gi regardless of
+  machine type** — `--instance-type` does not change it. Even
+  `--desired-size 1` is 1 node per zone, so the minimum footprint of a
+  regional cluster is `3 × 100Gi = 300Gi`, which alone exceeds a common
+  250Gi `SSD_TOTAL_GB` sandbox quota.
+
+Use `--disk-size` (added alongside `--instance-type`/`--min-size`/
+`--max-size`/`--desired-size`) to bring the disk footprint down explicitly:
+
+```bash
+./bin/kubespin apply \
+  --provider gcp \
+  --gcp-project my-gcp-project \
+  --region us-central1 \
+  --cluster-id demo-gcp \
+  --access private \
+  --profile tier-small@1.0.0 \
+  --instance-type e2-standard-2 \
+  --min-size 1 --max-size 3 --desired-size 1 \
+  --disk-size 30 \
+  --github-org "$GITHUB_ORG" \
+  --registry-region us-east-1
+```
+
+That's 6 vCPU and 90Gi of boot disk total — comfortably under a 12 vCPU /
+250Gi sandbox quota. Otherwise, request a `CPUS_ALL_REGIONS` and
+`SSD_TOTAL_GB` quota increase for the target region before applying at the
+larger footprint above.
+
 ### Azure, on a subnet you already own
 
 Passing `--subnets` tells kubespin the network is yours: it is used unchanged
@@ -224,6 +261,7 @@ nodePools:
     minSize: 1
     maxSize: 5
     desiredSize: 2
+    diskSizeGB: 30 # optional; 0 or omitted uses the cloud default
 subnets: []
 ```
 
@@ -243,9 +281,10 @@ reused with one field changed:
 Overridable this way: `--cluster-id`, `--provider`, `--region`, `--access`,
 `--kubernetes-version`, `--profile`, `--subnets`, and the three CIDR flags.
 The node pool flags (`--instance-type`, `--min-size`, `--max-size`,
-`--desired-size`) are **not** — they only build the single `default` pool
-when the spec has no `nodePools` at all, so a file's pools are never
-partially overwritten from the command line. Edit the file to resize a pool.
+`--desired-size`, `--disk-size`) are **not** — they only build the single
+`default` pool when the spec has no `nodePools` at all, so a file's pools
+are never partially overwritten from the command line. Edit the file to
+resize a pool or change its disk size.
 
 ### Preview before applying
 
@@ -370,8 +409,8 @@ than the inverse of a Terraform destroy.
 `delete` validates a full spec exactly like `apply`, which is why
 `--profile` appears here too even though teardown never resolves addons.
 Several other flags (`--instance-type`, `--min-size`, `--max-size`,
-`--desired-size`, `--kubernetes-version`, the CIDR flags) are accepted for
-spec compatibility and ignored.
+`--desired-size`, `--disk-size`, `--kubernetes-version`, the CIDR flags) are
+accepted for spec compatibility and ignored.
 
 There is no fleet-infrastructure teardown command, deliberately — see
 [Fleet bootstrap: re-running, resuming, and tearing down](fleet-bootstrap.md#re-running-resuming-and-tearing-down).

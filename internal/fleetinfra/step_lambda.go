@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -24,14 +25,15 @@ const (
 type functionStep struct {
 	c    *Clients
 	spec Spec
+	log  *slog.Logger
 
 	create     bool
 	updateCode bool
 	updateConf bool
 }
 
-func newFunctionStep(c *Clients, spec Spec) *functionStep {
-	return &functionStep{c: c, spec: spec}
+func newFunctionStep(c *Clients, spec Spec, log *slog.Logger) *functionStep {
+	return &functionStep{c: c, spec: spec, log: stepLogger(log, "ingestion function")}
 }
 
 func (s *functionStep) Name() string { return "ingestion function" }
@@ -97,6 +99,10 @@ func (s *functionStep) Apply(ctx context.Context, _ Action) error {
 		if err != nil {
 			return fmt.Errorf("creating function: %w", err)
 		}
+		s.log.Info("created Lambda function",
+			"function", s.spec.functionName(),
+			"function_arn", s.spec.functionARN(),
+			"code_sha256", codeSHA256(s.spec.LambdaZip))
 		return nil
 	}
 
@@ -108,6 +114,8 @@ func (s *functionStep) Apply(ctx context.Context, _ Action) error {
 		if err != nil {
 			return fmt.Errorf("updating function code: %w", err)
 		}
+		s.log.Info("updated Lambda function code",
+			"function", s.spec.functionName(), "code_sha256", codeSHA256(s.spec.LambdaZip))
 	}
 	if s.updateConf {
 		_, err := s.c.lambda.UpdateFunctionConfiguration(ctx, &lambda.UpdateFunctionConfigurationInput{
@@ -119,6 +127,11 @@ func (s *functionStep) Apply(ctx context.Context, _ Action) error {
 		if err != nil {
 			return fmt.Errorf("updating function configuration: %w", err)
 		}
+		s.log.Info("updated Lambda function configuration",
+			"function", s.spec.functionName(),
+			"timeout_seconds", lambdaTimeoutSeconds,
+			"memory_mb", lambdaMemoryMB,
+			"registry_table", s.spec.RegistryTable)
 	}
 	return nil
 }
@@ -142,12 +155,13 @@ type permissionStep struct {
 	c    *Clients
 	spec Spec
 	api  *apiStep
+	log  *slog.Logger
 
 	add bool
 }
 
-func newPermissionStep(c *Clients, spec Spec, api *apiStep) *permissionStep {
-	return &permissionStep{c: c, spec: spec, api: api}
+func newPermissionStep(c *Clients, spec Spec, api *apiStep, log *slog.Logger) *permissionStep {
+	return &permissionStep{c: c, spec: spec, api: api, log: stepLogger(log, "invoke permission")}
 }
 
 func (s *permissionStep) Name() string { return "invoke permission" }
@@ -203,9 +217,15 @@ func (s *permissionStep) Apply(ctx context.Context, _ Action) error {
 		// that is convergence succeeding, not failing.
 		var conflict *lambdatypes.ResourceConflictException
 		if errors.As(err, &conflict) {
+			s.log.Warn("invoke permission already present, treating as converged",
+				"function", s.spec.functionName(), "statement_id", permissionStatementID)
 			return nil
 		}
 		return fmt.Errorf("adding invoke permission: %w", err)
 	}
+	s.log.Info("added invoke permission",
+		"function", s.spec.functionName(),
+		"statement_id", permissionStatementID,
+		"source_arn", sourceARN)
 	return nil
 }

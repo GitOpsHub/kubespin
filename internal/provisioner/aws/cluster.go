@@ -2,6 +2,7 @@ package aws
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -86,10 +87,12 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 		// Another run got there first; that is convergence, not failure.
 		var exists *ekstypes.ResourceInUseException
 		if errors.As(err, &exists) {
+			p.c.logger.Debug("EKS cluster already exists", "cluster", spec.ID)
 			return nil
 		}
 		return fmt.Errorf("creating EKS cluster %s: %w", spec.ID, err)
 	}
+	p.c.logger.Info("requested EKS cluster", "cluster", spec.ID, "region", spec.Region)
 	return nil
 }
 
@@ -140,6 +143,11 @@ func (p *ClusterProvisioner) Describe(ctx context.Context, spec core.ClusterSpec
 	}
 	if cluster.ResourcesVpcConfig != nil {
 		state.NetworkID = aws.ToString(cluster.ResourcesVpcConfig.ClusterSecurityGroupId)
+	}
+	if cluster.CertificateAuthority != nil {
+		if ca, err := base64.StdEncoding.DecodeString(aws.ToString(cluster.CertificateAuthority.Data)); err == nil {
+			state.CertificateAuthorityData = ca
+		}
 	}
 
 	if state.Status == provisioner.StatusActive {
@@ -203,7 +211,11 @@ func (p *ClusterProvisioner) describeNodePools(ctx context.Context, spec core.Cl
 			continue
 		}
 
-		pool := core.NodePool{Name: poolNameFromNodeGroup(spec, name), Labels: out.Nodegroup.Labels}
+		pool := core.NodePool{
+			Name:       poolNameFromNodeGroup(spec, name),
+			Labels:     out.Nodegroup.Labels,
+			DiskSizeGB: aws.ToInt32(out.Nodegroup.DiskSize),
+		}
 		if types := out.Nodegroup.InstanceTypes; len(types) > 0 {
 			pool.InstanceType = types[0]
 		}
@@ -265,6 +277,7 @@ func (p *ClusterProvisioner) reconcileAccess(
 	if err != nil {
 		return provisioner.Change{}, fmt.Errorf("updating access mode for %s: %w", spec.ID, err)
 	}
+	p.c.logger.Info("updated cluster access mode", "cluster", spec.ID, "from", state.Access, "to", spec.Access)
 
 	return provisioner.Change{
 		Changed: true,
@@ -296,6 +309,7 @@ func (p *ClusterProvisioner) ensureNodeGroups(
 			if err := p.createNodeGroup(ctx, spec, want, nodeRoleARN); err != nil {
 				return err
 			}
+			p.c.logger.Info("created node pool", "cluster", spec.ID, "pool", want.Name)
 			record(change, fmt.Sprintf("create node pool %s", want.Name))
 			continue
 		}
@@ -317,6 +331,8 @@ func (p *ClusterProvisioner) ensureNodeGroups(
 		if err != nil {
 			return fmt.Errorf("resizing node pool %s: %w", want.Name, err)
 		}
+		p.c.logger.Info("resized node pool", "cluster", spec.ID, "pool", want.Name,
+			"min", want.MinSize, "desired", want.DesiredSize, "max", want.MaxSize)
 		record(change, fmt.Sprintf("resize node pool %s to %d/%d/%d",
 			want.Name, want.MinSize, want.DesiredSize, want.MaxSize))
 	}
@@ -327,7 +343,7 @@ func (p *ClusterProvisioner) ensureNodeGroups(
 func (p *ClusterProvisioner) createNodeGroup(
 	ctx context.Context, spec core.ClusterSpec, pool core.NodePool, nodeRoleARN string,
 ) error {
-	_, err := p.c.eks.CreateNodegroup(ctx, &eks.CreateNodegroupInput{
+	input := &eks.CreateNodegroupInput{
 		ClusterName:   aws.String(names{spec}.cluster()),
 		NodegroupName: aws.String(names{spec}.nodeGroup(pool.Name)),
 		NodeRole:      aws.String(nodeRoleARN),
@@ -340,7 +356,11 @@ func (p *ClusterProvisioner) createNodeGroup(
 		},
 		Labels: pool.Labels,
 		Tags:   tags(spec),
-	})
+	}
+	if pool.DiskSizeGB > 0 {
+		input.DiskSize = aws.Int32(pool.DiskSizeGB)
+	}
+	_, err := p.c.eks.CreateNodegroup(ctx, input)
 	if err != nil {
 		var exists *ekstypes.ResourceInUseException
 		if errors.As(err, &exists) {
@@ -377,6 +397,8 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 		return fmt.Errorf("listing node groups for %s: %w", spec.ID, err)
 	}
 
+	p.c.logger.Info("deleting node groups before cluster", "cluster", spec.ID, "count", len(listed.Nodegroups))
+
 	// Node groups must go first: EKS refuses to delete a cluster that still has
 	// any attached.
 	for _, name := range listed.Nodegroups {
@@ -411,6 +433,7 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 		}
 		return fmt.Errorf("deleting EKS cluster %s: %w", spec.ID, err)
 	}
+	p.c.logger.Info("requested EKS cluster deletion", "cluster", spec.ID)
 	return nil
 }
 
@@ -486,6 +509,7 @@ func (p *ClusterProvisioner) ensureRole(
 	if err != nil {
 		return "", fmt.Errorf("creating role %s: %w", name, err)
 	}
+	p.c.logger.Info("created IAM role", "role", name)
 	if err := p.attachPolicies(ctx, name, policies); err != nil {
 		return "", err
 	}

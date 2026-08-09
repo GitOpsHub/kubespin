@@ -2,6 +2,8 @@ package gcp
 
 import (
 	"context"
+	"encoding/base64"
+	"log/slog"
 	"testing"
 
 	"cloud.google.com/go/container/apiv1/containerpb"
@@ -71,8 +73,14 @@ func (f *fakeGCP) assertNoMutations(t *testing.T) {
 func (f *fakeGCP) clients() *Clients {
 	return &Clients{
 		project: testProject, cluster: f, svcAccts: f, firewalls: f,
-		networks: f, subnetworks: f,
+		networks: f, subnetworks: f, tokens: f, logger: slog.Default(),
 	}
+}
+
+// Token fakes tokenAPI without ever contacting Google.
+func (f *fakeGCP) Token(_ context.Context) (string, error) {
+	f.record("Token")
+	return "fake-gcp-access-token", nil
 }
 
 // --- GKE ---
@@ -312,6 +320,9 @@ func (f *fakeGCP) activeCluster(spec core.ClusterSpec) {
 		CurrentMasterVersion: "1.30.1",
 		WorkloadIdentityConfig: &containerpb.WorkloadIdentityConfig{
 			WorkloadPool: testProject + ".svc.id.goog",
+		},
+		MasterAuth: &containerpb.MasterAuth{
+			ClusterCaCertificate: base64.StdEncoding.EncodeToString([]byte("fake-ca-cert")),
 		},
 		PrivateClusterConfig: &containerpb.PrivateClusterConfig{
 			EnablePrivateNodes:    true,

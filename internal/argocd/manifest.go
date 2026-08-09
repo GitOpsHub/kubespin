@@ -8,6 +8,37 @@
 // without a cluster.
 package argocd
 
+import "log/slog"
+
+// options carries the settings the rendering entry points accept. It is a
+// struct rather than a field on a type because everything this package does
+// today is a pure function over a Profile — there is no installer object to
+// hang a logger off yet.
+type options struct {
+	logger *slog.Logger
+}
+
+// Option configures a rendering call.
+type Option func(*options)
+
+// WithLogger sets the logger. Without it, rendering logs to slog.Default().
+func WithLogger(logger *slog.Logger) Option {
+	return func(o *options) {
+		if logger != nil {
+			o.logger = logger
+		}
+	}
+}
+
+// resolve applies opts over the defaults.
+func resolve(opts []Option) options {
+	o := options{logger: slog.Default()}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
 // inClusterServer is the destination every rendered Application points at.
 // Argo CD is local to the cluster it manages — there is no central hub — so
 // this is always the in-cluster API server, never a remote one.

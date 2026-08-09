@@ -2,6 +2,7 @@ package azure
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -66,10 +67,41 @@ func (f *fakeAzure) assertNoMutations(t *testing.T) {
 func (f *fakeAzure) clients() *Clients {
 	return &Clients{
 		subscription: testSubscription, cluster: f, identity: f, network: f, resourceGroups: f,
+		logger: slog.Default(),
 	}
 }
 
 func notFound() error { return &azcore.ResponseError{StatusCode: 404} }
+
+// fakeKubeconfig is a minimal valid kubeconfig, standing in for what
+// ListClusterUserCredentials really returns: enough for
+// clientcmd.RESTConfigFromKubeConfig to parse a host, CA data, and a bearer
+// token out of it.
+const fakeKubeconfig = `apiVersion: v1
+kind: Config
+clusters:
+- name: fake-aks
+  cluster:
+    server: https://fake-aks.example.com
+    certificate-authority-data: ZmFrZS1jYS1jZXJ0
+contexts:
+- name: fake-aks
+  context:
+    cluster: fake-aks
+    user: fake-aks
+current-context: fake-aks
+users:
+- name: fake-aks
+  user:
+    token: fake-aks-token
+`
+
+// ListClusterUserCredentials fakes clusterAPI's kubeconfig call without ever
+// contacting Azure.
+func (f *fakeAzure) ListClusterUserCredentials(_ context.Context, _, _ string) ([]byte, error) {
+	f.record("ListClusterUserCredentials")
+	return []byte(fakeKubeconfig), nil
+}
 
 // --- AKS ---
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,7 +15,7 @@ func TestRun_MissingEnv(t *testing.T) {
 	t.Setenv(envArgoCDServer, "")
 	t.Setenv(envIngestionURL, "")
 
-	if err := run(); !errors.Is(err, errRequiredEnv) {
+	if err := run(testLogger()); !errors.Is(err, errRequiredEnv) {
 		t.Fatalf("error = %v, want errRequiredEnv", err)
 	}
 }
@@ -43,7 +44,7 @@ func TestRun_PushesStatus(t *testing.T) {
 	t.Setenv(envIngestionURL, ingestion.URL)
 	t.Setenv(envTokenPath, tokenPath)
 
-	if err := run(); err != nil {
+	if err := run(testLogger()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if pushedPath != "/clusters/team-a/status" {
@@ -73,7 +74,10 @@ func TestRun_RejectedPushSurfaces(t *testing.T) {
 	t.Setenv(envIngestionURL, ingestion.URL)
 	t.Setenv(envTokenPath, tokenPath)
 
-	if err := run(); !errors.Is(err, errRejected) {
+	if err := run(testLogger()); !errors.Is(err, errRejected) {
 		t.Fatalf("error = %v, want errRejected", err)
 	}
 }
+
+// testLogger discards output so test runs stay quiet.
+func testLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }

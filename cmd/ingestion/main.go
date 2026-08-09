@@ -13,7 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -79,12 +79,22 @@ func bearerToken(headers map[string]string) string {
 }
 
 func main() {
+	// JSON, because everything this handler writes lands in CloudWatch Logs,
+	// where structured fields are queryable and a free-text line is not.
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
 	ctx := context.Background()
 
 	h, err := newHandler(ctx)
 	if err != nil {
-		log.Fatalf("ingestion: %v", err)
+		logger.Error("ingestion handler failed to start", "error", err)
+		os.Exit(1)
 	}
+
+	logger.Info("ingestion handler started",
+		"region", os.Getenv("AWS_REGION"),
+		"table", os.Getenv("REGISTRY_TABLE"),
+	)
 
 	lambda.Start(handleRequest(h))
 }

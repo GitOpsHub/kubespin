@@ -94,6 +94,7 @@ func (p *NetworkProvisioner) AllowEgress(
 		return change, fmt.Errorf("authorising egress from %s to %s:%d: %w", nsg, cidr, port, err)
 	}
 
+	p.c.logger.Info("opened egress security rule", "cluster", spec.ID, "nsg", nsg, "cidr", cidr, "port", port, "destination", dest.Host)
 	change.Changed = true
 	change.Details = append(change.Details,
 		fmt.Sprintf("allow egress to %s:%d for %s", cidr, port, dest.Host))

@@ -10,6 +10,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"sort"
@@ -18,6 +19,47 @@ import (
 
 	"golang.org/x/sync/errgroup"
 )
+
+// options carries settings shared by every provider constructor in this
+// package, so a caller configures all three clouds the same way.
+type options struct {
+	logger *slog.Logger
+}
+
+// Option configures a provider.
+type Option func(*options)
+
+// WithLogger sets the logger. Without it, a provider logs to slog.Default().
+//
+// Logging here is Debug-level on purpose: `kubespin login`/`status` already
+// report per-provider outcomes to the operator, so this is the "which CLI did
+// we actually shell out to" detail that only matters when something is being
+// diagnosed — not a second copy of the user-facing report.
+func WithLogger(logger *slog.Logger) Option {
+	return func(o *options) {
+		if logger != nil {
+			o.logger = logger
+		}
+	}
+}
+
+// resolve applies opts over the defaults.
+func resolve(opts []Option) options {
+	o := options{logger: slog.Default()}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
+// loggerOr keeps a provider built as a bare struct literal (as the tests in
+// this package do) from panicking on a nil logger.
+func loggerOr(logger *slog.Logger) *slog.Logger {
+	if logger == nil {
+		return slog.Default()
+	}
+	return logger
+}
 
 // StatusDetail is what a Provider reports about its own session, beyond the
 // plain authenticated/not-authenticated bit.

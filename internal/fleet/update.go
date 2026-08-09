@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/GitOpsHub/kubespin/internal/catalog"
@@ -71,8 +72,10 @@ func setComponentVersion(overrides []core.AddonOverride, component, version stri
 func Update(
 	ctx context.Context, reg registry.Registry, filter registry.Filter,
 	resolver catalog.Resolver, repoProv repo.Provisioner,
-	component, version string, concurrency int,
+	component, version string, concurrency int, opts ...Option,
 ) ([]UpdateResult, error) {
+	logger := resolveOptions(opts).logger
+
 	records, err := reg.List(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("listing fleet registry: %w", err)
@@ -80,6 +83,9 @@ func Update(
 	if concurrency < 1 {
 		concurrency = 1
 	}
+	logger.Info("starting fleet update wave",
+		"component", component, "version", version, "clusters", len(records),
+		"provider_filter", filter.Provider, "concurrency", concurrency)
 
 	results := make([]UpdateResult, len(records))
 	sem := make(chan struct{}, concurrency)
@@ -92,7 +98,7 @@ func Update(
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			results[i] = updateRecord(ctx, rec, resolver, repoProv, component, version)
+			results[i] = updateRecord(ctx, rec, resolver, repoProv, component, version, logger)
 		}(i, rec)
 	}
 	wg.Wait()
@@ -106,14 +112,28 @@ func Update(
 // containing only this update's override.
 func updateRecord(
 	ctx context.Context, rec registry.Record, resolver catalog.Resolver, repoProv repo.Provisioner, component, version string,
+	logger *slog.Logger,
 ) UpdateResult {
 	minimal := core.ClusterSpec{ID: rec.ClusterID, Provider: rec.Provider, Region: rec.Region, Profile: rec.Profile}
 
 	spec, err := desiredSpec(ctx, repoProv, minimal)
 	if err != nil {
+		logger.Debug("cluster update skipped: could not read desired state", "cluster", rec.ClusterID, "error", err)
 		return UpdateResult{ClusterID: rec.ClusterID, Err: err}
 	}
 
 	committed, err := UpdateOne(ctx, resolver, repoProv, spec, component, version)
+	switch {
+	case err != nil:
+		logger.Debug("cluster update failed", "cluster", rec.ClusterID, "error", err)
+	case committed:
+		// A push to a cluster's repository is a fleet-wide mutation, so it is
+		// worth seeing without --log-level debug.
+		logger.Info("pushed version bump to cluster repository",
+			"cluster", rec.ClusterID, "component", component, "version", version)
+	default:
+		logger.Debug("cluster already up to date",
+			"cluster", rec.ClusterID, "component", component, "version", version)
+	}
 	return UpdateResult{ClusterID: rec.ClusterID, Committed: committed, Err: err}
 }

@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"log/slog"
 )
 
 const gcpInstallHint = "https://cloud.google.com/sdk/docs/install"
@@ -11,24 +12,32 @@ const gcpInstallHint = "https://cloud.google.com/sdk/docs/install"
 // use) plus Application Default Credentials (what the GCP SDK clients in
 // internal/provisioner/gcp actually read).
 type GCPProvider struct {
-	run commandRunner
-	out commandOutput
+	run    commandRunner
+	out    commandOutput
+	logger *slog.Logger
 }
 
 // NewGCPProvider builds a provider that shells out to the gcloud CLI.
-func NewGCPProvider() *GCPProvider {
-	return &GCPProvider{run: execRunner, out: execOutput}
+func NewGCPProvider(opts ...Option) *GCPProvider {
+	o := resolve(opts)
+	return &GCPProvider{run: execRunner, out: execOutput, logger: o.logger}
 }
 
 // Name identifies this provider for --only and status output.
 func (p *GCPProvider) Name() string { return "gcp" }
+
+func (p *GCPProvider) log() *slog.Logger { return loggerOr(p.logger) }
 
 // IsAuthenticated asks gcloud to actually mint an access token from the
 // cached Application Default Credentials, rather than just checking that a
 // credentials file exists — a revoked or expired token fails this the same
 // way it would fail a real GCP SDK call, which is the point.
 func (p *GCPProvider) IsAuthenticated(ctx context.Context) (bool, StatusDetail, error) {
+	p.log().Debug("checking gcp session", "provider", "gcp")
+
 	if _, err := p.out(ctx, "gcloud", "auth", "application-default", "print-access-token"); err != nil {
+		p.log().Debug("gcp application default credentials are not usable",
+			"provider", "gcp", "error", err)
 		return false, StatusDetail{}, nil
 	}
 
@@ -48,9 +57,11 @@ func (p *GCPProvider) Login(ctx context.Context) error {
 	if err := checkBinary("gcloud", gcpInstallHint); err != nil {
 		return err
 	}
+	p.log().Debug("shelling out to gcloud auth login", "provider", "gcp")
 	if err := p.run(ctx, "gcloud", "auth", "login"); err != nil {
 		return err
 	}
+	p.log().Debug("shelling out to gcloud auth application-default login", "provider", "gcp")
 	return p.run(ctx, "gcloud", "auth", "application-default", "login")
 }
 
@@ -60,6 +71,7 @@ func (p *GCPProvider) Logout(ctx context.Context) error {
 	if err := checkBinary("gcloud", gcpInstallHint); err != nil {
 		return err
 	}
+	p.log().Debug("shelling out to gcloud auth revoke", "provider", "gcp")
 	if err := p.run(ctx, "gcloud", "auth", "application-default", "revoke", "--quiet"); err != nil {
 		return err
 	}

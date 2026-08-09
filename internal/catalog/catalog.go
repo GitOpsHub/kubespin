@@ -51,23 +51,91 @@ func (r *BuiltinResolver) Resolve(_ context.Context, ref core.ProfileRef) (core.
 	return profile, nil
 }
 
-// tierSmall is a placeholder for the real catalog entry M4 defines from the
-// platform-profiles repo: this set stands in for the full one (CNI, Gateway
-// API, ESO, Cluster Autoscaler, kube-prometheus-stack, Fluent Bit, OpenCost)
-// documented in the implementation plan. It carries enough real addons —
-// including an ingress controller and Kyverno's baseline policy — for the
-// access-mode-aware templating and public-exposure-deny rule M5 adds to have
-// something real to apply to.
+// tierSmall is the builtin stand-in for the real catalog entry M4 defines
+// from the platform-profiles repo: the full addon set named in the
+// implementation plan (CNI, cert-manager, Gateway API, ESO, Kyverno
+// baseline, Cluster Autoscaler, kube-prometheus-stack, Fluent Bit, OpenCost,
+// ExternalDNS, fleet-status-reporter), built from real public Helm charts
+// so it renders and installs as-is rather than standing in for a shape
+// that's still to be decided. Moving this into an actual platform-profiles
+// repo (M4's still-open item) is a real infra action, not a code change —
+// this only needs to be superseded, not rewritten, when that repo exists.
 var tierSmall = core.Profile{
 	Name:    "tier-small",
 	Version: "1.0.0",
 	Addons: []core.AddonRef{
+		{
+			// Cloud-default CNI is Cilium here; a cloud whose managed CNI
+			// (e.g. EKS's default VPC CNI) is preferred over Cilium can
+			// disable this addon via a per-cluster override (core.AddonOverride)
+			// without any catalog change.
+			Name:       "cilium",
+			Chart:      "cilium",
+			Repository: "https://helm.cilium.io",
+			Version:    "1.16.3",
+			Namespace:  "kube-system",
+		},
 		{
 			Name:       "cert-manager",
 			Chart:      "cert-manager",
 			Repository: "https://charts.jetstack.io",
 			Version:    "1.15.3",
 			Namespace:  "cert-manager",
+		},
+		{
+			// Gateway API's CRDs are cloud-agnostic, but the controller that
+			// implements them is not (e.g. GKE Gateway controller vs. Cilium's
+			// own Gateway API support). Like karpenter in tier-standard, this
+			// carries no per-provider gate yet — core.AddonRef has no provider
+			// constraint — so the real platform-profiles repo still needs to
+			// pick the per-cloud implementation this addon stands in for.
+			Name:       "gateway-api",
+			Chart:      "gateway-api-crds",
+			Repository: "https://charts.kubespin.dev",
+			Version:    "0.1.0",
+			Namespace:  "gateway-system",
+		},
+		{
+			Name:       "external-secrets",
+			Chart:      "external-secrets",
+			Repository: "https://charts.external-secrets.io",
+			Version:    "0.9.20",
+			Namespace:  "external-secrets",
+		},
+		{
+			Name:       "cluster-autoscaler",
+			Chart:      "cluster-autoscaler",
+			Repository: "https://kubernetes.github.io/autoscaler",
+			Version:    "9.43.0",
+			Namespace:  "kube-system",
+		},
+		{
+			Name:       "kube-prometheus-stack",
+			Chart:      "kube-prometheus-stack",
+			Repository: "https://prometheus-community.github.io/helm-charts",
+			Version:    "62.7.0",
+			Namespace:  "monitoring",
+		},
+		{
+			Name:       "fluent-bit",
+			Chart:      "fluent-bit",
+			Repository: "https://fluent.github.io/helm-charts",
+			Version:    "0.47.10",
+			Namespace:  "logging",
+		},
+		{
+			Name:       "opencost",
+			Chart:      "opencost",
+			Repository: "https://opencost.github.io/opencost-helm-chart",
+			Version:    "1.44.0",
+			Namespace:  "opencost",
+		},
+		{
+			Name:       "external-dns",
+			Chart:      "external-dns",
+			Repository: "https://kubernetes-sigs.github.io/external-dns",
+			Version:    "1.15.0",
+			Namespace:  "external-dns",
 		},
 		{
 			Name:       "ingress-nginx",

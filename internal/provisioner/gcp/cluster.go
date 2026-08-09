@@ -2,6 +2,7 @@ package gcp
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"slices"
 	"strings"
@@ -92,10 +93,12 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 	if err != nil {
 		if status.Code(err) == codes.AlreadyExists {
 			// Another run got there first; that is convergence, not failure.
+			p.c.logger.Debug("GKE cluster already exists", "cluster", spec.ID)
 			return nil
 		}
 		return fmt.Errorf("creating GKE cluster %s: %w", spec.ID, err)
 	}
+	p.c.logger.Info("requested GKE cluster", "cluster", spec.ID, "region", spec.Region)
 	return nil
 }
 
@@ -111,7 +114,7 @@ func placeholderNodePool(spec core.ClusterSpec) *containerpb.NodePool {
 	return &containerpb.NodePool{
 		Name:             pool.Name,
 		InitialNodeCount: pool.DesiredSize,
-		Config:           &containerpb.NodeConfig{MachineType: pool.InstanceType, Labels: pool.Labels},
+		Config:           &containerpb.NodeConfig{MachineType: pool.InstanceType, Labels: pool.Labels, DiskSizeGb: pool.DiskSizeGB},
 		Autoscaling: &containerpb.NodePoolAutoscaling{
 			Enabled:      true,
 			MinNodeCount: pool.MinSize,
@@ -199,6 +202,11 @@ func (p *ClusterProvisioner) Describe(ctx context.Context, spec core.ClusterSpec
 		// known URL rather than something CreateCluster returns.
 		state.OIDCIssuer = "https://container.googleapis.com/v1/" + n.clusterPath()
 	}
+	if ca := cluster.GetMasterAuth().GetClusterCaCertificate(); ca != "" {
+		if decoded, err := base64.StdEncoding.DecodeString(ca); err == nil {
+			state.CertificateAuthorityData = decoded
+		}
+	}
 
 	if state.Status == provisioner.StatusActive {
 		pools, err := p.describeNodePools(ctx, spec)
@@ -254,6 +262,7 @@ func (p *ClusterProvisioner) describeNodePools(ctx context.Context, spec core.Cl
 		if cfg := np.GetConfig(); cfg != nil {
 			pool.InstanceType = cfg.GetMachineType()
 			pool.Labels = cfg.GetLabels()
+			pool.DiskSizeGB = cfg.GetDiskSizeGb()
 		}
 		if as := np.GetAutoscaling(); as != nil {
 			pool.MinSize = as.GetMinNodeCount()
@@ -313,6 +322,7 @@ func (p *ClusterProvisioner) reconcileAccess(
 	if err != nil {
 		return provisioner.Change{}, fmt.Errorf("updating access mode for %s: %w", spec.ID, err)
 	}
+	p.c.logger.Info("updated cluster access mode", "cluster", spec.ID, "from", state.Access, "to", spec.Access)
 
 	return provisioner.Change{
 		Changed: true,
@@ -338,6 +348,7 @@ func (p *ClusterProvisioner) ensureNodePools(
 			if err := p.createNodePool(ctx, spec, want); err != nil {
 				return err
 			}
+			p.c.logger.Info("created node pool", "cluster", spec.ID, "pool", want.Name)
 			record(change, fmt.Sprintf("create node pool %s", want.Name))
 			continue
 		}
@@ -354,6 +365,8 @@ func (p *ClusterProvisioner) ensureNodePools(
 		if err != nil {
 			return fmt.Errorf("resizing node pool %s: %w", want.Name, err)
 		}
+		p.c.logger.Info("resized node pool", "cluster", spec.ID, "pool", want.Name,
+			"min", want.MinSize, "desired", want.DesiredSize, "max", want.MaxSize)
 		record(change, fmt.Sprintf("resize node pool %s to %d/%d/%d",
 			want.Name, want.MinSize, want.DesiredSize, want.MaxSize))
 	}
@@ -369,7 +382,7 @@ func (p *ClusterProvisioner) createNodePool(ctx context.Context, spec core.Clust
 		NodePool: &containerpb.NodePool{
 			Name:             pool.Name,
 			InitialNodeCount: pool.DesiredSize,
-			Config:           &containerpb.NodeConfig{MachineType: pool.InstanceType, Labels: pool.Labels},
+			Config:           &containerpb.NodeConfig{MachineType: pool.InstanceType, Labels: pool.Labels, DiskSizeGb: pool.DiskSizeGB},
 			Autoscaling: &containerpb.NodePoolAutoscaling{
 				Enabled:      true,
 				MinNodeCount: pool.MinSize,
@@ -412,6 +425,7 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 		}
 		return fmt.Errorf("deleting GKE cluster %s: %w", spec.ID, err)
 	}
+	p.c.logger.Info("requested GKE cluster deletion", "cluster", spec.ID)
 	return nil
 }
 

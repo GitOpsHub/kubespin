@@ -112,7 +112,7 @@ func runFleetUpdate(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	repoProv := repo.NewProvisioner(repoClients)
+	repoProv := repo.NewProvisioner(repoClients, repo.WithLogger(LoggerFrom(ctx)))
 
 	resolver, err := buildResolver(cmd, repoClients)
 	if err != nil {
@@ -124,7 +124,8 @@ func runFleetUpdate(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("reading --concurrency: %w", err)
 	}
 
-	results, err := fleet.Update(ctx, reg, filter, resolver, repoProv, component, version, concurrency)
+	results, err := fleet.Update(ctx, reg, filter, resolver, repoProv, component, version, concurrency,
+		fleet.WithLogger(LoggerFrom(ctx)))
 	if err != nil {
 		return fmt.Errorf("running fleet update: %w", err)
 	}
@@ -209,14 +210,15 @@ func runFleetAudit(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	repoProv := repo.NewProvisioner(repoClients)
+	repoProv := repo.NewProvisioner(repoClients, repo.WithLogger(LoggerFrom(ctx)))
 
 	concurrency, err := cmd.Flags().GetInt("concurrency")
 	if err != nil {
 		return fmt.Errorf("reading --concurrency: %w", err)
 	}
 
-	results, err := fleet.Audit(ctx, reg, filter, clusterProvisionerFactory(cmd), repoProv, concurrency)
+	results, err := fleet.Audit(ctx, reg, filter, clusterProvisionerFactory(cmd), repoProv, concurrency,
+		fleet.WithLogger(LoggerFrom(ctx)))
 	if err != nil {
 		return fmt.Errorf("running fleet audit: %w", err)
 	}
@@ -325,7 +327,8 @@ func runFleetStatus(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("reading --stale-threshold: %w", err)
 	}
 
-	statuses, err := fleet.Status(ctx, reg, filter, staleOnly, threshold, time.Now())
+	statuses, err := fleet.Status(ctx, reg, filter, staleOnly, threshold, time.Now(),
+		fleet.WithLogger(LoggerFrom(ctx)))
 	if err != nil {
 		return fmt.Errorf("running fleet status: %w", err)
 	}
@@ -376,7 +379,8 @@ func fleetPrereqs(cmd *cobra.Command) (*Config, registry.Registry, error) {
 		return nil, nil, fmt.Errorf("%w: --registry-region is required", ErrConfig)
 	}
 
-	reg, err := registry.NewDynamoDB(ctx, cfg.Registry.Region, cfg.Registry.Table)
+	reg, err := registry.NewDynamoDB(ctx, cfg.Registry.Region, cfg.Registry.Table,
+		registry.WithLogger(LoggerFrom(ctx)))
 	if err != nil {
 		return nil, nil, fmt.Errorf("connecting to the Fleet Registry: %w", err)
 	}

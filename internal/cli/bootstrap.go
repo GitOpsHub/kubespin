@@ -82,7 +82,7 @@ func runFleetBootstrap(cmd *cobra.Command, _ []string) error {
 
 	// The report is printed even on failure: a partial run has already created
 	// resources, and the operator needs to see which.
-	report, err := fleetinfra.Converge(ctx, clients, spec, cfg.DryRun)
+	report, err := fleetinfra.Converge(ctx, clients, spec, cfg.DryRun, fleetinfra.WithLogger(logger))
 	printReport(cmd, report)
 	if err != nil {
 		return fmt.Errorf("converging fleet infrastructure: %w", err)

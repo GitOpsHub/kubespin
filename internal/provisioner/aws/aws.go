@@ -8,6 +8,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -70,20 +71,38 @@ type Clients struct {
 	eks eksAPI
 	iam iamAPI
 	ec2 ec2API
+	sts stsPresignAPI
+
+	logger *slog.Logger
+}
+
+// Option configures Clients.
+type Option func(*Clients)
+
+// WithLogger sets the logger every provisioner built over these Clients logs
+// through. Defaults to slog.Default() when not given.
+func WithLogger(logger *slog.Logger) Option {
+	return func(c *Clients) { c.logger = logger }
 }
 
 // NewClients builds real AWS clients for a region.
-func NewClients(ctx context.Context, region string) (*Clients, error) {
+func NewClients(ctx context.Context, region string, opts ...Option) (*Clients, error) {
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
 	if err != nil {
 		return nil, fmt.Errorf("loading AWS config: %w", err)
 	}
 
-	return &Clients{
-		eks: eks.NewFromConfig(cfg),
-		iam: iam.NewFromConfig(cfg),
-		ec2: ec2.NewFromConfig(cfg),
-	}, nil
+	c := &Clients{
+		eks:    eks.NewFromConfig(cfg),
+		iam:    iam.NewFromConfig(cfg),
+		ec2:    ec2.NewFromConfig(cfg),
+		sts:    newSTSPresigner(cfg),
+		logger: slog.Default(),
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c, nil
 }
 
 // AWS-managed policies. Attaching these rather than authoring equivalents keeps

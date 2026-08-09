@@ -99,6 +99,7 @@ func (p *NetworkProvisioner) ensureVPCNetwork(
 		return fmt.Errorf("creating network %s: %w", name, err)
 	}
 
+	p.c.logger.Info("created VPC network", "network", name)
 	change.Changed = true
 	change.Details = append(change.Details, fmt.Sprintf("created network %s", name))
 	return nil
@@ -140,6 +141,7 @@ func (p *NetworkProvisioner) ensureSubnetwork(
 		return fmt.Errorf("creating subnetwork %s: %w", name, err)
 	}
 
+	p.c.logger.Info("created subnetwork", "subnetwork", name, "cidr", cidr)
 	change.Changed = true
 	change.Details = append(change.Details, fmt.Sprintf("created subnetwork %s (%s)", name, cidr))
 	return nil
@@ -222,6 +224,7 @@ func (p *NetworkProvisioner) AllowEgress(
 			state.NetworkID, cidr, port, err)
 	}
 
+	p.c.logger.Info("opened egress firewall rule", "cluster", spec.ID, "rule", name, "cidr", cidr, "port", port, "destination", dest.Host)
 	change.Changed = true
 	change.Details = append(change.Details,
 		fmt.Sprintf("allow egress to %s:%d for %s", cidr, port, dest.Host))

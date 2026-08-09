@@ -65,11 +65,31 @@ type Provisioner interface {
 // githubProvisioner is the real Provisioner, backed by GitHub's REST and
 // Git Data APIs.
 type githubProvisioner struct {
-	c *Clients
+	c      *Clients
+	logger *slog.Logger
+}
+
+// Option configures a Provisioner.
+type Option func(*githubProvisioner)
+
+// WithLogger sets the logger. Without it, a provisioner logs to
+// slog.Default().
+func WithLogger(logger *slog.Logger) Option {
+	return func(p *githubProvisioner) {
+		if logger != nil {
+			p.logger = logger
+		}
+	}
 }
 
 // NewProvisioner builds a Provisioner over the given clients.
-func NewProvisioner(c *Clients) Provisioner { return &githubProvisioner{c: c} }
+func NewProvisioner(c *Clients, opts ...Option) Provisioner {
+	p := &githubProvisioner{c: c, logger: slog.Default()}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
+}
 
 var (
 	_ Provisioner = (*githubProvisioner)(nil)
@@ -119,12 +139,16 @@ func (p *githubProvisioner) Create(ctx context.Context, spec core.ClusterSpec) e
 			return fmt.Errorf("creating repository %s: %w", n.repoName(), err)
 		}
 		branch = created.GetDefaultBranch()
+		p.logger.Info("created cluster repository",
+			"cluster", spec.ID, "repo", n.repoName(), "branch", branch)
 	} else {
 		repository, _, err := p.c.repo.Get(ctx, p.c.org, n.repoName())
 		if err != nil {
 			return fmt.Errorf("reading repository %s: %w", n.repoName(), err)
 		}
 		branch = repository.GetDefaultBranch()
+		p.logger.Info("cluster repository already exists",
+			"cluster", spec.ID, "repo", n.repoName(), "branch", branch)
 	}
 
 	if err := p.protectBranch(ctx, n, branch); err != nil {
@@ -150,7 +174,7 @@ func (p *githubProvisioner) protectBranch(ctx context.Context, n names, branch s
 		// or a transient failure, and retrying or failing the whole apply over
 		// it would leave the cluster half-provisioned for something no retry
 		// can fix. Converge without protection and say so loudly instead.
-		slog.Default().Warn("branch protection unavailable on this GitHub plan; repository left unprotected",
+		p.logger.Warn("branch protection unavailable on this GitHub plan; repository left unprotected",
 			"repo", n.repoName(), "branch", branch, "error", err)
 		return nil
 	default:
@@ -279,6 +303,10 @@ func (p *githubProvisioner) Push(
 		return false, fmt.Errorf("advancing %s branch %s: %w", n.repoName(), checkout.branch, err)
 	}
 
+	p.logger.Info("pushed commit to cluster repository",
+		"cluster", checkout.spec.ID, "repo", n.repoName(), "branch", checkout.branch,
+		"commit", commit.GetSHA(), "files", len(entries), "message", message)
+
 	checkout.baseCommitSHA = commit.GetSHA()
 	for path, content := range files {
 		checkout.files[path] = content
@@ -308,6 +336,8 @@ func (p *githubProvisioner) Archive(ctx context.Context, spec core.ClusterSpec) 
 	}); err != nil {
 		return fmt.Errorf("archiving repository %s: %w", n.repoName(), err)
 	}
+
+	p.logger.Info("archived cluster repository", "cluster", spec.ID, "repo", n.repoName())
 	return nil
 }
 
