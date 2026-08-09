@@ -168,10 +168,6 @@ func TestLoadSpec_Invalid(t *testing.T) {
 			[]string{"--provider", "aws", "--region", "us-east-1", "--subnets", "a,b", "--profile", "tier-small@1.0.0"},
 			"cluster id",
 		},
-		"no subnets": {
-			[]string{"--cluster-id", "team-alpha", "--provider", "aws", "--region", "us-east-1", "--profile", "tier-small@1.0.0"},
-			"subnet",
-		},
 		"bad profile reference": {
 			[]string{"--cluster-id", "team-alpha", "--provider", "aws", "--region", "us-east-1", "--subnets", "a,b", "--profile", "tier-small"},
 			"name@version",
@@ -236,6 +232,70 @@ func TestDelete_LoadSpecFromFlags(t *testing.T) {
 	}
 	if spec.Provider != core.ProviderAWS {
 		t.Errorf("Provider = %q", spec.Provider)
+	}
+}
+
+// Every provider now creates its own network when --subnets is omitted, so
+// none of them should fail validation on a missing subnet.
+func TestLoadSpec_AllowsOmittedSubnets(t *testing.T) {
+	for _, provider := range []string{"aws", "gcp", "azure"} {
+		t.Run(provider, func(t *testing.T) {
+			spec, err := loadSpec(applyCmd(t,
+				"--cluster-id", "team-alpha",
+				"--provider", provider,
+				"--region", "eastus2",
+				"--profile", "tier-small@1.0.0",
+			))
+			if err != nil {
+				t.Fatalf("loadSpec: %v", err)
+			}
+			if len(spec.Subnets) != 0 {
+				t.Errorf("Subnets = %v, want none supplied", spec.Subnets)
+			}
+		})
+	}
+}
+
+// --vpc-cidr, --vnet-cidr, and --subnet-cidr override the spec exactly like
+// the other CIDR-shaped flags: they take effect and are validated as CIDRs.
+func TestLoadSpec_NetworkCIDRFlags(t *testing.T) {
+	spec, err := loadSpec(applyCmd(t,
+		"--cluster-id", "team-alpha",
+		"--provider", "aws",
+		"--region", "us-east-1",
+		"--profile", "tier-small@1.0.0",
+		"--vpc-cidr", "172.16.0.0/16",
+	))
+	if err != nil {
+		t.Fatalf("loadSpec: %v", err)
+	}
+	if spec.VPCCIDR != "172.16.0.0/16" {
+		t.Errorf("VPCCIDR = %q, want the flag value", spec.VPCCIDR)
+	}
+
+	_, err = loadSpec(applyCmd(t,
+		"--cluster-id", "team-alpha",
+		"--provider", "aws",
+		"--region", "us-east-1",
+		"--profile", "tier-small@1.0.0",
+		"--vpc-cidr", "not-a-cidr",
+	))
+	if !errors.Is(err, core.ErrInvalidSpec) {
+		t.Fatalf("error = %v, want one wrapping ErrInvalidSpec for a bad --vpc-cidr", err)
+	}
+
+	specGCP, err := loadSpec(applyCmd(t,
+		"--cluster-id", "team-alpha",
+		"--provider", "gcp",
+		"--region", "us-central1",
+		"--profile", "tier-small@1.0.0",
+		"--subnet-cidr", "10.1.0.0/20",
+	))
+	if err != nil {
+		t.Fatalf("loadSpec: %v", err)
+	}
+	if specGCP.SubnetCIDR != "10.1.0.0/20" {
+		t.Errorf("SubnetCIDR = %q, want the flag value", specGCP.SubnetCIDR)
 	}
 }
 

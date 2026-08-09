@@ -51,6 +51,18 @@ type firewallsAPI interface {
 	Insert(ctx context.Context, project string, fw *compute.Firewall) error
 }
 
+// networksAPI is used only by EnsureNetwork, when spec.Subnets is empty.
+type networksAPI interface {
+	GetNetwork(ctx context.Context, project, name string) (*compute.Network, error)
+	InsertNetwork(ctx context.Context, project string, network *compute.Network) error
+}
+
+// subnetworksAPI is used only by EnsureNetwork, when spec.Subnets is empty.
+type subnetworksAPI interface {
+	GetSubnetwork(ctx context.Context, project, region, name string) (*compute.Subnetwork, error)
+	InsertSubnetwork(ctx context.Context, project, region string, subnet *compute.Subnetwork) error
+}
+
 // Clients bundles the GCP clients the provisioner uses, scoped to one project.
 //
 // The project is fixed at construction, the way AWS's Clients fixes a region:
@@ -58,10 +70,12 @@ type firewallsAPI interface {
 // that owns it, which is operator configuration rather than cluster desired
 // state.
 type Clients struct {
-	project   string
-	cluster   clusterAPI
-	svcAccts  serviceAccountsAPI
-	firewalls firewallsAPI
+	project     string
+	cluster     clusterAPI
+	svcAccts    serviceAccountsAPI
+	firewalls   firewallsAPI
+	networks    networksAPI
+	subnetworks subnetworksAPI
 }
 
 // NewClients builds real GCP clients for a project.
@@ -86,10 +100,12 @@ func NewClients(ctx context.Context, project string) (*Clients, error) {
 	}
 
 	return &Clients{
-		project:   project,
-		cluster:   cm,
-		svcAccts:  realServiceAccounts{iamSvc.Projects.ServiceAccounts},
-		firewalls: realFirewalls{computeSvc.Firewalls},
+		project:     project,
+		cluster:     cm,
+		svcAccts:    realServiceAccounts{iamSvc.Projects.ServiceAccounts},
+		firewalls:   realFirewalls{computeSvc.Firewalls},
+		networks:    realNetworks{computeSvc.Networks},
+		subnetworks: realSubnetworks{computeSvc.Subnetworks},
 	}, nil
 }
 
@@ -161,6 +177,46 @@ func (r realFirewalls) Insert(ctx context.Context, project string, fw *compute.F
 	return nil
 }
 
+// realNetworks adapts the fluent compute/v1 client to networksAPI.
+type realNetworks struct {
+	svc *compute.NetworksService
+}
+
+func (r realNetworks) GetNetwork(ctx context.Context, project, name string) (*compute.Network, error) {
+	n, err := r.svc.Get(project, name).Context(ctx).Do()
+	if err != nil {
+		return nil, fmt.Errorf("compute: get network %s: %w", name, err)
+	}
+	return n, nil
+}
+
+func (r realNetworks) InsertNetwork(ctx context.Context, project string, network *compute.Network) error {
+	if _, err := r.svc.Insert(project, network).Context(ctx).Do(); err != nil {
+		return fmt.Errorf("compute: insert network %s: %w", network.Name, err)
+	}
+	return nil
+}
+
+// realSubnetworks adapts the fluent compute/v1 client to subnetworksAPI.
+type realSubnetworks struct {
+	svc *compute.SubnetworksService
+}
+
+func (r realSubnetworks) GetSubnetwork(ctx context.Context, project, region, name string) (*compute.Subnetwork, error) {
+	s, err := r.svc.Get(project, region, name).Context(ctx).Do()
+	if err != nil {
+		return nil, fmt.Errorf("compute: get subnetwork %s: %w", name, err)
+	}
+	return s, nil
+}
+
+func (r realSubnetworks) InsertSubnetwork(ctx context.Context, project, region string, subnet *compute.Subnetwork) error {
+	if _, err := r.svc.Insert(project, region, subnet).Context(ctx).Do(); err != nil {
+		return fmt.Errorf("compute: insert subnetwork %s: %w", subnet.Name, err)
+	}
+	return nil
+}
+
 // names derives every GCP resource name from the cluster ID, so a cluster's
 // resources are identifiable and a second cluster cannot collide with them.
 type names struct {
@@ -203,6 +259,18 @@ func (n names) serviceAccountEmail(comp string) string {
 
 func (n names) serviceAccountResource(comp string) string {
 	return fmt.Sprintf("projects/%s/serviceAccounts/%s", n.project, n.serviceAccountEmail(comp))
+}
+
+func (n names) network() string { return "kubespin-" + n.spec.ID.String() }
+
+func (n names) networkResource() string {
+	return fmt.Sprintf("projects/%s/global/networks/%s", n.project, n.network())
+}
+
+func (n names) subnetwork() string { return "kubespin-" + n.spec.ID.String() + "-subnet" }
+
+func (n names) subnetworkResource() string {
+	return fmt.Sprintf("projects/%s/regions/%s/subnetworks/%s", n.project, n.location(), n.subnetwork())
 }
 
 func labels(spec core.ClusterSpec) map[string]string {

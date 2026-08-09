@@ -21,19 +21,23 @@ import (
 type fakeGCP struct {
 	calls []string
 
-	cluster   *containerpb.Cluster
-	nodePools map[string]*containerpb.NodePool
-	svcAccts  map[string]*iam.ServiceAccount // resource -> account
-	policies  map[string]*iam.Policy         // resource -> policy
-	firewalls map[string]*compute.Firewall
+	cluster     *containerpb.Cluster
+	nodePools   map[string]*containerpb.NodePool
+	svcAccts    map[string]*iam.ServiceAccount // resource -> account
+	policies    map[string]*iam.Policy         // resource -> policy
+	firewalls   map[string]*compute.Firewall
+	networks    map[string]*compute.Network    // name -> network
+	subnetworks map[string]*compute.Subnetwork // "region/name" -> subnetwork
 }
 
 func newFakeGCP() *fakeGCP {
 	return &fakeGCP{
-		nodePools: map[string]*containerpb.NodePool{},
-		svcAccts:  map[string]*iam.ServiceAccount{},
-		policies:  map[string]*iam.Policy{},
-		firewalls: map[string]*compute.Firewall{},
+		nodePools:   map[string]*containerpb.NodePool{},
+		svcAccts:    map[string]*iam.ServiceAccount{},
+		policies:    map[string]*iam.Policy{},
+		firewalls:   map[string]*compute.Firewall{},
+		networks:    map[string]*compute.Network{},
+		subnetworks: map[string]*compute.Subnetwork{},
 	}
 }
 
@@ -43,7 +47,7 @@ var mutatingCalls = []string{
 	"CreateCluster", "UpdateCluster", "DeleteCluster",
 	"CreateNodePool", "SetNodePoolSize", "DeleteNodePool",
 	"CreateServiceAccount", "DeleteServiceAccount", "SetIamPolicy",
-	"InsertFirewall",
+	"InsertFirewall", "InsertNetwork", "InsertSubnetwork",
 }
 
 func (f *fakeGCP) assertNoMutations(t *testing.T) {
@@ -58,7 +62,10 @@ func (f *fakeGCP) assertNoMutations(t *testing.T) {
 }
 
 func (f *fakeGCP) clients() *Clients {
-	return &Clients{project: testProject, cluster: f, svcAccts: f, firewalls: f}
+	return &Clients{
+		project: testProject, cluster: f, svcAccts: f, firewalls: f,
+		networks: f, subnetworks: f,
+	}
 }
 
 // --- GKE ---
@@ -217,6 +224,45 @@ func (f *fakeGCP) Insert(_ context.Context, _ string, fw *compute.Firewall) erro
 		return &googleapi.Error{Code: 409}
 	}
 	f.firewalls[fw.Name] = fw
+	return nil
+}
+
+// --- Networks / Subnetworks ---
+
+func (f *fakeGCP) GetNetwork(_ context.Context, _, name string) (*compute.Network, error) {
+	f.record("GetNetwork")
+	n, ok := f.networks[name]
+	if !ok {
+		return nil, &googleapi.Error{Code: 404}
+	}
+	return n, nil
+}
+
+func (f *fakeGCP) InsertNetwork(_ context.Context, _ string, network *compute.Network) error {
+	f.record("InsertNetwork")
+	if _, ok := f.networks[network.Name]; ok {
+		return &googleapi.Error{Code: 409}
+	}
+	f.networks[network.Name] = network
+	return nil
+}
+
+func (f *fakeGCP) GetSubnetwork(_ context.Context, _, region, name string) (*compute.Subnetwork, error) {
+	f.record("GetSubnetwork")
+	s, ok := f.subnetworks[region+"/"+name]
+	if !ok {
+		return nil, &googleapi.Error{Code: 404}
+	}
+	return s, nil
+}
+
+func (f *fakeGCP) InsertSubnetwork(_ context.Context, _, region string, subnet *compute.Subnetwork) error {
+	f.record("InsertSubnetwork")
+	key := region + "/" + subnet.Name
+	if _, ok := f.subnetworks[key]; ok {
+		return &googleapi.Error{Code: 409}
+	}
+	f.subnetworks[key] = subnet
 	return nil
 }
 

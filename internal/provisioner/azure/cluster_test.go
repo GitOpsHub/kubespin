@@ -31,6 +31,26 @@ func TestClusterProvisioner_Create_NewCluster(t *testing.T) {
 	}
 }
 
+// A supplied (or kubespin-created) subnet must actually be wired onto the
+// agent pool — AKS otherwise silently falls back to its own default network.
+func TestClusterProvisioner_Create_SetsVnetSubnetID(t *testing.T) {
+	f := newFakeAzure()
+	p := NewClusterProvisioner(f.clients())
+	spec := testSpec()
+
+	if err := p.Create(context.Background(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	pool, ok := f.agentPools[spec.NodePools[0].Name]
+	if !ok {
+		t.Fatal("expected the default node pool to have been created")
+	}
+	if pool.Properties.VnetSubnetID == nil || *pool.Properties.VnetSubnetID != spec.Subnets[0] {
+		t.Errorf("VnetSubnetID = %v, want %q", pool.Properties.VnetSubnetID, spec.Subnets[0])
+	}
+}
+
 func TestClusterProvisioner_Create_Idempotent(t *testing.T) {
 	f := newFakeAzure()
 	p := NewClusterProvisioner(f.clients())

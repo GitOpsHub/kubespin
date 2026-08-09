@@ -27,4 +27,7 @@ reporter to the Fleet Registry.
 * [kubespin apply](kubespin_apply.md)	 - Create or reconcile a cluster to match its desired state
 * [kubespin delete](kubespin_delete.md)	 - Decommission a cluster and its supporting resources
 * [kubespin fleet](kubespin_fleet.md)	 - Operate on the whole fleet rather than a single cluster
+* [kubespin login](kubespin_login.md)	 - Authenticate to every configured cloud provider
+* [kubespin logout](kubespin_logout.md)	 - Clear cached sessions for one or more cloud providers
+* [kubespin status](kubespin_status.md)	 - Show authentication state per cloud provider
 

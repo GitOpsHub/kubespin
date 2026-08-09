@@ -2,10 +2,123 @@ package gcp
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/GitOpsHub/kubespin/internal/provisioner"
 )
+
+// An existing spec's subnets pass through unchanged — the operator owns
+// that network.
+func TestEnsureNetwork_PassesThroughExistingSubnets(t *testing.T) {
+	f := newFakeGCP()
+	spec := testSpec()
+	p := NewNetworkProvisioner(f.clients())
+
+	result, err := p.EnsureNetwork(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("EnsureNetwork: %v", err)
+	}
+	if len(result.SubnetIDs) == 0 || result.Change.Changed {
+		t.Errorf("result = %+v, want spec.Subnets passed through unchanged", result)
+	}
+	if f.called("InsertNetwork") || f.called("InsertSubnetwork") {
+		t.Error("a network was created despite an operator-supplied subnet")
+	}
+}
+
+// A clean project with no subnets supplied gets a custom-mode VPC network
+// and a subnetwork in the cluster's region.
+func TestEnsureNetwork_CreatesNetworkAndSubnetworkWhenSubnetsEmpty(t *testing.T) {
+	f := newFakeGCP()
+	spec := testSpec()
+	spec.Subnets = nil
+
+	result, err := NewNetworkProvisioner(f.clients()).EnsureNetwork(t.Context(), spec)
+	if err != nil {
+		t.Fatalf("EnsureNetwork: %v", err)
+	}
+
+	if !result.Change.Changed {
+		t.Error("Changed = false, want the new network reported")
+	}
+	if len(result.SubnetIDs) != 1 || result.SubnetIDs[0] == "" {
+		t.Fatalf("SubnetIDs = %v, want exactly one resolved subnetwork", result.SubnetIDs)
+	}
+	if !strings.Contains(result.SubnetIDs[0], "team-payments-prod-subnet") {
+		t.Errorf("subnetwork resource %q does not name the derived subnetwork", result.SubnetIDs[0])
+	}
+	if !strings.HasPrefix(result.SubnetIDs[0], "projects/"+testProject+"/regions/"+spec.Region+"/subnetworks/") {
+		t.Errorf("subnetwork resource %q does not match the expected path format", result.SubnetIDs[0])
+	}
+
+	for _, want := range []string{"InsertNetwork", "InsertSubnetwork"} {
+		if !f.called(want) {
+			t.Errorf("%s was not called", want)
+		}
+	}
+
+	n := names{project: testProject, spec: spec}
+	if _, ok := f.networks[n.network()]; !ok {
+		t.Error("network was not recorded as created")
+	}
+}
+
+// A repeated apply must not create duplicate resources or report a change.
+func TestEnsureNetwork_IsIdempotent(t *testing.T) {
+	f := newFakeGCP()
+	spec := testSpec()
+	spec.Subnets = nil
+	p := NewNetworkProvisioner(f.clients())
+
+	first, err := p.EnsureNetwork(t.Context(), spec)
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	f.calls = nil
+	second, err := p.EnsureNetwork(t.Context(), spec)
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+
+	if second.Change.Changed {
+		t.Errorf("Changed = true on a second call: %v", second.Change.Details)
+	}
+	if len(second.SubnetIDs) != 1 || second.SubnetIDs[0] != first.SubnetIDs[0] {
+		t.Errorf("SubnetIDs = %v, want the same subnetwork as the first call (%v)", second.SubnetIDs, first.SubnetIDs)
+	}
+	f.assertNoMutations(t)
+}
+
+func TestEnsureNetwork_RespectsSubnetCIDROverride(t *testing.T) {
+	f := newFakeGCP()
+	spec := testSpec()
+	spec.Subnets = nil
+	spec.SubnetCIDR = "172.16.0.0/20"
+
+	if _, err := NewNetworkProvisioner(f.clients()).EnsureNetwork(t.Context(), spec); err != nil {
+		t.Fatalf("EnsureNetwork: %v", err)
+	}
+
+	n := names{project: testProject, spec: spec}
+	sub, ok := f.subnetworks[n.location()+"/"+n.subnetwork()]
+	if !ok {
+		t.Fatal("subnetwork was not created")
+	}
+	if sub.IpCidrRange != spec.SubnetCIDR {
+		t.Errorf("subnetwork CIDR = %q, want %q", sub.IpCidrRange, spec.SubnetCIDR)
+	}
+}
+
+func (f *fakeGCP) called(name string) bool {
+	for _, c := range f.calls {
+		if c == name {
+			return true
+		}
+	}
+	return false
+}
 
 func TestNetworkProvisioner_AllowEgress_CreatesRule(t *testing.T) {
 	f := newFakeGCP()

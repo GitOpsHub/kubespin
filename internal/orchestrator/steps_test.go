@@ -27,6 +27,14 @@ type fakeCloud struct {
 	createErr   error
 	identityErr error
 	egressErr   error
+	networkErr  error
+
+	// ensuredSubnets, if set, is what EnsureNetwork resolves spec.Subnets to
+	// — standing in for Azure creating a network when none was supplied.
+	ensuredSubnets []string
+	// createdSubnets records spec.Subnets as Create actually received it, so
+	// a test can assert EnsureNetwork's result reached Cluster.Create.
+	createdSubnets []string
 }
 
 func newFakeCloud() *fakeCloud {
@@ -35,8 +43,9 @@ func newFakeCloud() *fakeCloud {
 
 func (f *fakeCloud) Provider() core.Provider { return core.ProviderAWS }
 
-func (f *fakeCloud) Create(context.Context, core.ClusterSpec) error {
+func (f *fakeCloud) Create(_ context.Context, spec core.ClusterSpec) error {
 	f.calls = append(f.calls, "Create")
+	f.createdSubnets = spec.Subnets
 	return f.createErr
 }
 
@@ -80,6 +89,20 @@ func (f *fakeCloud) AllowEgress(
 	return provisioner.Change{Changed: true}, f.egressErr
 }
 
+func (f *fakeCloud) EnsureNetwork(
+	_ context.Context, spec core.ClusterSpec,
+) (provisioner.NetworkResult, error) {
+	f.calls = append(f.calls, "EnsureNetwork")
+	if f.networkErr != nil {
+		return provisioner.NetworkResult{}, f.networkErr
+	}
+	subnets := spec.Subnets
+	if f.ensuredSubnets != nil {
+		subnets = f.ensuredSubnets
+	}
+	return provisioner.NetworkResult{SubnetIDs: subnets}, nil
+}
+
 func (f *fakeCloud) cloud() Cloud {
 	return Cloud{
 		Cluster:  f,
@@ -117,18 +140,53 @@ func TestProvisioningSteps_DriveTheProvisioners(t *testing.T) {
 		t.Errorf("Phase = %s, want ready", rec.Phase)
 	}
 
-	for _, want := range []string{"Create", "Describe", "Reconcile", "AllowEgress", "ProvisionForComponent"} {
+	for _, want := range []string{"EnsureNetwork", "Create", "Describe", "Reconcile", "AllowEgress", "ProvisionForComponent"} {
 		if !slices.Contains(f.calls, want) {
 			t.Errorf("%s was never called; calls were %v", want, f.calls)
 		}
 	}
 
+	// The network must be resolved before the cluster is requested — Create
+	// needs the subnet EnsureNetwork returns.
+	network := slices.Index(f.calls, "EnsureNetwork")
+	create := slices.Index(f.calls, "Create")
+	if network > create {
+		t.Errorf("calls were %v, want the network ensured before the cluster is created", f.calls)
+	}
+
 	// Identity binding needs the issuer, which only exists once the control
 	// plane is up — so it must follow the wait, not race it.
-	create := slices.Index(f.calls, "Create")
 	identity := slices.Index(f.calls, "ProvisionForComponent")
 	if create > identity {
 		t.Errorf("calls were %v, want the cluster created before identity is bound", f.calls)
+	}
+}
+
+// EnsureNetwork's result must reach Cluster.Create — this is what lets Azure
+// create a network and have the cluster actually land in it.
+func TestProvisioningSteps_NetworkResultReachesCreate(t *testing.T) {
+	f := newFakeCloud()
+	f.ensuredSubnets = []string{"/subscriptions/x/.../subnets/kubespin-created"}
+
+	if _, err := runWithCloud(t, f); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	if len(f.createdSubnets) != 1 || f.createdSubnets[0] != f.ensuredSubnets[0] {
+		t.Errorf("Create received subnets %v, want EnsureNetwork's result %v", f.createdSubnets, f.ensuredSubnets)
+	}
+}
+
+func TestProvisioningSteps_NetworkFailureStopsTheRun(t *testing.T) {
+	f := newFakeCloud()
+	f.networkErr = errors.New("no subnet available")
+
+	_, err := runWithCloud(t, f)
+	if err == nil {
+		t.Fatal("expected the run to fail")
+	}
+	if slices.Contains(f.calls, "Create") {
+		t.Error("Create was called despite EnsureNetwork failing")
 	}
 }
 

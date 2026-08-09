@@ -3,7 +3,9 @@ package aws
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -31,15 +33,25 @@ type fakeAWS struct {
 	attached   map[string][]string
 	oidc       map[string]string // arn -> url host
 	sgRules    []ec2types.SecurityGroupRule
+
+	vpcs         map[string]*ec2types.Vpc
+	subnets      map[string]*ec2types.Subnet
+	igws         map[string]*ec2types.InternetGateway
+	routeTables  map[string]*ec2types.RouteTable
+	nextResource int
 }
 
 func newFakeAWS() *fakeAWS {
 	return &fakeAWS{
-		nodeGroups: map[string]*ekstypes.Nodegroup{},
-		roles:      map[string]string{},
-		rolePolicy: map[string]string{},
-		attached:   map[string][]string{},
-		oidc:       map[string]string{},
+		nodeGroups:  map[string]*ekstypes.Nodegroup{},
+		roles:       map[string]string{},
+		rolePolicy:  map[string]string{},
+		attached:    map[string][]string{},
+		oidc:        map[string]string{},
+		vpcs:        map[string]*ec2types.Vpc{},
+		subnets:     map[string]*ec2types.Subnet{},
+		igws:        map[string]*ec2types.InternetGateway{},
+		routeTables: map[string]*ec2types.RouteTable{},
 	}
 }
 
@@ -63,6 +75,9 @@ var mutatingCalls = []string{
 	"CreateRole", "DeleteRole", "AttachRolePolicy", "DetachRolePolicy",
 	"UpdateAssumeRolePolicy", "CreateOpenIDConnectProvider",
 	"AuthorizeSecurityGroupEgress",
+	"CreateVpc", "ModifyVpcAttribute", "CreateSubnet",
+	"CreateInternetGateway", "AttachInternetGateway",
+	"CreateRouteTable", "CreateRoute", "AssociateRouteTable",
 }
 
 func (f *fakeAWS) assertNoMutations(t *testing.T) {
@@ -293,6 +308,181 @@ func (f *fakeAWS) AuthorizeSecurityGroupEgress(_ context.Context, in *ec2.Author
 		}
 	}
 	return &ec2.AuthorizeSecurityGroupEgressOutput{}, nil
+}
+
+// --- VPC / subnets / IGW / route tables ---
+
+func (f *fakeAWS) newID(prefix string) string {
+	f.nextResource++
+	return fmt.Sprintf("%s-%d", prefix, f.nextResource)
+}
+
+func tagsMatch(tags []ec2types.Tag, filters []ec2types.Filter) bool {
+	for _, filt := range filters {
+		name := aws.ToString(filt.Name)
+		key, ok := strings.CutPrefix(name, "tag:")
+		if !ok {
+			continue
+		}
+		var found bool
+		for _, t := range tags {
+			if aws.ToString(t.Key) == key && slices.Contains(filt.Values, aws.ToString(t.Value)) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func (f *fakeAWS) DescribeVpcs(_ context.Context, in *ec2.DescribeVpcsInput, _ ...func(*ec2.Options)) (*ec2.DescribeVpcsOutput, error) {
+	f.record("DescribeVpcs")
+	var out []ec2types.Vpc
+	for _, v := range f.vpcs {
+		if tagsMatch(v.Tags, in.Filters) {
+			out = append(out, *v)
+		}
+	}
+	return &ec2.DescribeVpcsOutput{Vpcs: out}, nil
+}
+
+func (f *fakeAWS) CreateVpc(_ context.Context, in *ec2.CreateVpcInput, _ ...func(*ec2.Options)) (*ec2.CreateVpcOutput, error) {
+	f.record("CreateVpc")
+	id := f.newID("vpc")
+	v := &ec2types.Vpc{VpcId: aws.String(id), CidrBlock: in.CidrBlock, State: ec2types.VpcStateAvailable}
+	for _, spec := range in.TagSpecifications {
+		v.Tags = append(v.Tags, spec.Tags...)
+	}
+	f.vpcs[id] = v
+	return &ec2.CreateVpcOutput{Vpc: v}, nil
+}
+
+func (f *fakeAWS) ModifyVpcAttribute(_ context.Context, _ *ec2.ModifyVpcAttributeInput, _ ...func(*ec2.Options)) (*ec2.ModifyVpcAttributeOutput, error) {
+	f.record("ModifyVpcAttribute")
+	return &ec2.ModifyVpcAttributeOutput{}, nil
+}
+
+func (f *fakeAWS) DescribeAvailabilityZones(context.Context, *ec2.DescribeAvailabilityZonesInput, ...func(*ec2.Options)) (*ec2.DescribeAvailabilityZonesOutput, error) {
+	f.record("DescribeAvailabilityZones")
+	return &ec2.DescribeAvailabilityZonesOutput{
+		AvailabilityZones: []ec2types.AvailabilityZone{
+			{ZoneName: aws.String("us-east-1a"), State: ec2types.AvailabilityZoneStateAvailable},
+			{ZoneName: aws.String("us-east-1b"), State: ec2types.AvailabilityZoneStateAvailable},
+			{ZoneName: aws.String("us-east-1c"), State: ec2types.AvailabilityZoneStateAvailable},
+		},
+	}, nil
+}
+
+func (f *fakeAWS) DescribeSubnets(_ context.Context, in *ec2.DescribeSubnetsInput, _ ...func(*ec2.Options)) (*ec2.DescribeSubnetsOutput, error) {
+	f.record("DescribeSubnets")
+	var out []ec2types.Subnet
+	for _, s := range f.subnets {
+		if tagsMatch(s.Tags, in.Filters) {
+			out = append(out, *s)
+		}
+	}
+	return &ec2.DescribeSubnetsOutput{Subnets: out}, nil
+}
+
+func (f *fakeAWS) CreateSubnet(_ context.Context, in *ec2.CreateSubnetInput, _ ...func(*ec2.Options)) (*ec2.CreateSubnetOutput, error) {
+	f.record("CreateSubnet")
+	id := f.newID("subnet")
+	s := &ec2types.Subnet{
+		SubnetId:         aws.String(id),
+		VpcId:            in.VpcId,
+		CidrBlock:        in.CidrBlock,
+		AvailabilityZone: in.AvailabilityZone,
+	}
+	for _, spec := range in.TagSpecifications {
+		s.Tags = append(s.Tags, spec.Tags...)
+	}
+	f.subnets[id] = s
+	return &ec2.CreateSubnetOutput{Subnet: s}, nil
+}
+
+func (f *fakeAWS) DescribeInternetGateways(_ context.Context, in *ec2.DescribeInternetGatewaysInput, _ ...func(*ec2.Options)) (*ec2.DescribeInternetGatewaysOutput, error) {
+	f.record("DescribeInternetGateways")
+	var out []ec2types.InternetGateway
+	for _, igw := range f.igws {
+		if tagsMatch(igw.Tags, in.Filters) {
+			out = append(out, *igw)
+		}
+	}
+	return &ec2.DescribeInternetGatewaysOutput{InternetGateways: out}, nil
+}
+
+func (f *fakeAWS) CreateInternetGateway(_ context.Context, in *ec2.CreateInternetGatewayInput, _ ...func(*ec2.Options)) (*ec2.CreateInternetGatewayOutput, error) {
+	f.record("CreateInternetGateway")
+	id := f.newID("igw")
+	igw := &ec2types.InternetGateway{InternetGatewayId: aws.String(id)}
+	for _, spec := range in.TagSpecifications {
+		igw.Tags = append(igw.Tags, spec.Tags...)
+	}
+	f.igws[id] = igw
+	return &ec2.CreateInternetGatewayOutput{InternetGateway: igw}, nil
+}
+
+func (f *fakeAWS) AttachInternetGateway(_ context.Context, in *ec2.AttachInternetGatewayInput, _ ...func(*ec2.Options)) (*ec2.AttachInternetGatewayOutput, error) {
+	f.record("AttachInternetGateway")
+	igw, ok := f.igws[aws.ToString(in.InternetGatewayId)]
+	if !ok {
+		return nil, fmt.Errorf("InvalidInternetGatewayID.NotFound: %s", aws.ToString(in.InternetGatewayId))
+	}
+	igw.Attachments = append(igw.Attachments, ec2types.InternetGatewayAttachment{VpcId: in.VpcId})
+	return &ec2.AttachInternetGatewayOutput{}, nil
+}
+
+func (f *fakeAWS) DescribeRouteTables(_ context.Context, in *ec2.DescribeRouteTablesInput, _ ...func(*ec2.Options)) (*ec2.DescribeRouteTablesOutput, error) {
+	f.record("DescribeRouteTables")
+	var out []ec2types.RouteTable
+	for _, rt := range f.routeTables {
+		if tagsMatch(rt.Tags, in.Filters) {
+			out = append(out, *rt)
+		}
+	}
+	return &ec2.DescribeRouteTablesOutput{RouteTables: out}, nil
+}
+
+func (f *fakeAWS) CreateRouteTable(_ context.Context, in *ec2.CreateRouteTableInput, _ ...func(*ec2.Options)) (*ec2.CreateRouteTableOutput, error) {
+	f.record("CreateRouteTable")
+	id := f.newID("rtb")
+	rt := &ec2types.RouteTable{RouteTableId: aws.String(id), VpcId: in.VpcId}
+	for _, spec := range in.TagSpecifications {
+		rt.Tags = append(rt.Tags, spec.Tags...)
+	}
+	f.routeTables[id] = rt
+	return &ec2.CreateRouteTableOutput{RouteTable: rt}, nil
+}
+
+func (f *fakeAWS) CreateRoute(_ context.Context, in *ec2.CreateRouteInput, _ ...func(*ec2.Options)) (*ec2.CreateRouteOutput, error) {
+	f.record("CreateRoute")
+	rt, ok := f.routeTables[aws.ToString(in.RouteTableId)]
+	if !ok {
+		return nil, fmt.Errorf("InvalidRouteTableID.NotFound: %s", aws.ToString(in.RouteTableId))
+	}
+	rt.Routes = append(rt.Routes, ec2types.Route{
+		DestinationCidrBlock: in.DestinationCidrBlock,
+		GatewayId:            in.GatewayId,
+	})
+	return &ec2.CreateRouteOutput{Return: aws.Bool(true)}, nil
+}
+
+func (f *fakeAWS) AssociateRouteTable(_ context.Context, in *ec2.AssociateRouteTableInput, _ ...func(*ec2.Options)) (*ec2.AssociateRouteTableOutput, error) {
+	f.record("AssociateRouteTable")
+	rt, ok := f.routeTables[aws.ToString(in.RouteTableId)]
+	if !ok {
+		return nil, fmt.Errorf("InvalidRouteTableID.NotFound: %s", aws.ToString(in.RouteTableId))
+	}
+	assocID := f.newID("rtbassoc")
+	rt.Associations = append(rt.Associations, ec2types.RouteTableAssociation{
+		RouteTableAssociationId: aws.String(assocID),
+		RouteTableId:            in.RouteTableId,
+		SubnetId:                in.SubnetId,
+	})
+	return &ec2.AssociateRouteTableOutput{AssociationId: aws.String(assocID)}, nil
 }
 
 // --- helpers ---
