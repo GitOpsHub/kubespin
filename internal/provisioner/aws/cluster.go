@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
@@ -21,10 +22,15 @@ import (
 // ClusterProvisioner creates and reconciles EKS clusters.
 type ClusterProvisioner struct {
 	c *Clients
+
+	// wait tunes the polls Delete makes while node groups drain.
+	wait provisioner.WaitOptions
 }
 
 // NewClusterProvisioner builds an EKS provisioner over the given clients.
-func NewClusterProvisioner(c *Clients) *ClusterProvisioner { return &ClusterProvisioner{c: c} }
+func NewClusterProvisioner(c *Clients) *ClusterProvisioner {
+	return &ClusterProvisioner{c: c, wait: provisioner.DefaultWaitOptions()}
+}
 
 // Provider identifies this implementation's cloud.
 func (p *ClusterProvisioner) Provider() core.Provider { return core.ProviderAWS }
@@ -346,7 +352,20 @@ func (p *ClusterProvisioner) createNodeGroup(
 }
 
 // Delete tears down node groups then the cluster.
+//
+// It returns once EKS has accepted the cluster deletion; the caller polls
+// Describe (provisioner.WaitUntilGone) until the cluster is really gone. A
+// cluster already tearing down is convergence rather than an error, so a
+// retried teardown resumes instead of failing on ResourceInUseException.
 func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) error {
+	state, err := p.Describe(ctx, spec)
+	if err != nil {
+		return err
+	}
+	if state.Status == provisioner.StatusAbsent || state.Status == provisioner.StatusDeleting {
+		return nil
+	}
+
 	listed, err := p.c.eks.ListNodegroups(ctx, &eks.ListNodegroupsInput{
 		ClusterName: aws.String(names{spec}.cluster()),
 	})
@@ -374,6 +393,15 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 		}
 	}
 
+	// DeleteNodegroup only accepts the request — draining and terminating the
+	// nodes takes minutes, and DeleteCluster fails with ResourceInUseException
+	// the whole time. Poll until the last one is gone rather than racing it.
+	if len(listed.Nodegroups) > 0 {
+		if err := p.waitForNodeGroupsGone(ctx, spec); err != nil {
+			return err
+		}
+	}
+
 	if _, err := p.c.eks.DeleteCluster(ctx, &eks.DeleteClusterInput{
 		Name: aws.String(names{spec}.cluster()),
 	}); err != nil {
@@ -384,6 +412,48 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 		return fmt.Errorf("deleting EKS cluster %s: %w", spec.ID, err)
 	}
 	return nil
+}
+
+// waitForNodeGroupsGone polls until the cluster reports no node groups.
+//
+// A vanished cluster is success, not an error: something else finished the
+// teardown, which is exactly what this was waiting for.
+func (p *ClusterProvisioner) waitForNodeGroupsGone(ctx context.Context, spec core.ClusterSpec) error {
+	opts := p.wait
+	if opts.Interval <= 0 {
+		opts.Interval = provisioner.DefaultWaitOptions().Interval
+	}
+	if opts.Timeout <= 0 {
+		opts.Timeout = provisioner.DefaultWaitOptions().Timeout
+	}
+	deadline := time.Now().Add(opts.Timeout)
+
+	for {
+		listed, err := p.c.eks.ListNodegroups(ctx, &eks.ListNodegroupsInput{
+			ClusterName: aws.String(names{spec}.cluster()),
+		})
+		if err != nil {
+			var missing *ekstypes.ResourceNotFoundException
+			if errors.As(err, &missing) {
+				return nil
+			}
+			return fmt.Errorf("listing node groups for %s: %w", spec.ID, err)
+		}
+		if len(listed.Nodegroups) == 0 {
+			return nil
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for node groups of %s to delete; still present: %s",
+				spec.ID, strings.Join(listed.Nodegroups, ", "))
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for node groups of %s to delete: %w", spec.ID, ctx.Err())
+		case <-time.After(opts.Interval):
+		}
+	}
 }
 
 // ensureRole creates a service role if absent and attaches the managed policies.

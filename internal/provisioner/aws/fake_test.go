@@ -34,6 +34,12 @@ type fakeAWS struct {
 	oidc       map[string]string // arn -> url host
 	sgRules    []ec2types.SecurityGroupRule
 
+	// nodeGroupDeletePolls models the real asynchrony of DeleteNodegroup: how
+	// many ListNodegroups calls a deleted node group survives before it is
+	// actually gone. Zero deletes it immediately.
+	nodeGroupDeletePolls int
+	deletingNodeGroups   map[string]int
+
 	vpcs         map[string]*ec2types.Vpc
 	subnets      map[string]*ec2types.Subnet
 	igws         map[string]*ec2types.InternetGateway
@@ -43,15 +49,16 @@ type fakeAWS struct {
 
 func newFakeAWS() *fakeAWS {
 	return &fakeAWS{
-		nodeGroups:  map[string]*ekstypes.Nodegroup{},
-		roles:       map[string]string{},
-		rolePolicy:  map[string]string{},
-		attached:    map[string][]string{},
-		oidc:        map[string]string{},
-		vpcs:        map[string]*ec2types.Vpc{},
-		subnets:     map[string]*ec2types.Subnet{},
-		igws:        map[string]*ec2types.InternetGateway{},
-		routeTables: map[string]*ec2types.RouteTable{},
+		nodeGroups:         map[string]*ekstypes.Nodegroup{},
+		deletingNodeGroups: map[string]int{},
+		roles:              map[string]string{},
+		rolePolicy:         map[string]string{},
+		attached:           map[string][]string{},
+		oidc:               map[string]string{},
+		vpcs:               map[string]*ec2types.Vpc{},
+		subnets:            map[string]*ec2types.Subnet{},
+		igws:               map[string]*ec2types.InternetGateway{},
+		routeTables:        map[string]*ec2types.RouteTable{},
 	}
 }
 
@@ -145,6 +152,16 @@ func (f *fakeAWS) ListNodegroups(context.Context, *eks.ListNodegroupsInput, ...f
 	for name := range f.nodeGroups {
 		names = append(names, name)
 	}
+
+	// Age any in-flight deletions by one poll, dropping those that have drained.
+	for name, remaining := range f.deletingNodeGroups {
+		if remaining <= 1 {
+			delete(f.deletingNodeGroups, name)
+			delete(f.nodeGroups, name)
+			continue
+		}
+		f.deletingNodeGroups[name] = remaining - 1
+	}
 	return &eks.ListNodegroupsOutput{Nodegroups: names}, nil
 }
 
@@ -176,7 +193,12 @@ func (f *fakeAWS) UpdateNodegroupConfig(_ context.Context, in *eks.UpdateNodegro
 
 func (f *fakeAWS) DeleteNodegroup(_ context.Context, in *eks.DeleteNodegroupInput, _ ...func(*eks.Options)) (*eks.DeleteNodegroupOutput, error) {
 	f.record("DeleteNodegroup")
-	delete(f.nodeGroups, aws.ToString(in.NodegroupName))
+	name := aws.ToString(in.NodegroupName)
+	if f.nodeGroupDeletePolls > 0 {
+		f.deletingNodeGroups[name] = f.nodeGroupDeletePolls
+		return &eks.DeleteNodegroupOutput{}, nil
+	}
+	delete(f.nodeGroups, name)
 	return &eks.DeleteNodegroupOutput{}, nil
 }
 

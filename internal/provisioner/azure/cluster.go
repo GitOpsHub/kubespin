@@ -330,16 +330,42 @@ func agentPoolProfileAsPool(pool core.NodePool, subnetID string) *armcontainerse
 
 // Delete tears down the cluster. AKS deletes its node pools along with it, so
 // unlike EKS there is no separate node-pool teardown step.
+//
+// Deletion is asynchronous: BeginDelete starts the long-running operation and
+// this returns once Azure has accepted it, leaving the caller to poll Describe
+// (provisioner.WaitUntilGone) until the cluster is really gone. A cluster
+// already tearing down is convergence rather than an error — Azure answers a
+// second delete against a Deleting cluster with 409, and a retried teardown
+// has to resume, not fail.
 func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) error {
-	n := names{spec}
+	if done, err := p.alreadyGoing(ctx, spec); err != nil || done {
+		return err
+	}
 
+	n := names{spec}
 	if err := p.c.cluster.Delete(ctx, n.resourceGroup(), n.cluster()); err != nil {
 		if code(err) == 404 {
 			return nil
 		}
+		// Lost a race with another teardown between the check above and here.
+		if code(err) == 409 {
+			if done, derr := p.alreadyGoing(ctx, spec); derr == nil && done {
+				return nil
+			}
+		}
 		return fmt.Errorf("deleting AKS cluster %s: %w", spec.ID, err)
 	}
 	return nil
+}
+
+// alreadyGoing reports whether the cluster is gone or on its way out, in which
+// case there is nothing left for Delete to request.
+func (p *ClusterProvisioner) alreadyGoing(ctx context.Context, spec core.ClusterSpec) (bool, error) {
+	state, err := p.Describe(ctx, spec)
+	if err != nil {
+		return false, err
+	}
+	return state.Status == provisioner.StatusAbsent || state.Status == provisioner.StatusDeleting, nil
 }
 
 // validateForAKS covers requirements AKS adds beyond the shared spec rules.

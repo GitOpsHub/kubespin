@@ -2,6 +2,7 @@ package gcp
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"cloud.google.com/go/container/apiv1/containerpb"
@@ -204,6 +205,23 @@ func TestClusterProvisioner_Delete(t *testing.T) {
 	// Deleting an absent cluster converges rather than erroring.
 	if err := p.Delete(context.Background(), spec); err != nil {
 		t.Fatalf("second Delete should converge: %v", err)
+	}
+}
+
+// The teardown a retried `delete` resumes runs against a cluster GKE is still
+// tearing down; a second DeleteCluster there fails with FailedPrecondition.
+func TestClusterProvisioner_Delete_ConvergesOnAClusterAlreadyDeleting(t *testing.T) {
+	f := newFakeGCP()
+	spec := testSpec()
+	f.activeCluster(spec)
+	f.cluster.Status = containerpb.Cluster_STOPPING
+	f.calls = nil
+
+	if err := NewClusterProvisioner(f.clients()).Delete(context.Background(), spec); err != nil {
+		t.Fatalf("Delete on a deleting cluster: %v", err)
+	}
+	if slices.Contains(f.calls, "DeleteCluster") {
+		t.Errorf("calls = %v, want no second DeleteCluster while one is in flight", f.calls)
 	}
 }
 

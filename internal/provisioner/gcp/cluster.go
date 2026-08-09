@@ -352,16 +352,41 @@ func (p *ClusterProvisioner) createNodePool(ctx context.Context, spec core.Clust
 
 // Delete tears down the cluster. GKE deletes its node pools along with it, so
 // unlike EKS there is no separate node-pool teardown step.
+//
+// Deletion is asynchronous: this returns once GKE has accepted the request,
+// and the caller polls Describe (provisioner.WaitUntilGone) until the cluster
+// is really gone. A cluster already tearing down is convergence rather than an
+// error — GKE rejects a second DeleteCluster with FailedPrecondition while an
+// operation is in flight, and a retried teardown has to resume, not fail.
 func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) error {
-	n := p.names(spec)
+	if done, err := p.alreadyGoing(ctx, spec); err != nil || done {
+		return err
+	}
 
+	n := p.names(spec)
 	if _, err := p.c.cluster.DeleteCluster(ctx, &containerpb.DeleteClusterRequest{Name: n.clusterPath()}); err != nil {
 		if status.Code(err) == codes.NotFound {
 			return nil
 		}
+		// Lost a race with another teardown between the check above and here.
+		if status.Code(err) == codes.FailedPrecondition {
+			if done, derr := p.alreadyGoing(ctx, spec); derr == nil && done {
+				return nil
+			}
+		}
 		return fmt.Errorf("deleting GKE cluster %s: %w", spec.ID, err)
 	}
 	return nil
+}
+
+// alreadyGoing reports whether the cluster is gone or on its way out, in which
+// case there is nothing left for Delete to request.
+func (p *ClusterProvisioner) alreadyGoing(ctx context.Context, spec core.ClusterSpec) (bool, error) {
+	state, err := p.Describe(ctx, spec)
+	if err != nil {
+		return false, err
+	}
+	return state.Status == provisioner.StatusAbsent || state.Status == provisioner.StatusDeleting, nil
 }
 
 // validateForGKE covers requirements GKE adds beyond the shared spec rules.

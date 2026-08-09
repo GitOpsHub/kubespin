@@ -2,7 +2,9 @@ package aws
 
 import (
 	"errors"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
@@ -308,6 +310,77 @@ func TestDelete(t *testing.T) {
 		}
 		if deletedNodeGroup == 0 || deletedCluster == 0 || deletedNodeGroup > deletedCluster {
 			t.Errorf("calls were %v, want the node group deleted before the cluster", f.calls)
+		}
+	})
+
+	t.Run("waits for node groups to drain before deleting the cluster", func(t *testing.T) {
+		// DeleteNodegroup only accepts the request; until the nodes are really
+		// gone EKS answers DeleteCluster with ResourceInUseException.
+		f := newFakeAWS()
+		spec := testSpec()
+		f.activeCluster(spec)
+		f.withNodePool(spec, spec.NodePools[0])
+		f.nodeGroupDeletePolls = 3
+
+		p := NewClusterProvisioner(f.clients())
+		p.wait = provisioner.WaitOptions{Interval: time.Millisecond, Timeout: time.Second}
+
+		if err := p.Delete(t.Context(), spec); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+		if len(f.nodeGroups) != 0 {
+			t.Fatalf("node groups still present: %v", f.nodeGroups)
+		}
+
+		// The cluster must not be deleted until a poll has seen zero node groups.
+		deleteCluster := slices.Index(f.calls, "DeleteCluster")
+		if deleteCluster < 0 {
+			t.Fatalf("calls were %v, want the cluster deleted", f.calls)
+		}
+		polls := 0
+		for _, call := range f.calls[:deleteCluster] {
+			if call == "ListNodegroups" {
+				polls++
+			}
+		}
+		if polls < 4 { // the initial list plus one per drain poll
+			t.Errorf("calls were %v, want DeleteCluster only after polling node groups to zero", f.calls)
+		}
+	})
+
+	t.Run("times out rather than hanging when node groups never drain", func(t *testing.T) {
+		f := newFakeAWS()
+		spec := testSpec()
+		f.activeCluster(spec)
+		f.withNodePool(spec, spec.NodePools[0])
+		f.nodeGroupDeletePolls = 1_000_000
+
+		p := NewClusterProvisioner(f.clients())
+		p.wait = provisioner.WaitOptions{Interval: time.Millisecond, Timeout: 10 * time.Millisecond}
+
+		err := p.Delete(t.Context(), spec)
+		if err == nil {
+			t.Fatal("Delete succeeded, want a timeout")
+		}
+		if f.called("DeleteCluster") {
+			t.Error("the cluster was deleted while node groups were still attached")
+		}
+	})
+
+	// The teardown a retried `delete` resumes runs against a cluster EKS is
+	// still tearing down; deleting it again answers ResourceInUseException.
+	t.Run("converges on a cluster already deleting", func(t *testing.T) {
+		f := newFakeAWS()
+		spec := testSpec()
+		f.activeCluster(spec)
+		f.cluster.Status = ekstypes.ClusterStatusDeleting
+		f.calls = nil
+
+		if err := NewClusterProvisioner(f.clients()).Delete(t.Context(), spec); err != nil {
+			t.Fatalf("Delete on a deleting cluster: %v", err)
+		}
+		if f.called("DeleteCluster", "DeleteNodegroup") {
+			t.Errorf("calls = %v, want no second teardown request while one is in flight", f.calls)
 		}
 	})
 

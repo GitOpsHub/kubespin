@@ -24,6 +24,11 @@ type fakeCloud struct {
 	statuses  []provisioner.Status
 	describes int
 
+	// deletingPolls is how many Describe calls after Delete still report the
+	// cluster deleting, modelling the cloud's asynchronous teardown.
+	deletingPolls int
+	deleted       bool
+
 	createErr   error
 	identityErr error
 	egressErr   error
@@ -52,6 +57,14 @@ func (f *fakeCloud) Create(_ context.Context, spec core.ClusterSpec) error {
 func (f *fakeCloud) Describe(context.Context, core.ClusterSpec) (provisioner.ClusterState, error) {
 	f.calls = append(f.calls, "Describe")
 
+	if f.deleted {
+		if f.deletingPolls > 0 {
+			f.deletingPolls--
+			return provisioner.ClusterState{Status: provisioner.StatusDeleting}, nil
+		}
+		return provisioner.ClusterState{Status: provisioner.StatusAbsent}, nil
+	}
+
 	status := f.statuses[min(f.describes, len(f.statuses)-1)]
 	f.describes++
 	return provisioner.ClusterState{Status: status, NetworkID: "sg-cluster", OIDCIssuer: "https://issuer"}, nil
@@ -64,6 +77,7 @@ func (f *fakeCloud) Reconcile(context.Context, core.ClusterSpec) (provisioner.Ch
 
 func (f *fakeCloud) Delete(context.Context, core.ClusterSpec) error {
 	f.calls = append(f.calls, "Delete")
+	f.deleted = true
 	return nil
 }
 

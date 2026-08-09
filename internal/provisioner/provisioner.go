@@ -194,7 +194,7 @@ func StatusReporter() Component {
 	}
 }
 
-// WaitOptions tunes WaitUntilActive.
+// WaitOptions tunes WaitUntilActive and WaitUntilGone.
 type WaitOptions struct {
 	Interval time.Duration
 	Timeout  time.Duration
@@ -248,6 +248,54 @@ func WaitUntilActive(
 		select {
 		case <-ctx.Done():
 			return state, fmt.Errorf("waiting for %s: %w", spec.ID, ctx.Err())
+		case <-time.After(opts.Interval):
+		}
+	}
+}
+
+// WaitUntilGone polls Describe until the cluster no longer exists.
+//
+// Deletion is asynchronous on every cloud, exactly like creation: the API
+// accepts the request and the cluster lingers in a deleting state for minutes.
+// Teardown polls this before recording the cluster decommissioned, so the
+// registry never claims a cluster is gone while the cloud is still tearing it
+// down — and so a failed deletion surfaces as a failure rather than as a
+// clean-looking record.
+func WaitUntilGone(
+	ctx context.Context, p ClusterProvisioner, spec core.ClusterSpec, opts WaitOptions,
+) error {
+	if opts.Interval <= 0 {
+		opts.Interval = DefaultWaitOptions().Interval
+	}
+	if opts.Timeout <= 0 {
+		opts.Timeout = DefaultWaitOptions().Timeout
+	}
+	deadline := time.Now().Add(opts.Timeout)
+
+	for {
+		state, err := p.Describe(ctx, spec)
+		if err != nil {
+			return fmt.Errorf("describing %s: %w", spec.ID, err)
+		}
+
+		switch state.Status {
+		case StatusAbsent:
+			return nil
+		case StatusFailed:
+			// The cloud gave up mid-deletion; leaving the phase at
+			// decommissioning is what lets a retried delete resume.
+			return fmt.Errorf("%w: %s failed while deleting", ErrClusterFailed, spec.ID)
+		case StatusDeleting, StatusActive, StatusCreating, StatusUpdating:
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for %s to be deleted; last status %s",
+				spec.ID, state.Status)
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for %s to be deleted: %w", spec.ID, ctx.Err())
 		case <-time.After(opts.Interval):
 		}
 	}

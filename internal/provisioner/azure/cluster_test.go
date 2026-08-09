@@ -2,6 +2,7 @@ package azure
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/GitOpsHub/kubespin/internal/core"
@@ -210,6 +211,23 @@ func TestClusterProvisioner_Delete(t *testing.T) {
 	// Deleting an absent cluster converges rather than erroring.
 	if err := p.Delete(context.Background(), spec); err != nil {
 		t.Fatalf("second Delete should converge: %v", err)
+	}
+}
+
+// The teardown a retried `delete` resumes runs against a cluster Azure is
+// still tearing down; a second delete there comes back 409.
+func TestClusterProvisioner_Delete_ConvergesOnAClusterAlreadyDeleting(t *testing.T) {
+	f := newFakeAzure()
+	spec := testSpec()
+	f.activeCluster(spec)
+	f.cluster.Properties.ProvisioningState = ptr("Deleting")
+	f.calls = nil
+
+	if err := NewClusterProvisioner(f.clients()).Delete(context.Background(), spec); err != nil {
+		t.Fatalf("Delete on a deleting cluster: %v", err)
+	}
+	if slices.Contains(f.calls, "DeleteCluster") {
+		t.Errorf("calls = %v, want no second delete while one is in flight", f.calls)
 	}
 }
 

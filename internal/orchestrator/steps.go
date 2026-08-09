@@ -151,8 +151,19 @@ func Teardown(cloud Cloud, repoProv repo.Provisioner, logger *slog.Logger) Teard
 		}
 		logger.Info("deprovisioned workload identity", "cluster", spec.ID, "component", comp.Name)
 
+		// Node pools drain before the control plane goes, so this call blocks
+		// for minutes; say so rather than looking hung.
+		logger.Info("deleting cluster; node pools drain first, this takes several minutes",
+			"cluster", spec.ID)
 		if err := cloud.Cluster.Delete(ctx, spec); err != nil {
 			return fmt.Errorf("deleting cluster %s: %w", spec.ID, err)
+		}
+
+		// Delete only requests the teardown. Waiting for the cloud to report the
+		// cluster gone is what makes the decommissioned phase honest: the caller
+		// records it only after this returns.
+		if err := provisioner.WaitUntilGone(ctx, cloud.Cluster, spec, cloud.Wait); err != nil {
+			return fmt.Errorf("waiting for cluster %s to be deleted: %w", spec.ID, err)
 		}
 		logger.Info("deleted cluster", "cluster", spec.ID)
 
