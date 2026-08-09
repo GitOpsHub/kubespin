@@ -107,6 +107,38 @@ Three rules govern transitions, in precedence order:
 Validity is derived from `PhaseOrder`, not from the transition table: `ready` is
 a perfectly valid phase to be in despite having no forward successor.
 
+### The lease
+
+Provisioning is serialised by a lease on the cluster's registry item
+([internal/registry](../internal/registry)): a conditional write that succeeds
+only when the lease is free, expired, or already the caller's. Two `apply` runs
+against the same cluster cannot both proceed — the second is refused.
+
+The lease **expires** rather than being held until released. A run that crashes
+mid-provision must not wedge a cluster forever, so the claim self-heals once the
+TTL passes. Two consequences follow:
+
+- **The orchestrator renews before each step**, so the TTL only has to outlast
+  the longest single step, not an entire 30-minute provisioning run.
+- **Renewing an expired lease fails.** By then another holder may already own
+  it, and silently re-acquiring would defeat the lock.
+
+## Sequencing a run
+
+[internal/orchestrator](../internal/orchestrator) turns the state machine into
+an actual run: acquire the lease, then walk the phases, recording each in the
+registry only *after* its step succeeds.
+
+That ordering is what makes a run resumable. A failure leaves the cluster at its
+last completed phase; the next run reads that phase and re-enters there, so
+retry and first run are the same code path rather than a special case. It also
+means a step must be safe to re-run, since the step that failed is the one the
+retry executes first.
+
+The record is re-read after the lease is acquired, not before: between the two,
+another run may have advanced the cluster, and resuming from the earlier phase
+would repeat work already done.
+
 ## The cluster repository contract
 
 Each cluster's repository holds three files whose roles must stay distinct:

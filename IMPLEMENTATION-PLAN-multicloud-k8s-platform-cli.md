@@ -11,11 +11,13 @@ This plan sequences the ADR's four phases into concrete, dependency-ordered engi
 
 **Goal:** repo, tooling, and shared types exist before any cloud-specific code.
 
-- [ ] Go module scaffold: `cmd/` (cobra CLI entrypoints), `internal/provisioner/{aws,gcp,azure}`, `internal/identity/`, `internal/repo/`, `internal/registry/`, `internal/catalog/`
-- [ ] Shared domain types: `ClusterID`, `ClusterSpec` (incl. new `Access: private|public` field), `Profile`, `AddonRef`
-- [ ] `cobra` + `viper` CLI skeleton: `apply`, `delete`, `fleet update`, `fleet audit`, `fleet status` as stub commands
-- [ ] CI pipeline for the CLI itself (lint, test, build binary artifact)
-- [ ] AWS account/project bootstrap for shared platform infra (separate from any cluster account) — DynamoDB table, API Gateway + Lambda skeleton for Fleet Registry
+- [~] Go module scaffold: `cmd/` (cobra CLI entrypoints), `internal/provisioner/{aws,gcp,azure}`, `internal/identity/`, `internal/repo/`, `internal/registry/`, `internal/catalog/`
+  - `cmd/`, `internal/registry/`, and `internal/orchestrator/` exist. `provisioner`, `identity`, `repo`, and `catalog` are created by the milestones that fill them (M2–M4) rather than as empty directories.
+- [x] Shared domain types: `ClusterID`, `ClusterSpec` (incl. new `Access: private|public` field), `Profile`, `AddonRef`
+- [x] `cobra` + `viper` CLI skeleton: `apply`, `delete`, `fleet update`, `fleet audit`, `fleet status` as stub commands
+- [x] CI pipeline for the CLI itself (lint, test, build binary artifact)
+- [~] AWS account/project bootstrap for shared platform infra (separate from any cluster account) — DynamoDB table, API Gateway + Lambda skeleton for Fleet Registry
+  - Implemented as `kubespin fleet bootstrap` (Go + AWS SDK, no Terraform). **Not yet applied** — blocked on the fleet account ID and region.
 
 **Acceptance criteria:** `mycli --help` runs, shared types compile, CI green, empty Fleet Registry table exists in AWS and is reachable.
 
@@ -25,9 +27,9 @@ This plan sequences the ADR's four phases into concrete, dependency-ordered engi
 
 **Goal:** the durable backbone every other component writes to/reads from exists before provisioning logic depends on it.
 
-- [ ] DynamoDB schema: partition key `ClusterID`, attributes for state machine phase (`pending → cluster-created → identity-bound → repo-pushed → argocd-installed → ready`), metadata (provider, region, profile, access mode), and a `LastReportedAt` field for staleness detection
-- [ ] Distributed lock primitive (conditional writes / DynamoDB lease) keyed by `ClusterID`, used to prevent concurrent `apply` races
-- [ ] Registry client library used by every downstream component (`internal/registry`)
+- [x] DynamoDB schema: partition key `ClusterID`, attributes for state machine phase (`pending → cluster-created → identity-bound → repo-pushed → argocd-installed → ready`), metadata (provider, region, profile, access mode), and a `LastReportedAt` field for staleness detection
+- [x] Distributed lock primitive (conditional writes / DynamoDB lease) keyed by `ClusterID`, used to prevent concurrent `apply` races
+- [x] Registry client library used by every downstream component (`internal/registry`)
 
 **Acceptance criteria:** can create/read/update/lock a fake cluster record end-to-end from a test; concurrent-write test proves the lock rejects a second in-flight `apply`.
 

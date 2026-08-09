@@ -28,14 +28,16 @@ make
 ## Layout
 
 ```
-cmd/kubespin/         binary entrypoint; wires signals and exit codes
-cmd/ingestion/        Central Ingestion API handler, deployed to Lambda
-internal/cli/         cobra command tree and configuration resolution
-internal/core/        shared domain types
-internal/fleetinfra/  SDK converge engine behind `fleet bootstrap`
-internal/tools/       build-time tools (docs generation)
-internal/version/     build metadata stamped in via -ldflags
-docs/cli/             generated — never edit by hand
+cmd/kubespin/          binary entrypoint; wires signals and exit codes
+cmd/ingestion/         Central Ingestion API handler, deployed to Lambda
+internal/cli/          cobra command tree and configuration resolution
+internal/core/         shared domain types
+internal/registry/     Fleet Registry client, lease primitive, in-memory implementation
+internal/orchestrator/ sequences one cluster's provisioning through the phases
+internal/fleetinfra/   SDK converge engine behind `fleet bootstrap`
+internal/tools/        build-time tools (docs generation)
+internal/version/      build metadata stamped in via -ldflags
+docs/cli/              generated — never edit by hand
 ```
 
 **`internal/core` imports nothing from `internal/`.** No cloud SDKs, no I/O, no
@@ -68,6 +70,37 @@ AWS or DynamoDB Local goes behind the build tag:
 ```
 
 Those run via `make integration` and nightly in CI, never on a pull request.
+
+To run the registry integration tests locally:
+
+```bash
+docker run -d --rm -p 8000:8000 --name kubespin-ddb-local amazon/dynamodb-local:latest
+```
+
+```bash
+KUBESPIN_DYNAMODB_ENDPOINT=http://localhost:8000 make integration
+```
+
+Note that `make test` alone reports low coverage for `internal/registry`: the
+DynamoDB implementation is only reachable under the integration tag. The number
+is not a measure of how well that package is tested.
+
+### The registry contract
+
+`internal/registry/contract_test.go` is the behaviour every implementation must
+satisfy, written once and run against both the in-memory registry and DynamoDB
+Local. Add new registry behaviour there rather than in an implementation's own
+test file — a guarantee proven against only one implementation is not a
+guarantee.
+
+The in-memory registry deliberately enforces the same conditions as DynamoDB.
+It is not a simplified stand-in: if it accepted writes DynamoDB would reject,
+the orchestrator tests built on it would pass while production failed.
+
+The load-bearing case is `concurrent acquisition elects exactly one holder`,
+which races sixteen goroutines at a single lease. It runs against real DynamoDB
+too, because that is the only place the conditional-write expression itself is
+under test. A sequential simulation of this would pass against a broken lock.
 
 ### Testing against AWS
 
