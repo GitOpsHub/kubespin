@@ -15,6 +15,18 @@ import (
 // rather than a file.
 const defaultPoolName = "default"
 
+// defaultInstanceType is the node pool instance type used when --instance-type
+// is left at its registered default, keyed by provider. Instance type naming
+// is cloud-specific (AWS "m6i.large" vs Azure "Standard_D4s_v7" vs GCP
+// "e2-standard-4"), so a single flag default can only ever be right for one
+// cloud; the other two silently get an invalid value passed straight through
+// to the cloud API.
+var defaultInstanceType = map[core.Provider]string{
+	core.ProviderAWS:   "m6i.large",
+	core.ProviderGCP:   "e2-standard-4",
+	core.ProviderAzure: "Standard_D4s_v7",
+}
+
 // loadSpec builds a cluster spec from --spec, or from the individual flags.
 //
 // The file form is the same cluster.yaml that lives in a cluster's repository,
@@ -135,6 +147,11 @@ func applyNodePoolFlags(cmd *cobra.Command, spec *core.ClusterSpec) error {
 	instanceType, err := flags.GetString("instance-type")
 	if err != nil {
 		return fmt.Errorf("reading --instance-type: %w", err)
+	}
+	if !flags.Changed("instance-type") {
+		if def, ok := defaultInstanceType[spec.Provider]; ok {
+			instanceType = def
+		}
 	}
 	minSize, err := flags.GetInt32("min-size")
 	if err != nil {

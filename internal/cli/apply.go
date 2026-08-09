@@ -76,7 +76,7 @@ holds — or from the flags below, which override the file when given.`,
 	fs.String("github-upload-url", "", "GitHub Enterprise upload URL (leave empty for github.com)")
 	fs.String("profiles-repo", "", "platform-profiles repository name to resolve profiles from (uses the builtin catalog if empty)")
 
-	fs.String("instance-type", "m6i.large", "instance type for the default node pool")
+	fs.String("instance-type", "m6i.large", "instance type for the default node pool (defaults to a cloud-appropriate value per --provider when unset: m6i.large on aws, e2-standard-4 on gcp, Standard_D4s_v7 on azure)")
 	fs.Int32("min-size", 1, "minimum size of the default node pool")
 	fs.Int32("max-size", 5, "maximum size of the default node pool")
 	fs.Int32("desired-size", 2, "desired size of the default node pool")
