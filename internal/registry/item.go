@@ -20,6 +20,7 @@ const (
 	attrAccess         = "Access"
 	attrProfileName    = "ProfileName"
 	attrProfileVersion = "ProfileVersion"
+	attrOIDCIssuer     = "OIDCIssuer"
 	attrVersion        = "Version"
 	attrLastReportedAt = "LastReportedAt"
 	attrCreatedAt      = "CreatedAt"
@@ -63,6 +64,9 @@ func marshalRecord(rec Record) map[string]types.AttributeValue {
 			Value: rec.LastReportedAt.UTC().Format(time.RFC3339Nano),
 		}
 	}
+	if rec.OIDCIssuer != "" {
+		item[attrOIDCIssuer] = &types.AttributeValueMemberS{Value: rec.OIDCIssuer}
+	}
 	if rec.Lease != nil {
 		item[attrLeaseHolder] = &types.AttributeValueMemberS{Value: rec.Lease.Holder}
 		item[attrLeaseExpiresAt] = &types.AttributeValueMemberN{Value: epochMillis(rec.Lease.ExpiresAt)}
@@ -86,6 +90,7 @@ func unmarshalRecord(item map[string]types.AttributeValue) (Record, error) {
 			Name:    stringAttr(item, attrProfileName),
 			Version: stringAttr(item, attrProfileVersion),
 		},
+		OIDCIssuer: stringAttr(item, attrOIDCIssuer),
 	}
 
 	version, err := numberAttr(item, attrVersion)

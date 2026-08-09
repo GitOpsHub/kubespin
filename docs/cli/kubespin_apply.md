@@ -23,8 +23,13 @@ kubespin apply [flags]
 
 ```
       --access string               API server exposure: private or public (default "private")
+      --azure-subscription string   Azure subscription hosting the cluster (required for --provider azure)
       --cluster-id string           cluster identifier (also the repository suffix)
       --desired-size int32          desired size of the default node pool (default 2)
+      --gcp-project string          GCP project hosting the cluster (required for --provider gcp)
+      --github-base-url string      GitHub Enterprise API base URL (leave empty for github.com)
+      --github-org string           GitHub organization cluster repositories are created in
+      --github-upload-url string    GitHub Enterprise upload URL (leave empty for github.com)
   -h, --help                        help for apply
       --ingestion-endpoint string   Central Ingestion API host the cluster must be able to reach
       --instance-type string        instance type for the default node pool (default "m6i.large")
@@ -32,6 +37,7 @@ kubespin apply [flags]
       --max-size int32              maximum size of the default node pool (default 5)
       --min-size int32              minimum size of the default node pool (default 1)
       --profile string              profile reference from platform-profiles, e.g. tier-small@1.0.0
+      --profiles-repo string        platform-profiles repository name to resolve profiles from (uses the builtin catalog if empty)
       --provider string             cloud provider: aws, gcp, or azure
       --region string               cloud region
       --spec string                 path to a cluster.yaml describing the cluster

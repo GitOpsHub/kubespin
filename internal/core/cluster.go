@@ -145,6 +145,12 @@ type ClusterSpec struct {
 	// so a cluster tool that invented its own VPCs would fight that ownership
 	// rather than fit into it.
 	Subnets []string `yaml:"subnets" json:"subnets"`
+
+	// Overrides is this cluster's per-cluster patch onto Profile's resolved
+	// addon set. It lives here, in the user-authored cluster.yaml, rather than
+	// in a separate file: the addons.yaml the catalog resolves to is derived
+	// state, not something a cluster owner edits directly.
+	Overrides []AddonOverride `yaml:"overrides,omitempty" json:"overrides,omitempty"`
 }
 
 var kubernetesVersionPattern = regexp.MustCompile(`^\d+\.\d+$`)
@@ -192,6 +198,17 @@ func (s ClusterSpec) Validate() error {
 
 	if err := s.Profile.Validate(); err != nil {
 		errs = append(errs, err)
+	}
+
+	seenOverride := make(map[string]struct{}, len(s.Overrides))
+	for _, o := range s.Overrides {
+		if err := o.Validate(); err != nil {
+			errs = append(errs, err)
+		}
+		if _, dup := seenOverride[o.Name]; dup && o.Name != "" {
+			errs = append(errs, fmt.Errorf("%w: duplicate override for addon %q", ErrInvalidSpec, o.Name))
+		}
+		seenOverride[o.Name] = struct{}{}
 	}
 
 	return errors.Join(errs...)

@@ -351,6 +351,106 @@ func TestApply_RegistersANewCluster(t *testing.T) {
 	}
 }
 
+// WithReadyReconcile is M3's split-diff idempotence: the phase state machine
+// only ever runs each phase's step once, so a repeat `apply` against an
+// already-ready cluster has to reconcile some other way, or drift after
+// ready would never be noticed.
+func TestApply_ReadyReconcile_RunsOnAFreshlyReadyCluster(t *testing.T) {
+	reg := registry.NewMemory()
+	spec := testSpec()
+
+	var reconciled int
+	o := New(reg,
+		WithSteps(newRecorder().steps()),
+		WithHolder("test-runner"),
+		WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+		WithReadyReconcile(func(context.Context, core.ClusterSpec, registry.Record) error {
+			reconciled++
+			return nil
+		}),
+	)
+
+	if _, err := o.Apply(t.Context(), spec); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if reconciled != 1 {
+		t.Errorf("readyReconcile ran %d times, want 1", reconciled)
+	}
+}
+
+func TestApply_ReadyReconcile_RunsOnAnAlreadyReadyCluster(t *testing.T) {
+	reg := registry.NewMemory()
+	spec := testSpec()
+
+	// First apply reaches ready with no reconcile hook configured.
+	if _, err := newOrchestrator(t, reg, newRecorder().steps()).Apply(t.Context(), spec); err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+
+	var reconciled int
+	o := New(reg,
+		WithSteps(newRecorder().steps()),
+		WithHolder("test-runner"),
+		WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+		WithReadyReconcile(func(context.Context, core.ClusterSpec, registry.Record) error {
+			reconciled++
+			return nil
+		}),
+	)
+
+	if _, err := o.Apply(t.Context(), spec); err != nil {
+		t.Fatalf("second apply: %v", err)
+	}
+	if reconciled != 1 {
+		t.Errorf("readyReconcile ran %d times on an already-ready cluster, want 1", reconciled)
+	}
+}
+
+func TestApply_ReadyReconcile_ErrorSurfaces(t *testing.T) {
+	reg := registry.NewMemory()
+	spec := testSpec()
+
+	wantErr := errors.New("addon commit failed")
+	o := New(reg,
+		WithSteps(newRecorder().steps()),
+		WithHolder("test-runner"),
+		WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+		WithReadyReconcile(func(context.Context, core.ClusterSpec, registry.Record) error {
+			return wantErr
+		}),
+	)
+
+	if _, err := o.Apply(t.Context(), spec); !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want one wrapping %v", err, wantErr)
+	}
+}
+
+func TestApply_ReadyReconcile_DoesNotRunWhenTheStepsFail(t *testing.T) {
+	reg := registry.NewMemory()
+	spec := testSpec()
+
+	rec := newRecorder()
+	rec.fail[core.PhasePending] = errors.New("boom")
+
+	var reconciled int
+	o := New(reg,
+		WithSteps(rec.steps()),
+		WithHolder("test-runner"),
+		WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+		WithReadyReconcile(func(context.Context, core.ClusterSpec, registry.Record) error {
+			reconciled++
+			return nil
+		}),
+	)
+
+	if _, err := o.Apply(t.Context(), spec); err == nil {
+		t.Fatal("expected the step failure to surface")
+	}
+	if reconciled != 0 {
+		t.Error("readyReconcile ran despite the cluster never reaching ready")
+	}
+}
+
 func TestDefaultStepsCoverEveryProvisioningPhase(t *testing.T) {
 	// A phase with no registered step would stall a run at exactly that point,
 	// so the coverage is asserted rather than assumed.

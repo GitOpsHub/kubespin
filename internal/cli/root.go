@@ -2,8 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 
@@ -11,10 +9,6 @@ import (
 
 	"github.com/GitOpsHub/kubespin/internal/version"
 )
-
-// ErrNotImplemented is returned by commands that are scaffolded but not yet
-// built. Commands fail loudly rather than exiting zero and implying success.
-var ErrNotImplemented = errors.New("not implemented yet")
 
 type contextKey struct{ name string }
 
@@ -81,13 +75,4 @@ func LoggerFrom(ctx context.Context) *slog.Logger {
 		return l
 	}
 	return slog.Default()
-}
-
-// stub marks a scaffolded command. Each records what it will do so `--help`
-// stays honest about what exists today.
-func stub(name string) func(*cobra.Command, []string) error {
-	return func(cmd *cobra.Command, _ []string) error {
-		LoggerFrom(cmd.Context()).Debug("stub command invoked", "command", name)
-		return fmt.Errorf("%s: %w", name, ErrNotImplemented)
-	}
 }

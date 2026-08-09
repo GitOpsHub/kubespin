@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -21,10 +20,6 @@ func main() {
 
 	if err := cli.NewRootCommand().ExecuteContext(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "kubespin: %v\n", err)
-
-		if errors.Is(err, cli.ErrNotImplemented) {
-			os.Exit(3)
-		}
 		os.Exit(1)
 	}
 }

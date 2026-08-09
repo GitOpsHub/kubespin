@@ -127,6 +127,21 @@ func (m *Memory) Touch(_ context.Context, id core.ClusterID, at time.Time) error
 	return nil
 }
 
+// RecordOIDCIssuer sets the cluster's workload identity issuer.
+func (m *Memory) RecordOIDCIssuer(_ context.Context, id core.ClusterID, issuer string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	stored, ok := m.records[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+
+	stored.OIDCIssuer = issuer
+	m.records[id] = stored
+	return nil
+}
+
 // List returns records matching filter, ordered by cluster ID.
 func (m *Memory) List(_ context.Context, filter Filter) ([]Record, error) {
 	m.mu.Lock()

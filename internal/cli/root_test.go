@@ -57,18 +57,25 @@ func TestVersionFlag(t *testing.T) {
 	}
 }
 
-// Scaffolded commands must fail rather than exit zero and imply they did work.
-func TestStubCommandsReportNotImplemented(t *testing.T) {
-	// apply is implemented from M2 onward; the rest are still scaffolded.
+// Every command is implemented as of M9: none of them should exit zero
+// without a Fleet Registry to talk to. Reaching that specific error (rather
+// than, say, a flag-parsing failure) proves PersistentPreRunE resolved
+// config and the command's own body actually ran.
+func TestCommandsRequireRegistryRegion(t *testing.T) {
 	for _, args := range [][]string{
-		{"delete"},
-		{"fleet", "update"},
+		{"delete", "--cluster-id", "team-payments-prod", "--provider", "aws", "--region", "us-east-1",
+			"--profile", "tier-small@1.0.0", "--subnets", "subnet-a", "--yes"},
+		{"fleet", "update", "--component", "cert-manager", "--version", "1.16.0"},
 		{"fleet", "audit"},
 		{"fleet", "status"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			if _, err := execute(t, args...); !errors.Is(err, ErrNotImplemented) {
-				t.Errorf("error = %v, want one wrapping ErrNotImplemented", err)
+			_, err := execute(t, args...)
+			if !errors.Is(err, ErrConfig) {
+				t.Errorf("error = %v, want one wrapping ErrConfig", err)
+			}
+			if !strings.Contains(err.Error(), "registry-region") {
+				t.Errorf("error = %v, want it to name --registry-region", err)
 			}
 		})
 	}
@@ -85,24 +92,26 @@ func TestFleetWithNoSubcommandPrintsHelp(t *testing.T) {
 }
 
 func TestPersistentPreRunPopulatesContext(t *testing.T) {
-	// The stub returns ErrNotImplemented, but only after PersistentPreRunE has
-	// run — so reaching that error proves config resolution succeeded.
+	// fleet status's own body fails with a registry-region error, but only
+	// after PersistentPreRunE has run — so reaching that error (rather than a
+	// panic from a nil context value) proves config resolution succeeded.
 	root := NewRootCommand()
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
-	root.SetArgs([]string{"delete", "--log-level", "debug"})
+	root.SetArgs([]string{"fleet", "status", "--log-level", "debug"})
 
-	if err := root.Execute(); !errors.Is(err, ErrNotImplemented) {
-		t.Fatalf("error = %v, want one wrapping ErrNotImplemented", err)
+	err := root.Execute()
+	if !errors.Is(err, ErrConfig) || !strings.Contains(err.Error(), "registry-region") {
+		t.Fatalf("error = %v, want one wrapping ErrConfig naming --registry-region", err)
 	}
 }
 
 func TestInvalidGlobalFlagFailsBeforeCommandRuns(t *testing.T) {
-	_, err := execute(t, "delete", "--log-level", "chatty")
+	_, err := execute(t, "fleet", "status", "--log-level", "chatty")
 	if !errors.Is(err, ErrConfig) {
 		t.Errorf("error = %v, want one wrapping ErrConfig", err)
 	}
-	if errors.Is(err, ErrNotImplemented) {
-		t.Error("command body ran despite invalid configuration")
+	if strings.Contains(err.Error(), "registry-region") {
+		t.Error("command body ran despite invalid configuration: got the registry-region error instead of the log-level one")
 	}
 }

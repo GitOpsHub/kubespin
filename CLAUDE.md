@@ -32,13 +32,24 @@ These constrain nearly every design decision — violating one usually means the
 ```
 cmd/kubespin/                 cobra entrypoints: apply, delete, fleet bootstrap|update|audit|status
 cmd/ingestion/                Central Ingestion API handler (Go, deployed to Lambda)
+cmd/fleet-status-reporter/    in-cluster CronJob: queries local Argo CD, pushes signed status
 internal/fleetinfra/          SDK converge engine behind `fleet bootstrap`
-internal/provisioner/{aws,gcp,azure}   ClusterProvisioner impls (EKS/GKE/AKS)
-internal/identity/            IdentityProvisioner impls (IRSA / Workload Identity / federated credential)
-internal/repo/                RepoProvisioner over GitHub Enterprise (go-github): Exists/Create/Clone/Push
+internal/provisioner/{aws,gcp,azure}   ClusterProvisioner + IdentityProvisioner impls (EKS/GKE/AKS)
+internal/repo/                RepoProvisioner over GitHub Enterprise (go-github): Exists/Create/Clone/Push/Archive
 internal/registry/            Fleet Registry client + lease/locking
 internal/catalog/             profile resolution (tier-small/standard/regulated + per-cluster override patches)
+internal/argocd/              app-of-apps manifest rendering, ingress/Gateway access-mode templating, Argo CD install
+internal/orchestrator/        per-cluster phase state machine (apply) and reverse teardown (delete)
+internal/fleet/               fleet-wide operations: audit, update, status, all read/write through internal/registry
+internal/ingestion/           Central Ingestion API's verification (JWT/JWKS, per-cluster issuer binding) and write path
+internal/reporter/            fleet-status-reporter's Argo CD summary + signed push logic
 ```
+
+`internal/identity` in the original plan ended up folded into
+`internal/provisioner/{aws,gcp,azure}` instead of its own package —
+`IdentityProvisioner` is cloud-specific enough that keeping it beside its
+cloud's `ClusterProvisioner` reads better than a same-named type spread
+across two directories per cloud.
 
 Shared domain types (`ClusterID`, `ClusterSpec`, `Profile`, `AddonRef`) are defined once and consumed by all of the above.
 

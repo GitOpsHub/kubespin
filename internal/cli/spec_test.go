@@ -23,6 +23,17 @@ func applyCmd(t *testing.T, args ...string) *cobra.Command {
 	return cmd
 }
 
+// deleteCmd returns the delete command with args parsed, ready for loadSpec.
+func deleteCmd(t *testing.T, args ...string) *cobra.Command {
+	t.Helper()
+
+	cmd := newDeleteCommand()
+	if err := cmd.Flags().Parse(args); err != nil {
+		t.Fatalf("parsing %v: %v", args, err)
+	}
+	return cmd
+}
+
 func writeSpec(t *testing.T, body string) string {
 	t.Helper()
 
@@ -198,17 +209,49 @@ func TestParseProfileRef(t *testing.T) {
 	}
 }
 
-func TestApply_UnimplementedProviders(t *testing.T) {
-	// GCP and Azure must fail with a clear statement rather than a generic
-	// error, since the interfaces exist and only the implementations do not.
+// delete's flagset must define every flag loadSpec/applySpecFlags touches —
+// this is what a mismatch (a flag apply defines that delete forgot) would
+// fail on: GetString/GetInt32 against a flag that doesn't exist returns an
+// error, not a zero value.
+func TestDelete_LoadSpecFromFile(t *testing.T) {
+	spec, err := loadSpec(deleteCmd(t, "--spec", writeSpec(t, validSpecYAML)))
+	if err != nil {
+		t.Fatalf("loadSpec: %v", err)
+	}
+	if spec.ID.String() != "team-payments-prod" {
+		t.Errorf("ID = %q", spec.ID)
+	}
+}
+
+func TestDelete_LoadSpecFromFlags(t *testing.T) {
+	spec, err := loadSpec(deleteCmd(t,
+		"--cluster-id", "team-payments-prod",
+		"--provider", "aws",
+		"--region", "us-east-1",
+		"--profile", "tier-small@1.0.0",
+		"--subnets", "subnet-aaa,subnet-bbb",
+	))
+	if err != nil {
+		t.Fatalf("loadSpec: %v", err)
+	}
+	if spec.Provider != core.ProviderAWS {
+		t.Errorf("Provider = %q", spec.Provider)
+	}
+}
+
+func TestApply_ProvidersRequireCloudCredentials(t *testing.T) {
+	// GCP and Azure provisioners exist, but building their clients requires
+	// operator-supplied cloud scoping (project, subscription) that has no
+	// sensible default. Omitting it must fail with a clear statement rather
+	// than a generic error.
 	for _, provider := range []string{"gcp", "azure"} {
 		t.Run(provider, func(t *testing.T) {
 			cmd := applyCmd(t, "--ingestion-endpoint", "example.com")
 			spec := core.ClusterSpec{Provider: core.Provider(provider), Region: "r"}
 
 			_, err := buildCloud(t.Context(), cmd, spec)
-			if !errors.Is(err, ErrProviderNotImplemented) {
-				t.Fatalf("error = %v, want one wrapping ErrProviderNotImplemented", err)
+			if !errors.Is(err, core.ErrInvalidSpec) {
+				t.Fatalf("error = %v, want one wrapping ErrInvalidSpec", err)
 			}
 		})
 	}

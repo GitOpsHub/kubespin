@@ -10,6 +10,7 @@ is no central Argo CD hub, and nothing ever reaches inbound into a cluster.
 |---|---|
 | [Architecture](architecture.md) | You need to understand *why* the system is shaped this way before changing it |
 | [Fleet bootstrap](fleet-bootstrap.md) | You are provisioning the shared fleet infrastructure, or something went wrong doing so |
+| [Runbook](runbook.md) | Something in the fleet is broken and you're on call |
 | [Development](development.md) | You are writing code in this repository |
 | [CLI reference](cli/kubespin.md) | You want the exact flags for a command |
 
@@ -18,53 +19,58 @@ it by hand — CI regenerates it and fails on any difference.
 
 ## Where the project is
 
-**Milestones M0 (foundations) and M1 (registry) are complete.** What exists and
-works:
+**Every command is implemented: `apply`, `delete`, and every `fleet`
+subcommand (`bootstrap`, `update`, `audit`, `status`).** Nothing left in the
+CLI is a stub. What that means, and does not mean, varies by milestone —
+see [IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md](../IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md)
+for the acceptance criteria each milestone is actually gated on, milestone by
+milestone. In short:
 
-- `kubespin fleet bootstrap` — provisions the Fleet Registry and Central
-  Ingestion API through the AWS SDK
-- Shared domain types and the cluster phase state machine
-  ([internal/core](../internal/core))
-- The Fleet Registry client and the lease that serialises concurrent `apply`
-  runs ([internal/registry](../internal/registry))
-- The orchestrator that walks a cluster through the phases and resumes a failed
-  run from where it stopped ([internal/orchestrator](../internal/orchestrator))
-- The command tree with layered configuration
-  ([internal/cli](../internal/cli))
-- The ingestion Lambda handler, as a deliberate 501 skeleton
-  ([cmd/ingestion](../cmd/ingestion))
+- **M0-M4, M6, M8, M9 are done** at the package level, fully unit-tested
+  against fakes (cloud SDK fakes, an in-memory registry, an in-memory
+  GitHub-shaped repo). None of it has run against a real cloud account, a
+  real GitHub org, or a real Kubernetes cluster — that verification needs
+  live infrastructure this environment does not have, and is called out
+  explicitly wherever it applies.
+- **M5 (Argo CD bootstrap) is partial.** App-of-apps manifest rendering and
+  ingress access-mode templating are done and wired in
+  ([internal/argocd](../internal/argocd)). The actual Helm-as-library
+  install is not: an early attempt pulled in Helm's full transitive
+  dependency tree (~450 lines of new `go.sum` — OCI registry, Prometheus,
+  Redis, SQL drivers) for code with no caller yet, since minting a
+  `*rest.Config` for a freshly created cluster needs a per-cloud token
+  scheme (IAM-signed / Google OAuth / Azure AD) that doesn't exist. That
+  trade wasn't worth it, so it was reverted rather than merged half-working.
+- **M7 (`tier-standard`/`tier-regulated`) is data-complete, verification-
+  incomplete.** Both profiles resolve and validate; whether Kyverno actually
+  denies what it's supposed to, whether Velero actually restores a PVC —
+  those need a live cluster with those addons running, same as M5.
+- **M10's load test and runbook are done**
+  ([internal/fleet/loadtest_test.go](../internal/fleet/loadtest_test.go),
+  [runbook.md](runbook.md)); pilot team onboarding is an organizational
+  rollout step, not something to build.
 
-- The provisioner interfaces and their **AWS** implementation — EKS clusters,
-  IRSA workload identity, and the status reporter's egress path
-  ([internal/provisioner](../internal/provisioner))
-- `kubespin apply`, wired end to end through the registry, the orchestrator, and
-  the AWS provisioner
-
-**M2 is half done, deliberately.** AWS is implemented first so the interfaces
-are proven against a real cloud before GCP and Azure are built against them —
-the alternative is two teams building on a shape that shifts underneath them.
-`apply --provider gcp` and `--provider azure` fail with a clear statement rather
-than a generic error.
-
-**Two phases still do nothing.** A run reaches ready with a real cluster and a
-real workload identity, but no repository and no addons: repository seeding
-arrives in M3 and the Argo CD bootstrap in M5.
-
-**`delete` and the `fleet` subcommands other than `bootstrap` are still stubs**,
-exiting 3 with "not implemented yet". They fail loudly on purpose: a stub that
-exited 0 would imply it had done something.
-
-Next is the rest of M2 — GKE and AKS against the now-proven interfaces. See
-[EXECUTION-PLAN.md](../EXECUTION-PLAN.md) for the milestone breakdown and
-[IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md](../IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md)
-for the acceptance criteria each milestone is gated on.
+See [internal/core](../internal/core) for the shared domain types,
+[internal/registry](../internal/registry) for the Fleet Registry client and
+lease, [internal/orchestrator](../internal/orchestrator) for the per-cluster
+phase state machine `apply` walks and the reverse teardown `delete` walks,
+and [internal/fleet](../internal/fleet) for the fleet-wide operations
+(`audit`/`update`/`status`) that fan out across it.
 
 ## Open questions
 
-Two decisions are still outstanding and block parts of M1 and M3:
+Three decisions are still outstanding, and each blocks a specific milestone
+from moving past "implemented against fakes" to "verified for real":
 
-1. **GitHub Enterprise Server or Enterprise Cloud?** Changes how the `go-github`
-   client is constructed and the rate-limit budget that fleet-wide operations
-   are designed against.
+1. **GitHub Enterprise Server or Enterprise Cloud?** Changes how the
+   `go-github` client is constructed and the rate-limit budget fleet-wide
+   operations are designed against. Blocks live verification of M3, M4, M8, M9.
 2. **The fleet AWS account ID and region.** Needed to actually run
    `fleet bootstrap`; everything up to that point is verified without them.
+3. **Per-cloud cluster credential acquisition** (an IAM-signed token for
+   EKS, a Google OAuth token for GKE, an Azure AD token for AKS) — how
+   `apply` gets a `*rest.Config` for a cluster it just created. This is
+   what's actually blocking M5's Helm-as-library Argo CD install; it's a
+   real design question, not an implementation detail, and deserves its own
+   decision rather than being guessed at inside a milestone that assumes
+   it's already solved.
