@@ -6,12 +6,15 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/GitOpsHub/kubespin/internal/catalog"
 	"github.com/GitOpsHub/kubespin/internal/core"
 	"github.com/GitOpsHub/kubespin/internal/provisioner"
 	"github.com/GitOpsHub/kubespin/internal/registry"
+	"github.com/GitOpsHub/kubespin/internal/repo"
 )
 
 // fakeCloud records the provisioner calls a run makes, in order.
@@ -96,7 +99,7 @@ func runWithCloud(t *testing.T, f *fakeCloud) (registry.Record, error) {
 
 	reg := registry.NewMemory()
 	o := New(reg,
-		WithSteps(ProvisioningSteps(f.cloud(), quietLogger())),
+		WithSteps(ProvisioningSteps(f.cloud(), repo.NewMemory(), catalog.NewBuiltinResolver(), reg, quietLogger())),
 		WithHolder("test-runner"),
 		WithLogger(quietLogger()),
 	)
@@ -126,6 +129,30 @@ func TestProvisioningSteps_DriveTheProvisioners(t *testing.T) {
 	identity := slices.Index(f.calls, "ProvisionForComponent")
 	if create > identity {
 		t.Errorf("calls were %v, want the cluster created before identity is bound", f.calls)
+	}
+}
+
+// The OIDC issuer has to land in the Fleet Registry: it is what the Central
+// Ingestion API (M6) verifies fleet-status-reporter's signature against.
+func TestProvisioningSteps_RecordsOIDCIssuer(t *testing.T) {
+	f := newFakeCloud()
+	reg := registry.NewMemory()
+	o := New(reg,
+		WithSteps(ProvisioningSteps(f.cloud(), repo.NewMemory(), catalog.NewBuiltinResolver(), reg, quietLogger())),
+		WithHolder("test-runner"),
+		WithLogger(quietLogger()),
+	)
+
+	if _, err := o.Apply(t.Context(), testSpec()); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	stored, err := reg.Get(t.Context(), testSpec().ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.OIDCIssuer != "https://issuer" {
+		t.Errorf("OIDCIssuer = %q, want %q", stored.OIDCIssuer, "https://issuer")
 	}
 }
 
@@ -183,7 +210,10 @@ func TestProvisioningSteps_MissingIngestionEndpointIsNotFatal(t *testing.T) {
 	cloud.IngestionEndpoint = provisioner.EgressDestination{}
 
 	reg := registry.NewMemory()
-	o := New(reg, WithSteps(ProvisioningSteps(cloud, quietLogger())), WithLogger(quietLogger()))
+	o := New(reg,
+		WithSteps(ProvisioningSteps(cloud, repo.NewMemory(), catalog.NewBuiltinResolver(), reg, quietLogger())),
+		WithLogger(quietLogger()),
+	)
 
 	rec, err := o.Apply(t.Context(), testSpec())
 	if err != nil {
@@ -197,13 +227,13 @@ func TestProvisioningSteps_MissingIngestionEndpointIsNotFatal(t *testing.T) {
 	}
 }
 
-// Repository seeding and the Argo CD bootstrap are still no-ops, so a run
-// reaches ready with a real cluster and identity but no addons — exactly the M2
-// gate and no more.
+// The Argo CD bootstrap (M5) is still a no-op, so a run reaches ready with a
+// real cluster, identity, and seeded repository, but no addons synced —
+// exactly the M3 gate and no more.
 func TestProvisioningSteps_LaterPhasesRemainNoOps(t *testing.T) {
-	steps := ProvisioningSteps(newFakeCloud().cloud(), quietLogger())
+	steps := ProvisioningSteps(newFakeCloud().cloud(), repo.NewMemory(), catalog.NewBuiltinResolver(), registry.NewMemory(), quietLogger())
 
-	for _, phase := range []core.Phase{core.PhaseIdentityBound, core.PhaseRepoPushed, core.PhaseArgoCDInstalled} {
+	for _, phase := range []core.Phase{core.PhaseRepoPushed, core.PhaseArgoCDInstalled} {
 		step, ok := steps[phase]
 		if !ok {
 			t.Fatalf("no step registered for %s", phase)
@@ -211,5 +241,59 @@ func TestProvisioningSteps_LaterPhasesRemainNoOps(t *testing.T) {
 		if err := step.Run(t.Context(), testSpec(), registry.Record{}); err != nil {
 			t.Errorf("step for %s returned %v, want a no-op", phase, err)
 		}
+	}
+}
+
+// PhaseIdentityBound now does real work: it must create and seed the
+// cluster's repository.
+func TestProvisioningSteps_SeedsRepository(t *testing.T) {
+	repoProv := repo.NewMemory()
+	steps := ProvisioningSteps(newFakeCloud().cloud(), repoProv, catalog.NewBuiltinResolver(), registry.NewMemory(), quietLogger())
+
+	step, ok := steps[core.PhaseIdentityBound]
+	if !ok {
+		t.Fatal("no step registered for PhaseIdentityBound")
+	}
+	if err := step.Run(t.Context(), testSpec(), registry.Record{}); err != nil {
+		t.Fatalf("seeding repository: %v", err)
+	}
+
+	exists, err := repoProv.Exists(t.Context(), testSpec())
+	if err != nil {
+		t.Fatalf("Exists: %v", err)
+	}
+	if !exists {
+		t.Error("expected the repository to have been created")
+	}
+}
+
+// A cluster's override patch must land in the seeded addons.yaml: the whole
+// point of M4's per-cluster override is that it is applied at seed time, not
+// just accepted and ignored.
+func TestProvisioningSteps_SeedsRepository_AppliesOverrides(t *testing.T) {
+	repoProv := repo.NewMemory()
+	steps := ProvisioningSteps(newFakeCloud().cloud(), repoProv, catalog.NewBuiltinResolver(), registry.NewMemory(), quietLogger())
+
+	spec := testSpec()
+	spec.Overrides = []core.AddonOverride{{Name: "cert-manager", Version: "1.16.0"}}
+
+	step, ok := steps[core.PhaseIdentityBound]
+	if !ok {
+		t.Fatal("no step registered for PhaseIdentityBound")
+	}
+	if err := step.Run(t.Context(), spec, registry.Record{}); err != nil {
+		t.Fatalf("seeding repository: %v", err)
+	}
+
+	checkout, err := repoProv.Clone(t.Context(), spec)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	addonsYAML, ok := checkout.File(repo.AddonsFile)
+	if !ok {
+		t.Fatal("expected addons.yaml to have been seeded")
+	}
+	if !strings.Contains(string(addonsYAML), "1.16.0") {
+		t.Errorf("addons.yaml does not reflect the override: %s", addonsYAML)
 	}
 }

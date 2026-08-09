@@ -86,14 +86,18 @@ func DefaultSteps() map[core.Phase]Step {
 	}
 }
 
+// ReconcileFunc reconciles a cluster that is already at PhaseReady.
+type ReconcileFunc func(ctx context.Context, spec core.ClusterSpec, rec registry.Record) error
+
 // Orchestrator drives one cluster's provisioning at a time.
 type Orchestrator struct {
-	registry registry.Registry
-	steps    map[core.Phase]Step
-	holder   string
-	leaseTTL time.Duration
-	now      func() time.Time
-	logger   *slog.Logger
+	registry       registry.Registry
+	steps          map[core.Phase]Step
+	holder         string
+	leaseTTL       time.Duration
+	now            func() time.Time
+	logger         *slog.Logger
+	readyReconcile ReconcileFunc
 }
 
 // Option configures an Orchestrator.
@@ -123,6 +127,20 @@ func WithClock(now func() time.Time) Option {
 // WithLogger sets the logger.
 func WithLogger(logger *slog.Logger) Option {
 	return func(o *Orchestrator) { o.logger = logger }
+}
+
+// WithReadyReconcile sets the function Apply runs whenever it leaves a
+// cluster at PhaseReady — whether that is the outcome of this call's phase
+// walk or the cluster was already ready when Apply was called.
+//
+// This is where `apply`'s split-diff idempotence lives once a cluster exists:
+// the phase state machine only ever runs each phase's step once, so ongoing
+// infra reconciliation (M2's ClusterProvisioner.Reconcile) and addon
+// reconciliation (M3's repo.ReconcileAddons) both have to happen here rather
+// than as a phase step, or a repeat `apply` against a ready cluster would
+// never notice drift.
+func WithReadyReconcile(fn ReconcileFunc) Option {
+	return func(o *Orchestrator) { o.readyReconcile = fn }
 }
 
 // New builds an orchestrator over reg.
@@ -179,7 +197,17 @@ func (o *Orchestrator) Apply(ctx context.Context, spec core.ClusterSpec) (regist
 		return rec, fmt.Errorf("reading %s: %w", spec.ID, err)
 	}
 
-	return o.run(ctx, spec, rec)
+	rec, err = o.run(ctx, spec, rec)
+	if err != nil {
+		return rec, err
+	}
+
+	if rec.Phase == core.PhaseReady && o.readyReconcile != nil {
+		if err := o.readyReconcile(ctx, spec, rec); err != nil {
+			return rec, fmt.Errorf("reconciling %s: %w", spec.ID, err)
+		}
+	}
+	return rec, nil
 }
 
 // ensureRecord returns the cluster's record, registering it if new.
