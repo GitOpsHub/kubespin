@@ -14,6 +14,16 @@ in kubespin rather than an expired session.
 kubespin status [flags]
 ```
 
+### Examples
+
+```
+  # Every configured provider
+  kubespin status
+
+  # Just Azure
+  kubespin status --only azure
+```
+
 ### Options
 
 ```

@@ -9,6 +9,7 @@ is no central Argo CD hub, and nothing ever reaches inbound into a cluster.
 | Document | Read it when |
 |---|---|
 | [Architecture](architecture.md) | You need to understand *why* the system is shaped this way before changing it |
+| [Examples](examples.md) | You want a working command to copy-paste for a specific scenario |
 | [Fleet bootstrap](fleet-bootstrap.md) | You are provisioning the shared fleet infrastructure, or something went wrong doing so |
 | [Runbook](runbook.md) | Something in the fleet is broken and you're on call |
 | [Development](development.md) | You are writing code in this repository |

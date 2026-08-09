@@ -16,6 +16,19 @@ needless delay.
 kubespin login [flags]
 ```
 
+### Examples
+
+```
+  # Log in to every configured provider
+  kubespin login
+
+  # Only AWS and GCP
+  kubespin login --only aws,gcp
+
+  # Re-authenticate even if the session still looks valid
+  kubespin login --force
+```
+
 ### Options
 
 ```

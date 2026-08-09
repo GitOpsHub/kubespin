@@ -8,10 +8,11 @@ that syncs from it. There is no central Argo CD hub and no inbound network
 access to any cluster: status flows outward, pushed by an in-cluster reporter to
 a central Fleet Registry.
 
-> **Status: early development.** Milestone M0 (foundations) is in place — the
-> CLI skeleton, shared domain types, CI, and the fleet infrastructure stack.
-> Every command is currently a stub that exits non-zero. See
-> [EXECUTION-PLAN.md](EXECUTION-PLAN.md) for what lands next.
+> **Status: every command is implemented and unit-tested against fakes** (cloud
+> SDK fakes, an in-memory registry, an in-memory GitHub-shaped repo). None of
+> it has run against a real cloud account, GitHub org, or cluster yet — see
+> [docs/README.md](docs/README.md#where-the-project-is) for exactly what that
+> does and does not mean per milestone.
 
 ## Quick start
 
@@ -29,12 +30,61 @@ That runs lint, tests, and builds `bin/kubespin`.
 
 | Command | Purpose |
 |---|---|
+| `kubespin login` / `status` / `logout` | Authenticate to (or check, or clear) cloud provider sessions. |
 | `kubespin fleet bootstrap` | Provision the shared fleet infrastructure. Converges, never deletes. |
 | `kubespin apply` | Create or reconcile a cluster to match its desired state. Idempotent and resumable. |
 | `kubespin delete` | Decommission a cluster; archives its repository rather than deleting it. |
 | `kubespin fleet update` | Roll a component version across every matching cluster, in waves. |
 | `kubespin fleet audit` | Diff live cloud infrastructure against each cluster's `cluster.yaml`. |
 | `kubespin fleet status` | Report sync, drift, and staleness across the fleet. |
+
+See [Example workflows](#example-workflows) below for real invocations of
+each, or [docs/examples.md](docs/examples.md) for the full walkthrough.
+
+## Example workflows
+
+Full detail, prerequisites, and more scenarios in
+[docs/examples.md](docs/examples.md). All three clouds follow the same
+shape: authenticate, `apply`, confirm with `fleet status`.
+
+```bash
+# AWS, private cluster
+kubespin login --only aws
+kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
+  --access private --github-org "$GITHUB_ORG"
+kubespin fleet status --phase ready
+```
+
+```bash
+# GCP, public cluster, custom node pool
+kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
+  --cluster-id demo-gcp --access public --instance-type e2-standard-4 --desired-size 3 \
+  --github-org "$GITHUB_ORG"
+```
+
+```bash
+# Azure, resolving addons from a platform-profiles repo
+kubespin apply --provider azure --azure-subscription "$AZURE_SUBSCRIPTION_ID" \
+  --region eastus --cluster-id demo-azure --profile tier-standard@1.0.0 \
+  --profiles-repo platform-profiles --github-org "$GITHUB_ORG"
+```
+
+```bash
+# Fleet-wide: bootstrap once, then operate across every cluster
+kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+kubespin fleet status
+kubespin fleet update --component argo-cd --version 2.11.0
+kubespin fleet audit
+```
+
+```bash
+# Tear down
+kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
+  --github-org "$GITHUB_ORG" --yes
+```
+
+Every mutating command accepts `--dry-run` to preview without touching a
+cloud, a repository, or the Fleet Registry's write path.
 
 ## Configuration
 
@@ -88,6 +138,7 @@ internal/version/    build metadata stamped in via -ldflags
 Start at [docs/](docs/README.md).
 
 - [Architecture](docs/architecture.md) — the outbound-only model, the phase state machine, and why convergence replaces state
+- [Examples](docs/examples.md) — working commands for every scenario: spinning up a cluster on each cloud, the fleet lifecycle, and tearing down
 - [Fleet bootstrap](docs/fleet-bootstrap.md) — operator runbook, including the IAM permissions needed to run it
 - [Development](docs/development.md) — toolchain, testing, and how to add a converge step
 - [CLI reference](docs/cli/kubespin.md) — generated from the command tree by `make docs`

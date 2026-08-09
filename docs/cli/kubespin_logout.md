@@ -6,6 +6,16 @@ Clear cached sessions for one or more cloud providers
 kubespin logout [flags]
 ```
 
+### Examples
+
+```
+  # Log out of every provider
+  kubespin logout
+
+  # Just GCP
+  kubespin logout --only gcp
+```
+
 ### Options
 
 ```

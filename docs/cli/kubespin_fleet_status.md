@@ -12,6 +12,19 @@ cluster that is unreachable shows as stale rather than blocking the command.
 kubespin fleet status [flags]
 ```
 
+### Examples
+
+```
+  # Every cluster, as a table
+  kubespin fleet status
+
+  # Only clusters that have missed their reporting window
+  kubespin fleet status --stale-only --stale-threshold 30m
+
+  # Machine-readable output, restricted to one phase
+  kubespin fleet status --phase ready --output json
+```
+
 ### Options
 
 ```
