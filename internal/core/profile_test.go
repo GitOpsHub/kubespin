@@ -79,6 +79,15 @@ func TestProfileValidate(t *testing.T) {
 	})
 }
 
+func TestAddonOverrideValidate(t *testing.T) {
+	if err := (AddonOverride{Name: "cert-manager"}).Validate(); err != nil {
+		t.Fatalf("valid override rejected: %v", err)
+	}
+	if err := (AddonOverride{Name: "Cert Manager"}).Validate(); !errors.Is(err, ErrInvalidSpec) {
+		t.Errorf("error = %v, want one wrapping ErrInvalidSpec", err)
+	}
+}
+
 func TestProfileRefValidate(t *testing.T) {
 	tests := map[string]struct {
 		ref     ProfileRef

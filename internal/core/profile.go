@@ -66,6 +66,35 @@ func (a AddonRef) Validate() error {
 	return errors.Join(errs...)
 }
 
+// AddonOverride patches one addon of a resolved profile, by name, as part of a
+// cluster's per-cluster override patch.
+//
+// Every field but Name is optional and additive: a zero Version leaves the
+// profile's pinned version alone, and a nil Values leaves the profile's
+// values alone. That is what lets an override patch say only what it changes
+// rather than restate the whole addon, which is also why it never introduces
+// a new addon — Name must match one the profile already carries.
+type AddonOverride struct {
+	Name    string         `yaml:"name" json:"name"`
+	Version string         `yaml:"version,omitempty" json:"version,omitempty"`
+	Values  map[string]any `yaml:"values,omitempty" json:"values,omitempty"`
+
+	// Disable drops the addon from the resolved set entirely, e.g. a cluster
+	// that provides its own ExternalDNS and does not want the profile's.
+	Disable bool `yaml:"disable,omitempty" json:"disable,omitempty"`
+}
+
+// Validate reports whether the override is well formed. It cannot check that
+// Name matches an addon in the profile being overridden — that is a property
+// of a (profile, override) pair, not of the override alone — so callers doing
+// that check (internal/catalog.Merge) report the more specific error.
+func (o AddonOverride) Validate() error {
+	if !namePattern.MatchString(o.Name) {
+		return fmt.Errorf("%w: override name %q is not a valid name", ErrInvalidSpec, o.Name)
+	}
+	return nil
+}
+
 // Profile is a resolved tier from the platform-profiles catalog: the addon set
 // a cluster gets before any per-cluster override patch is applied.
 type Profile struct {

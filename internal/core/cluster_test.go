@@ -63,6 +63,16 @@ func TestClusterSpecValidate_Invalid(t *testing.T) {
 			func(s *ClusterSpec) { s.NodePools = append(s.NodePools, s.NodePools[0]) },
 			"duplicate node pool name",
 		},
+		"invalid override": {
+			func(s *ClusterSpec) { s.Overrides = []AddonOverride{{Name: "Cert Manager"}} },
+			"not a valid name",
+		},
+		"duplicate override": {
+			func(s *ClusterSpec) {
+				s.Overrides = []AddonOverride{{Name: "cert-manager"}, {Name: "cert-manager"}}
+			},
+			"duplicate override",
+		},
 	}
 
 	for name, tc := range tests {
