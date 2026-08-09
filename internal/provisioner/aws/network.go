@@ -315,9 +315,13 @@ func carveSubnetCIDR(vpcCIDR string, index int) (string, error) {
 		return "", fmt.Errorf("CIDR %s is smaller than a /%d, cannot carve subnets", vpcCIDR, subnetPrefixLen)
 	}
 
+	if index < 0 {
+		return "", fmt.Errorf("subnet index %d must not be negative", index)
+	}
+
 	subnetSize := uint32(1) << (32 - subnetPrefixLen)
 	base := binary.BigEndian.Uint32(ipnet.IP.To4())
-	subnetBase := base + uint32(index)*subnetSize
+	subnetBase := base + uint32(index)*subnetSize //nolint:gosec // bounds-checked above; caller only ever passes small loop indices (0, 1)
 
 	subnetIP := make(net.IP, 4)
 	binary.BigEndian.PutUint32(subnetIP, subnetBase)
