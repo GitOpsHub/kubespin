@@ -30,6 +30,7 @@ type fakeGCP struct {
 	firewalls   map[string]*compute.Firewall
 	networks    map[string]*compute.Network    // name -> network
 	subnetworks map[string]*compute.Subnetwork // "region/name" -> subnetwork
+	routers     map[string]*compute.Router     // "region/name" -> router
 }
 
 func newFakeGCP() *fakeGCP {
@@ -47,6 +48,7 @@ func newFakeGCP() *fakeGCP {
 				Network: "projects/" + testProject + "/global/networks/default",
 			},
 		},
+		routers: map[string]*compute.Router{},
 	}
 }
 
@@ -56,7 +58,7 @@ var mutatingCalls = []string{
 	"CreateCluster", "UpdateCluster", "DeleteCluster",
 	"CreateNodePool", "SetNodePoolSize", "DeleteNodePool",
 	"CreateServiceAccount", "DeleteServiceAccount", "SetIamPolicy",
-	"InsertFirewall", "InsertNetwork", "InsertSubnetwork",
+	"InsertFirewall", "InsertNetwork", "InsertSubnetwork", "InsertRouter",
 }
 
 func (f *fakeGCP) assertNoMutations(t *testing.T) {
@@ -73,7 +75,7 @@ func (f *fakeGCP) assertNoMutations(t *testing.T) {
 func (f *fakeGCP) clients() *Clients {
 	return &Clients{
 		project: testProject, cluster: f, svcAccts: f, firewalls: f,
-		networks: f, subnetworks: f, tokens: f, logger: slog.Default(),
+		networks: f, subnetworks: f, routers: f, tokens: f, logger: slog.Default(),
 	}
 }
 
@@ -278,6 +280,25 @@ func (f *fakeGCP) InsertSubnetwork(_ context.Context, _, region string, subnet *
 		return &googleapi.Error{Code: 409}
 	}
 	f.subnetworks[key] = subnet
+	return nil
+}
+
+func (f *fakeGCP) GetRouter(_ context.Context, _, region, name string) (*compute.Router, error) {
+	f.record("GetRouter")
+	rt, ok := f.routers[region+"/"+name]
+	if !ok {
+		return nil, &googleapi.Error{Code: 404}
+	}
+	return rt, nil
+}
+
+func (f *fakeGCP) InsertRouter(_ context.Context, _, region string, router *compute.Router) error {
+	f.record("InsertRouter")
+	key := region + "/" + router.Name
+	if _, ok := f.routers[key]; ok {
+		return &googleapi.Error{Code: 409}
+	}
+	f.routers[key] = router
 	return nil
 }
 

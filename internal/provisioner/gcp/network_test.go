@@ -111,6 +111,53 @@ func TestEnsureNetwork_RespectsSubnetCIDROverride(t *testing.T) {
 	}
 }
 
+// GKE nodes are always private (EnablePrivateNodes), so a Cloud Router +
+// Cloud NAT is what actually gives them a path to the internet — without
+// one, nothing they run can pull an image from a public registry.
+func TestEnsureNetwork_CreatesCloudNATForPrivateNodes(t *testing.T) {
+	f := newFakeGCP()
+	spec := testSpec()
+	spec.Subnets = nil
+
+	if _, err := NewNetworkProvisioner(f.clients()).EnsureNetwork(t.Context(), spec); err != nil {
+		t.Fatalf("EnsureNetwork: %v", err)
+	}
+
+	if !f.called("InsertRouter") {
+		t.Error("InsertRouter was not called")
+	}
+
+	n := names{project: testProject, spec: spec}
+	router, ok := f.routers[n.location()+"/"+n.router()]
+	if !ok {
+		t.Fatal("router was not recorded as created")
+	}
+	if len(router.Nats) != 1 {
+		t.Fatalf("router.Nats = %v, want exactly one NAT config", router.Nats)
+	}
+	if router.Nats[0].SourceSubnetworkIpRangesToNat != "ALL_SUBNETWORKS_ALL_IP_RANGES" {
+		t.Errorf("NAT does not cover all subnetwork ranges: %+v", router.Nats[0])
+	}
+}
+
+// A repeated apply must not attempt to create the router again.
+func TestEnsureNetwork_CloudNATIsIdempotent(t *testing.T) {
+	f := newFakeGCP()
+	spec := testSpec()
+	spec.Subnets = nil
+	p := NewNetworkProvisioner(f.clients())
+
+	if _, err := p.EnsureNetwork(t.Context(), spec); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	f.calls = nil
+	if _, err := p.EnsureNetwork(t.Context(), spec); err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	f.assertNoMutations(t)
+}
+
 func (f *fakeGCP) called(name string) bool {
 	for _, c := range f.calls {
 		if c == name {

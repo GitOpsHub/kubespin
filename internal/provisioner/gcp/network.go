@@ -69,7 +69,49 @@ func (p *NetworkProvisioner) EnsureNetwork(
 		return provisioner.NetworkResult{}, err
 	}
 
+	// GKE nodes are always created with EnablePrivateNodes (see
+	// privateClusterConfig in cluster.go), so a Cloud Router + Cloud NAT is
+	// what actually gives them a path to the public internet — without one
+	// they can reach nothing outside the VPC, including the public registry
+	// an addon's image is pulled from.
+	if err := p.ensureCloudNAT(ctx, n, &change); err != nil {
+		return provisioner.NetworkResult{}, err
+	}
+
 	return provisioner.NetworkResult{SubnetIDs: []string{n.subnetworkResource()}, Change: change}, nil
+}
+
+func (p *NetworkProvisioner) ensureCloudNAT(
+	ctx context.Context, n names, change *provisioner.Change,
+) error {
+	name := n.router()
+
+	if _, err := p.c.routers.GetRouter(ctx, n.project, n.location(), name); err == nil {
+		return nil
+	} else if code(err) != 404 {
+		return fmt.Errorf("describing router %s: %w", name, err)
+	}
+
+	err := p.c.routers.InsertRouter(ctx, n.project, n.location(), &compute.Router{
+		Name:    name,
+		Network: n.networkResource(),
+		Nats: []*compute.RouterNat{{
+			Name:                          n.nat(),
+			NatIpAllocateOption:           "AUTO_ONLY",
+			SourceSubnetworkIpRangesToNat: "ALL_SUBNETWORKS_ALL_IP_RANGES",
+		}},
+	})
+	if err != nil {
+		if code(err) == 409 {
+			return nil
+		}
+		return fmt.Errorf("creating router %s: %w", name, err)
+	}
+
+	p.c.logger.Info("created Cloud Router and NAT", "router", name)
+	change.Changed = true
+	change.Details = append(change.Details, fmt.Sprintf("created Cloud Router and NAT %s", name))
+	return nil
 }
 
 func (p *NetworkProvisioner) ensureVPCNetwork(

@@ -33,15 +33,28 @@ cloud calls and produces no commits; a failed run resumes from the phase
 recorded in the Fleet Registry.
 
 The spec may come from a cluster.yaml — the same file the cluster's repository
-holds — or from the flags below, which override the file when given.`,
+holds — or from the flags below, which override the file when given.
+
+Installing Argo CD is not a push from inside the cluster: apply connects
+directly to the API server (via the Helm SDK) from whatever machine runs this
+command. For --access private, that means the operator's machine needs
+network reachability into the cluster's VPC/VNet (VPN, peering, or a bastion)
+— without it, apply will get stuck at the "install argocd" step with a DNS or
+connection-timeout error. --access public avoids that, but on GCP it is not
+enough by itself: GKE enables master-authorized-networks with an empty
+allowlist by default, so nothing (not even the operator) can reach the public
+endpoint until --authorized-cidrs includes the caller's IP. AWS and Azure
+public endpoints are open to 0.0.0.0/0 unless --authorized-cidrs is set.`,
 		Example: `  # AWS, private API server, default node pool
   ./bin/kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
     --access private --profile tier-small@1.0.0 \
     --github-org GitOpsHub --registry-region us-east-1
 
-  # GCP, public API server, larger node pool
+  # GCP, public API server, larger node pool — authorized-cidrs is required on GCP
+  # for the operator's own machine to reach the endpoint and install Argo CD
   ./bin/kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
-    --cluster-id demo-gcp --access public --profile tier-small@1.0.0 \
+    --cluster-id demo-gcp --access public --authorized-cidrs 203.0.113.4/32 \
+    --profile tier-small@1.0.0 \
     --instance-type e2-standard-4 --desired-size 3 \
     --github-org GitOpsHub --registry-region us-east-1
 
@@ -67,6 +80,7 @@ holds — or from the flags below, which override the file when given.`,
 	fs.String("profile", "", "profile reference from platform-profiles, e.g. tier-small@1.0.0")
 	fs.String("kubernetes-version", "", "Kubernetes minor version, e.g. 1.34")
 	fs.StringSlice("subnets", nil, "existing subnets to place the cluster in")
+	fs.StringSlice("authorized-cidrs", nil, "CIDR blocks allowed to reach the API server when --access public (GCP: required to reach the endpoint at all, since GKE enables master-authorized-networks with an empty allowlist by default; AWS/Azure: public endpoints are open to 0.0.0.0/0 unless this is set)")
 	fs.String("vpc-cidr", "", "address space for the VPC kubespin creates when --subnets is omitted (AWS only, default 10.0.0.0/16)")
 	fs.String("vnet-cidr", "", "address space for the VNet kubespin creates when --subnets is omitted (Azure only, default 10.0.0.0/16)")
 	fs.String("subnet-cidr", "", "address prefix for the subnet kubespin creates when --subnets is omitted (Azure default 10.0.1.0/24, GCP default 10.0.0.0/20)")
@@ -401,6 +415,7 @@ you mean it.`,
 	fs.String("profile", "", "profile reference from platform-profiles, e.g. tier-small@1.0.0")
 	fs.String("kubernetes-version", "", "Kubernetes minor version, e.g. 1.34 (unused by delete, kept for spec compatibility)")
 	fs.StringSlice("subnets", nil, "existing subnets the cluster was placed in")
+	fs.StringSlice("authorized-cidrs", nil, "unused by delete, kept for spec compatibility")
 	fs.String("vpc-cidr", "", "unused by delete, kept for spec compatibility")
 	fs.String("vnet-cidr", "", "unused by delete, kept for spec compatibility")
 	fs.String("subnet-cidr", "", "unused by delete, kept for spec compatibility")

@@ -47,6 +47,7 @@ kubespin delete [flags]
 
 ```
       --access string               API server exposure: private or public (must match the cluster's spec) (default "private")
+      --authorized-cidrs strings    unused by delete, kept for spec compatibility
       --azure-subscription string   Azure subscription hosting the cluster (required for --provider azure)
       --cluster-id string           cluster identifier
       --desired-size int32          desired size of the default node pool (unused by delete, kept for spec compatibility) (default 2)

@@ -10,6 +10,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
+	"time"
 
 	container "cloud.google.com/go/container/apiv1"
 	"cloud.google.com/go/container/apiv1/containerpb"
@@ -64,6 +66,19 @@ type subnetworksAPI interface {
 	InsertSubnetwork(ctx context.Context, project, region string, subnet *compute.Subnetwork) error
 }
 
+// routersAPI is used only by EnsureNetwork, when spec.Subnets is empty.
+//
+// GKE cluster nodes are always created with EnablePrivateNodes (see
+// privateClusterConfig), which leaves them with no public IP; a Cloud NAT
+// behind a Cloud Router is the only way such a node reaches the public
+// internet at all, including to pull addon images from a public registry.
+// Without one, a kubespin-managed network builds a cluster whose nodes can
+// never finish pulling any image.
+type routersAPI interface {
+	GetRouter(ctx context.Context, project, region, name string) (*compute.Router, error)
+	InsertRouter(ctx context.Context, project, region string, router *compute.Router) error
+}
+
 // Clients bundles the GCP clients the provisioner uses, scoped to one project.
 //
 // The project is fixed at construction, the way AWS's Clients fixes a region:
@@ -77,6 +92,7 @@ type Clients struct {
 	firewalls   firewallsAPI
 	networks    networksAPI
 	subnetworks subnetworksAPI
+	routers     routersAPI
 	tokens      tokenAPI
 
 	logger *slog.Logger
@@ -116,9 +132,10 @@ func NewClients(ctx context.Context, project string, opts ...Option) (*Clients, 
 		project:     project,
 		cluster:     cm,
 		svcAccts:    realServiceAccounts{iamSvc.Projects.ServiceAccounts},
-		firewalls:   realFirewalls{computeSvc.Firewalls},
-		networks:    realNetworks{computeSvc.Networks},
-		subnetworks: realSubnetworks{computeSvc.Subnetworks},
+		firewalls:   realFirewalls{computeSvc.Firewalls, computeSvc.GlobalOperations},
+		networks:    realNetworks{computeSvc.Networks, computeSvc.GlobalOperations},
+		subnetworks: realSubnetworks{computeSvc.Subnetworks, computeSvc.RegionOperations},
+		routers:     realRouters{computeSvc.Routers, computeSvc.RegionOperations},
 		tokens:      applicationDefaultTokens{},
 		logger:      slog.Default(),
 	}
@@ -179,6 +196,7 @@ func (r realServiceAccounts) SetIamPolicy(
 // realFirewalls adapts the fluent compute/v1 client to firewallsAPI.
 type realFirewalls struct {
 	svc *compute.FirewallsService
+	ops *compute.GlobalOperationsService
 }
 
 func (r realFirewalls) GetFirewall(ctx context.Context, project, name string) (*compute.Firewall, error) {
@@ -190,7 +208,11 @@ func (r realFirewalls) GetFirewall(ctx context.Context, project, name string) (*
 }
 
 func (r realFirewalls) Insert(ctx context.Context, project string, fw *compute.Firewall) error {
-	if _, err := r.svc.Insert(project, fw).Context(ctx).Do(); err != nil {
+	op, err := r.svc.Insert(project, fw).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("compute: insert firewall %s: %w", fw.Name, err)
+	}
+	if err := waitGlobalOperation(ctx, r.ops, project, op); err != nil {
 		return fmt.Errorf("compute: insert firewall %s: %w", fw.Name, err)
 	}
 	return nil
@@ -199,6 +221,7 @@ func (r realFirewalls) Insert(ctx context.Context, project string, fw *compute.F
 // realNetworks adapts the fluent compute/v1 client to networksAPI.
 type realNetworks struct {
 	svc *compute.NetworksService
+	ops *compute.GlobalOperationsService
 }
 
 func (r realNetworks) GetNetwork(ctx context.Context, project, name string) (*compute.Network, error) {
@@ -210,7 +233,11 @@ func (r realNetworks) GetNetwork(ctx context.Context, project, name string) (*co
 }
 
 func (r realNetworks) InsertNetwork(ctx context.Context, project string, network *compute.Network) error {
-	if _, err := r.svc.Insert(project, network).Context(ctx).Do(); err != nil {
+	op, err := r.svc.Insert(project, network).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("compute: insert network %s: %w", network.Name, err)
+	}
+	if err := waitGlobalOperation(ctx, r.ops, project, op); err != nil {
 		return fmt.Errorf("compute: insert network %s: %w", network.Name, err)
 	}
 	return nil
@@ -219,6 +246,7 @@ func (r realNetworks) InsertNetwork(ctx context.Context, project string, network
 // realSubnetworks adapts the fluent compute/v1 client to subnetworksAPI.
 type realSubnetworks struct {
 	svc *compute.SubnetworksService
+	ops *compute.RegionOperationsService
 }
 
 func (r realSubnetworks) GetSubnetwork(ctx context.Context, project, region, name string) (*compute.Subnetwork, error) {
@@ -230,10 +258,94 @@ func (r realSubnetworks) GetSubnetwork(ctx context.Context, project, region, nam
 }
 
 func (r realSubnetworks) InsertSubnetwork(ctx context.Context, project, region string, subnet *compute.Subnetwork) error {
-	if _, err := r.svc.Insert(project, region, subnet).Context(ctx).Do(); err != nil {
+	op, err := r.svc.Insert(project, region, subnet).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("compute: insert subnetwork %s: %w", subnet.Name, err)
+	}
+	if err := waitRegionOperation(ctx, r.ops, project, region, op); err != nil {
 		return fmt.Errorf("compute: insert subnetwork %s: %w", subnet.Name, err)
 	}
 	return nil
+}
+
+// realRouters adapts the fluent compute/v1 client to routersAPI.
+type realRouters struct {
+	svc *compute.RoutersService
+	ops *compute.RegionOperationsService
+}
+
+func (r realRouters) GetRouter(ctx context.Context, project, region, name string) (*compute.Router, error) {
+	rt, err := r.svc.Get(project, region, name).Context(ctx).Do()
+	if err != nil {
+		return nil, fmt.Errorf("compute: get router %s: %w", name, err)
+	}
+	return rt, nil
+}
+
+func (r realRouters) InsertRouter(ctx context.Context, project, region string, router *compute.Router) error {
+	op, err := r.svc.Insert(project, region, router).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("compute: insert router %s: %w", router.Name, err)
+	}
+	if err := waitRegionOperation(ctx, r.ops, project, region, op); err != nil {
+		return fmt.Errorf("compute: insert router %s: %w", router.Name, err)
+	}
+	return nil
+}
+
+// waitGlobalOperation and waitRegionOperation block until a Compute Engine
+// v1 insert operation reaches DONE and surface its embedded async error, if
+// any.
+//
+// Insert calls on this API are long-running operations: a successful Do()
+// only means the request was accepted, not that the resource was actually
+// created. A conflict discovered mid-operation (e.g. a CIDR range already in
+// use elsewhere in the VPC) is reported by setting op.Error on the completed
+// operation, not by an HTTP-level error, so callers that only check Do()'s
+// return value observe a false success.
+const operationPollInterval = 2 * time.Second
+
+func waitGlobalOperation(ctx context.Context, ops *compute.GlobalOperationsService, project string, op *compute.Operation) error {
+	for op.Status != "DONE" {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(operationPollInterval):
+		}
+		var err error
+		op, err = ops.Get(project, op.Name).Context(ctx).Do()
+		if err != nil {
+			return fmt.Errorf("polling operation %s: %w", op.Name, err)
+		}
+	}
+	return operationError(op)
+}
+
+func waitRegionOperation(ctx context.Context, ops *compute.RegionOperationsService, project, region string, op *compute.Operation) error {
+	for op.Status != "DONE" {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(operationPollInterval):
+		}
+		var err error
+		op, err = ops.Get(project, region, op.Name).Context(ctx).Do()
+		if err != nil {
+			return fmt.Errorf("polling operation %s: %w", op.Name, err)
+		}
+	}
+	return operationError(op)
+}
+
+func operationError(op *compute.Operation) error {
+	if op.Error == nil || len(op.Error.Errors) == 0 {
+		return nil
+	}
+	msgs := make([]string, len(op.Error.Errors))
+	for i, e := range op.Error.Errors {
+		msgs[i] = e.Message
+	}
+	return fmt.Errorf("operation %s failed: %s", op.Name, strings.Join(msgs, "; "))
 }
 
 // names derives every GCP resource name from the cluster ID, so a cluster's
@@ -291,6 +403,10 @@ func (n names) subnetwork() string { return "kubespin-" + n.spec.ID.String() + "
 func (n names) subnetworkResource() string {
 	return fmt.Sprintf("projects/%s/regions/%s/subnetworks/%s", n.project, n.location(), n.subnetwork())
 }
+
+func (n names) router() string { return "kubespin-" + n.spec.ID.String() + "-router" }
+
+func (n names) nat() string { return "kubespin-" + n.spec.ID.String() + "-nat" }
 
 func labels(spec core.ClusterSpec) map[string]string {
 	return map[string]string{

@@ -15,6 +15,17 @@ recorded in the Fleet Registry.
 The spec may come from a cluster.yaml — the same file the cluster's repository
 holds — or from the flags below, which override the file when given.
 
+Installing Argo CD is not a push from inside the cluster: apply connects
+directly to the API server (via the Helm SDK) from whatever machine runs this
+command. For --access private, that means the operator's machine needs
+network reachability into the cluster's VPC/VNet (VPN, peering, or a bastion)
+— without it, apply will get stuck at the "install argocd" step with a DNS or
+connection-timeout error. --access public avoids that, but on GCP it is not
+enough by itself: GKE enables master-authorized-networks with an empty
+allowlist by default, so nothing (not even the operator) can reach the public
+endpoint until --authorized-cidrs includes the caller's IP. AWS and Azure
+public endpoints are open to 0.0.0.0/0 unless --authorized-cidrs is set.
+
 ```
 kubespin apply [flags]
 ```
@@ -27,12 +38,14 @@ kubespin apply [flags]
     --access private --profile tier-small@1.0.0 \
     --github-org GitOpsHub --registry-region us-east-1
 
-  # GCP, public API server, larger node pool
-  ./bin/kubespin apply --provider gcp --gcp-project kubernetes-dev-502710 --region us-central1 \
-     --cluster-id demo-gcp --access public --profile tier-small@1.0.0 \
-     --instance-type e2-standard-4 --desired-size 1 \
-     --github-org GitOpsHub --registry-region us-east-1
-     
+  # GCP, public API server, larger node pool — authorized-cidrs is required on GCP
+  # for the operator's own machine to reach the endpoint and install Argo CD
+  ./bin/kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
+    --cluster-id demo-gcp --access public --authorized-cidrs 203.0.113.4/32 \
+    --profile tier-small@1.0.0 \
+    --instance-type e2-standard-4 --desired-size 3 \
+    --github-org GitOpsHub --registry-region us-east-1
+
   # Azure, resolving addons from a platform-profiles repo instead of the builtin catalog
   ./bin/kubespin apply --provider azure --azure-subscription <subscription-id> --region eastus \
     --cluster-id demo-azure --access private --profile tier-standard@1.0.0 \
@@ -48,6 +61,7 @@ kubespin apply [flags]
 
 ```
       --access string               API server exposure: private or public (default "private")
+      --authorized-cidrs strings    CIDR blocks allowed to reach the API server when --access public (GCP: required to reach the endpoint at all, since GKE enables master-authorized-networks with an empty allowlist by default; AWS/Azure: public endpoints are open to 0.0.0.0/0 unless this is set)
       --azure-subscription string   Azure subscription hosting the cluster (required for --provider azure)
       --cluster-id string           cluster identifier (also the repository suffix)
       --desired-size int32          desired size of the default node pool (default 2)

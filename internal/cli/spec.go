@@ -132,6 +132,16 @@ func applySpecFlags(cmd *cobra.Command, spec *core.ClusterSpec) error {
 		}
 	}
 
+	if flags.Changed("authorized-cidrs") || len(spec.AuthorizedCIDRs) == 0 {
+		cidrs, err := flags.GetStringSlice("authorized-cidrs")
+		if err != nil {
+			return fmt.Errorf("reading --authorized-cidrs: %w", err)
+		}
+		if len(cidrs) > 0 {
+			spec.AuthorizedCIDRs = cidrs
+		}
+	}
+
 	return applyNodePoolFlags(cmd, spec)
 }
 
