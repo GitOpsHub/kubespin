@@ -476,3 +476,57 @@ func TestProvisioningSteps_SeedsRepository_AppliesOverrides(t *testing.T) {
 		t.Errorf("addons.yaml does not reflect the override: %s", addonsYAML)
 	}
 }
+
+// tier-small never carries "argocd" as a catalog entry (it is installed
+// directly, not through app-of-apps), so an override naming it has nowhere
+// to land in profile.Addons for catalog.Merge to patch. argoCDAddon must
+// still apply it, directly onto argocd.DefaultAddon.
+func TestArgoCDAddon_AppliesOverrideOntoDefaultAddonWhenProfileHasNone(t *testing.T) {
+	profile := core.Profile{Name: "tier-small", Version: "1.0.0"} // no "argocd" entry
+	overrides := []core.AddonOverride{{
+		Name:   argocd.ReleaseName,
+		Values: map[string]any{"server": map[string]any{"service": map[string]any{"type": "LoadBalancer"}}},
+	}}
+
+	got := argoCDAddon(profile, overrides)
+
+	if got.Chart != argocd.DefaultAddon.Chart || got.Version != argocd.DefaultAddon.Version {
+		t.Errorf("addon = %+v, want DefaultAddon's chart/version preserved", got)
+	}
+	server, ok := got.Values["server"].(map[string]any)
+	if !ok {
+		t.Fatalf("Values = %+v, want the override's server key applied", got.Values)
+	}
+	svc, ok := server["service"].(map[string]any)
+	if !ok || svc["type"] != "LoadBalancer" {
+		t.Errorf("server.service = %+v, want type: LoadBalancer", server["service"])
+	}
+}
+
+// An override naming an addon the profile genuinely does not have (a typo,
+// say) must still surface as an error — only "argocd" gets the DefaultAddon
+// fallback, so this stays a normal ErrUnknownOverride from catalog.Merge.
+func TestResolveProfile_StillRejectsUnknownOverrides(t *testing.T) {
+	spec := testSpec()
+	spec.Overrides = []core.AddonOverride{{Name: "not-a-real-addon", Version: "1.0.0"}}
+
+	_, err := resolveProfile(t.Context(), catalog.NewBuiltinResolver(), spec)
+	if !errors.Is(err, catalog.ErrUnknownOverride) {
+		t.Errorf("err = %v, want ErrUnknownOverride", err)
+	}
+}
+
+// The whole point: an "argocd" override must not break resolveProfile for a
+// tier that does not catalog it, since installArgoCDStep needs spec.Overrides
+// to reach argoCDAddon regardless of what resolveProfile does with the rest.
+func TestResolveProfile_DoesNotRejectArgoCDOverrideOnTierWithoutIt(t *testing.T) {
+	spec := testSpec() // tier-small
+	spec.Overrides = []core.AddonOverride{{
+		Name:   argocd.ReleaseName,
+		Values: map[string]any{"server": map[string]any{"service": map[string]any{"type": "LoadBalancer"}}},
+	}}
+
+	if _, err := resolveProfile(t.Context(), catalog.NewBuiltinResolver(), spec); err != nil {
+		t.Errorf("resolveProfile: %v, want the argocd override to be tolerated", err)
+	}
+}

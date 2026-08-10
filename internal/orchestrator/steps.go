@@ -64,13 +64,35 @@ func ProvisioningSteps(
 // above, so `fleet update` can pin its version like any other addon), or
 // argocd.DefaultAddon otherwise — Argo CD has to be installed on every tier
 // regardless of whether the catalog tracks it yet.
-func argoCDAddon(profile core.Profile) core.AddonRef {
+//
+// Below tier-standard, "argocd" never appears in profile.Addons, so
+// catalog.Merge has nothing to patch and a cluster.yaml override naming it
+// would fail with ErrUnknownOverride even though Argo CD is always
+// installed. Applying a matching override directly onto DefaultAddon here —
+// version and values only, the same fields Merge itself patches — is what
+// lets an operator override Argo CD's own install (e.g. exposing
+// server.service.type) from cluster.yaml on every tier, not just the ones
+// that happen to catalog it.
+func argoCDAddon(profile core.Profile, overrides []core.AddonOverride) core.AddonRef {
 	for _, a := range profile.Addons {
 		if a.Name == argocd.ReleaseName {
 			return a
 		}
 	}
-	return argocd.DefaultAddon
+
+	addon := argocd.DefaultAddon
+	for _, o := range overrides {
+		if o.Name != argocd.ReleaseName {
+			continue
+		}
+		if o.Version != "" {
+			addon.Version = o.Version
+		}
+		if o.Values != nil {
+			addon.Values = catalog.MergeValues(addon.Values, o.Values)
+		}
+	}
+	return addon
 }
 
 // installArgoCDStep installs Argo CD into the cluster, applies the
@@ -101,7 +123,7 @@ func installArgoCDStep(
 			return err
 		}
 
-		if err := installer.Install(ctx, restConfig, argoCDAddon(profile)); err != nil {
+		if err := installer.Install(ctx, restConfig, argoCDAddon(profile, spec.Overrides)); err != nil {
 			return fmt.Errorf("installing argocd for %s: %w", spec.ID, err)
 		}
 		logger.Info("installed argocd", "cluster", spec.ID)
@@ -140,12 +162,43 @@ func resolveProfile(ctx context.Context, resolver catalog.Resolver, spec core.Cl
 		return core.Profile{}, fmt.Errorf("resolving profile %s for %s: %w", spec.Profile, spec.ID, err)
 	}
 
-	merged, err := catalog.Merge(profile, spec.Overrides)
+	// Below tier-standard, "argocd" is never in profile.Addons (see
+	// argoCDAddon), so catalog.Merge would reject an override naming it as
+	// ErrUnknownOverride even though argoCDAddon applies that same override
+	// directly to argocd.DefaultAddon. Filtering it out here only when the
+	// profile doesn't carry the addon preserves the existing tier-standard+
+	// behavior (Merge still patches its "argocd" catalog entry, so the
+	// self-managed Application app-of-apps renders for it stays in sync too).
+	overrides := spec.Overrides
+	if !profileHasAddon(profile, argocd.ReleaseName) {
+		overrides = withoutOverride(overrides, argocd.ReleaseName)
+	}
+
+	merged, err := catalog.Merge(profile, overrides)
 	if err != nil {
 		return core.Profile{}, fmt.Errorf("applying overrides for %s: %w", spec.ID, err)
 	}
 
 	return argocd.ApplyProfileIngressDefaults(spec.Access, merged), nil
+}
+
+func profileHasAddon(profile core.Profile, name string) bool {
+	for _, a := range profile.Addons {
+		if a.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func withoutOverride(overrides []core.AddonOverride, name string) []core.AddonOverride {
+	out := make([]core.AddonOverride, 0, len(overrides))
+	for _, o := range overrides {
+		if o.Name != name {
+			out = append(out, o)
+		}
+	}
+	return out
 }
 
 // seedRepoStep creates the cluster's repository (idempotent) and commits its

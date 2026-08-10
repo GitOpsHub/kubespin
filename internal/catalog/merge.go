@@ -43,7 +43,7 @@ func Merge(profile core.Profile, overrides []core.AddonOverride) (core.Profile, 
 			addon.Version = o.Version
 		}
 		if o.Values != nil {
-			addon.Values = mergeValues(addon.Values, o.Values)
+			addon.Values = MergeValues(addon.Values, o.Values)
 		}
 		merged.Addons[idx] = addon
 
@@ -65,12 +65,16 @@ func Merge(profile core.Profile, overrides []core.AddonOverride) (core.Profile, 
 	return merged, nil
 }
 
-// mergeValues overlays override values onto the profile's, one level deep.
+// MergeValues overlays override values onto the profile's, one level deep.
 // One level is enough for the shape addon values take in practice — flat
 // Helm value keys, occasionally one nested map — and going deeper would mean
 // guessing at merge semantics (replace vs. deep-merge a slice, for instance)
 // that only the addon's own chart can really judge.
-func mergeValues(base, override map[string]any) map[string]any {
+//
+// Exported so callers outside this package (orchestrator's argoCDAddon) can
+// apply the same one-level overlay to argocd.DefaultAddon, which never
+// appears in a profile's own Addons list for Merge to patch in place.
+func MergeValues(base, override map[string]any) map[string]any {
 	merged := make(map[string]any, len(base)+len(override))
 	for k, v := range base {
 		merged[k] = v
