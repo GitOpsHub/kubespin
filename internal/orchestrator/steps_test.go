@@ -382,8 +382,17 @@ func TestProvisioningSteps_InstallsArgoCDAndAppliesAppOfApps(t *testing.T) {
 	if installer.calls != 1 {
 		t.Errorf("Install called %d times, want 1", installer.calls)
 	}
-	if applier.calls != 1 {
-		t.Errorf("Apply called %d times, want 1", applier.calls)
+	// Once for the repository-credential Secret, once for the root
+	// Application — the Secret must land first, or Argo CD's first reconcile
+	// of the repository it points at fails with "authentication required".
+	if applier.calls != 2 {
+		t.Fatalf("Apply called %d times, want 2 (repo credentials, then root Application)", applier.calls)
+	}
+	if !strings.Contains(string(applier.manifests[0]), "kind: Secret") {
+		t.Errorf("first Apply call = %s, want the repository credentials Secret", applier.manifests[0])
+	}
+	if !strings.Contains(string(applier.manifests[1]), "kind: Application") {
+		t.Errorf("second Apply call = %s, want the root Application", applier.manifests[1])
 	}
 
 	checkout, err := repoProv.Clone(t.Context(), spec)

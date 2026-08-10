@@ -76,7 +76,7 @@ Each provisioned cluster's GitHub repo holds three files, and their roles must s
 - `addons.yaml` — resolved addon set (profile + override patch, flattened without duplicating the base). Argo CD syncs from this.
 - `.state.yaml` — last-applied hash used for idempotent diffing. Not user-authored.
 
-Addons are delivered app-of-apps: one root Argo CD Application discovers one Application per addon, so addons sync and fail independently. Argo CD itself is installed via the Helm Go library (`helm.sh/helm/v3/pkg/action`), never by shelling out to `helm` or `kubectl`.
+Addons are delivered app-of-apps: one root Argo CD Application discovers one Application per addon, so addons sync and fail independently. Argo CD itself is installed via the Helm Go library (`helm.sh/helm/v3/pkg/action`), never by shelling out to `helm` or `kubectl`. The cluster's own repository is always created private, so `apply` also applies a `repo-creds` Secret (`argocd.argoproj.io/secret-type: repository`) alongside the root Application — without it Argo CD's first reconcile fails with "authentication required" and never discovers a single addon.
 
 ## CLI usage
 

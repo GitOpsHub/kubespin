@@ -67,6 +67,14 @@ type Provisioner interface {
 	// repo-server at, so it must be a URL Argo CD's repo-server can clone, not
 	// merely an identifier.
 	RepoURL(ctx context.Context, spec core.ClusterSpec) (string, error)
+
+	// Credentials returns the username/password pair Argo CD's repo-server
+	// should authenticate to the cluster's repository with. The repository is
+	// always created private (see Create), so without registering these as a
+	// repository-credential Secret alongside the root Application, Argo CD's
+	// very first reconcile fails with "authentication required" and never
+	// discovers a single addon.
+	Credentials() (username, password string)
 }
 
 // githubProvisioner is the real Provisioner, backed by GitHub's REST and
@@ -245,6 +253,14 @@ func (p *githubProvisioner) RepoURL(ctx context.Context, spec core.ClusterSpec) 
 		return "", fmt.Errorf("reading repository %s: %w", n.repoName(), err)
 	}
 	return repository.GetCloneURL(), nil
+}
+
+// Credentials returns the token this provisioner already authenticates to
+// GitHub's API with. GitHub accepts any non-empty username alongside a token
+// over HTTPS git auth, so "x-access-token" (matching what a GitHub App
+// installation token would use) is as good as any other placeholder.
+func (p *githubProvisioner) Credentials() (username, password string) {
+	return "x-access-token", p.c.token
 }
 
 func (p *githubProvisioner) cloneBranch(ctx context.Context, spec core.ClusterSpec, branch string) (*Checkout, error) {

@@ -56,9 +56,10 @@ type gitAPI interface {
 // Clients fixes a region: it is operator configuration, not cluster desired
 // state.
 type Clients struct {
-	org  string
-	repo repositoriesAPI
-	git  gitAPI
+	org   string
+	repo  repositoriesAPI
+	git   gitAPI
+	token string
 }
 
 // NewClients builds a real GitHub client. baseURL and uploadURL configure a
@@ -80,7 +81,7 @@ func NewClients(org, baseURL, uploadURL, token string) (*Clients, error) {
 		}
 	}
 
-	return &Clients{org: org, repo: client.Repositories, git: client.Git}, nil
+	return &Clients{org: org, repo: client.Repositories, git: client.Git, token: token}, nil
 }
 
 // names derives every GitHub resource name from the cluster ID, so a

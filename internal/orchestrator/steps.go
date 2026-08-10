@@ -132,6 +132,22 @@ func installArgoCDStep(
 		if err != nil {
 			return fmt.Errorf("resolving repository URL for %s: %w", spec.ID, err)
 		}
+
+		// The repository is always private, so without this Secret the root
+		// Application below fails its first reconcile with "authentication
+		// required" and never discovers a single addon. Applied before the
+		// root Application so the credential already exists the moment Argo
+		// CD's repo-server first tries to use it.
+		username, password := repoProv.Credentials()
+		repoCreds, err := argocd.RenderRepoCredentialsSecret(repoURL, username, password)
+		if err != nil {
+			return fmt.Errorf("rendering repository credentials for %s: %w", spec.ID, err)
+		}
+		if err := applier.Apply(ctx, restConfig, repoCreds); err != nil {
+			return fmt.Errorf("applying repository credentials for %s: %w", spec.ID, err)
+		}
+		logger.Info("applied repository credentials", "cluster", spec.ID)
+
 		rootApp, err := argocd.RenderRootApplication(repoURL)
 		if err != nil {
 			return fmt.Errorf("rendering root Application for %s: %w", spec.ID, err)

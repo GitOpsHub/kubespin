@@ -108,6 +108,12 @@ func (m *Memory) RepoURL(_ context.Context, spec core.ClusterSpec) (string, erro
 	return "https://example.invalid/kubespin/" + name, nil
 }
 
+// Credentials returns an obviously-fake credential pair, matching RepoURL's
+// obviously-fake host.
+func (m *Memory) Credentials() (username, password string) {
+	return "x-access-token", "fake-token"
+}
+
 // Archive marks the repository archived, or converges silently if it is
 // already archived or was never created.
 func (m *Memory) Archive(_ context.Context, spec core.ClusterSpec) error {
