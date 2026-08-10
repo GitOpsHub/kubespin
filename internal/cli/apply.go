@@ -48,6 +48,7 @@ holds — or from the flags below, which override the file when given.`,
   # Azure, resolving addons from a platform-profiles repo instead of the builtin catalog
   ./bin/kubespin apply --provider azure --azure-subscription <subscription-id> --region eastus \
     --cluster-id demo-azure --access private --profile tier-standard@1.0.0 \
+    --instance-type Standard_D4s_v7 \
     --profiles-repo platform-profiles \
     --github-org GitOpsHub --registry-region us-east-1
 

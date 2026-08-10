@@ -28,14 +28,15 @@ kubespin apply [flags]
     --github-org GitOpsHub --registry-region us-east-1
 
   # GCP, public API server, larger node pool
-  ./bin/kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
-    --cluster-id demo-gcp --access public --profile tier-small@1.0.0 \
-    --instance-type e2-standard-4 --desired-size 3 \
-    --github-org GitOpsHub --registry-region us-east-1
-
+  ./bin/kubespin apply --provider gcp --gcp-project kubernetes-dev-502710 --region us-central1 \
+     --cluster-id demo-gcp --access public --profile tier-small@1.0.0 \
+     --instance-type e2-standard-4 --desired-size 1 \
+     --github-org GitOpsHub --registry-region us-east-1
+     
   # Azure, resolving addons from a platform-profiles repo instead of the builtin catalog
   ./bin/kubespin apply --provider azure --azure-subscription <subscription-id> --region eastus \
     --cluster-id demo-azure --access private --profile tier-standard@1.0.0 \
+    --instance-type Standard_D4s_v7 \
     --profiles-repo platform-profiles \
     --github-org GitOpsHub --registry-region us-east-1
 

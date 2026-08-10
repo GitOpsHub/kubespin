@@ -210,6 +210,7 @@ and nothing about it is created or modified.
   --cluster-id demo-azure \
   --access private \
   --profile tier-standard@1.0.0 \
+  --instance-type Standard_D4s_v7 \
   --profiles-repo platform-profiles \
   --subnets "/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/my-rg/providers/Microsoft.Network/virtualNetworks/my-vnet/subnets/my-subnet" \
   --github-org "$GITHUB_ORG" \
@@ -221,6 +222,14 @@ and nothing about it is created or modified.
 `--profile` with no `--profiles-repo` resolves against the builtin catalog —
 useful before `platform-profiles` exists yet. Drop `--subnets` and kubespin
 creates the resource group, VNet, and subnet itself.
+
+Pin `--instance-type` explicitly on repeat `apply` runs against an existing
+cluster: leaving it unset falls back to a per-provider default baked into the
+kubespin binary, and if that default changes between versions, the next
+`apply` tries to drift the node pool onto the new value. AKS (and the other
+clouds) reject changing an existing pool's instance type in place, so an
+unpinned default that moves out from under a live cluster turns an
+idempotent `apply` into a hard failure.
 
 ### Telling clusters where to push status
 
