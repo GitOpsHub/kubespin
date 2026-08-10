@@ -1,0 +1,69 @@
+site_name: kubespin
+site_description: Provision and manage Kubernetes clusters across EKS, GKE, and AKS
+repo_url: https://github.com/GitOpsHub/kubespin
+repo_name: GitOpsHub/kubespin
+edit_uri: edit/main/docs/
+docs_dir: docs
+site_dir: site
+exclude_docs: |
+  requirements.txt
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.top
+    - navigation.indexes
+    - content.code.copy
+    - content.action.edit
+    - toc.follow
+    - search.suggest
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+
+plugins:
+  - search
+
+nav:
+  - Home: README.md
+  - Architecture: architecture.md
+  - Examples: examples.md
+  - Fleet bootstrap: fleet-bootstrap.md
+  - Runbook: runbook.md
+  - Development: development.md
+  - CI/CD Azure OIDC: cicd-azure-oidc.md
+  - CLI reference:
+      - Overview: cli/kubespin.md
+      - apply: cli/kubespin_apply.md
+      - delete: cli/kubespin_delete.md
+      - fleet: cli/kubespin_fleet.md
+      - fleet audit: cli/kubespin_fleet_audit.md
+      - fleet bootstrap: cli/kubespin_fleet_bootstrap.md
+      - fleet dashboard: cli/kubespin_fleet_dashboard.md
+      - fleet status: cli/kubespin_fleet_status.md
+      - fleet update: cli/kubespin_fleet_update.md
+      - login: cli/kubespin_login.md
+      - logout: cli/kubespin_logout.md
+      - status: cli/kubespin_status.md

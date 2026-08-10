@@ -33,3 +33,6 @@ go.work.sum
 
 # Build output
 bin/
+
+# mkdocs build output
+site/
