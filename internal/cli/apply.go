@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/GitOpsHub/kubespin/internal/argocd"
 	"github.com/GitOpsHub/kubespin/internal/catalog"
 	"github.com/GitOpsHub/kubespin/internal/core"
 	"github.com/GitOpsHub/kubespin/internal/orchestrator"
@@ -139,7 +140,10 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	}
 
 	o := orchestrator.New(reg,
-		orchestrator.WithSteps(orchestrator.ProvisioningSteps(cloud, repoProv, resolver, reg, logger)),
+		orchestrator.WithSteps(orchestrator.ProvisioningSteps(
+			cloud, repoProv, resolver, reg,
+			argocd.NewHelmInstaller(logger), argocd.NewDynamicApplier(logger), logger,
+		)),
 		orchestrator.WithReadyReconcile(orchestrator.ReadyReconcile(cloud, repoProv, resolver, logger)),
 		orchestrator.WithLogger(logger),
 	)

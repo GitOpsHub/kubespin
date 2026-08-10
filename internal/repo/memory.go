@@ -94,6 +94,20 @@ func (m *Memory) Push(_ context.Context, checkout *Checkout, files map[string][]
 	return true, nil
 }
 
+// RepoURL returns a stable, obviously-fake clone URL — Memory has no real
+// GitHub host to point at, and nothing in this codebase parses this string,
+// only renders it into a manifest a real Argo CD would clone from.
+func (m *Memory) RepoURL(_ context.Context, spec core.ClusterSpec) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	name := names{spec}.repoName()
+	if _, ok := m.repos[name]; !ok {
+		return "", fmt.Errorf("repo: %s does not exist", name)
+	}
+	return "https://example.invalid/kubespin/" + name, nil
+}
+
 // Archive marks the repository archived, or converges silently if it is
 // already archived or was never created.
 func (m *Memory) Archive(_ context.Context, spec core.ClusterSpec) error {

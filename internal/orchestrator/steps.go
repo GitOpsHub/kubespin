@@ -31,12 +31,9 @@ type Cloud struct {
 
 // ProvisioningSteps builds the steps that drive a real cluster from pending to
 // ready.
-//
-// The Argo CD bootstrap (M5) remains a no-op, so a run reaches ready with a
-// real cluster, a real workload identity, and a seeded repository, but no
-// addons synced — which is exactly the M3 gate and no more.
 func ProvisioningSteps(
-	cloud Cloud, repoProv repo.Provisioner, resolver catalog.Resolver, reg registry.Registry, logger *slog.Logger,
+	cloud Cloud, repoProv repo.Provisioner, resolver catalog.Resolver, reg registry.Registry,
+	installer argocd.Installer, applier argocd.KubeApplier, logger *slog.Logger,
 ) map[core.Phase]Step {
 	if logger == nil {
 		logger = slog.Default()
@@ -55,7 +52,82 @@ func ProvisioningSteps(
 		Label: "create and seed repository",
 		Fn:    seedRepoStep(repoProv, resolver, logger),
 	}
+	steps[core.PhaseRepoPushed] = StepFunc{
+		Label: "install argocd",
+		Fn:    installArgoCDStep(cloud, installer, applier, repoProv, resolver, logger),
+	}
 	return steps
+}
+
+// argoCDAddon returns the addon reference Install should converge on:
+// profile's own "argocd" catalog entry if it has one (tier-standard and
+// above, so `fleet update` can pin its version like any other addon), or
+// argocd.DefaultAddon otherwise — Argo CD has to be installed on every tier
+// regardless of whether the catalog tracks it yet.
+func argoCDAddon(profile core.Profile) core.AddonRef {
+	for _, a := range profile.Addons {
+		if a.Name == argocd.ReleaseName {
+			return a
+		}
+	}
+	return argocd.DefaultAddon
+}
+
+// installArgoCDStep installs Argo CD into the cluster, applies the
+// self-referential root Application directly (never committed to the repo it
+// manages), and commits the per-addon Applications app-of-apps discovers.
+//
+// It needs a *rest.Config for the cluster, which only exists once the
+// cluster is active — provisioner.RESTConfigProvisioner is implemented by
+// every cloud's ClusterProvisioner (internal/provisioner/{aws,gcp,azure}),
+// so the type assertion here only fails for a hypothetical future provider
+// that has not implemented it yet.
+func installArgoCDStep(
+	cloud Cloud, installer argocd.Installer, applier argocd.KubeApplier,
+	repoProv repo.Provisioner, resolver catalog.Resolver, logger *slog.Logger,
+) func(context.Context, core.ClusterSpec, registry.Record) error {
+	return func(ctx context.Context, spec core.ClusterSpec, _ registry.Record) error {
+		restConfigProv, ok := cloud.Cluster.(provisioner.RESTConfigProvisioner)
+		if !ok {
+			return fmt.Errorf("provider %s cannot build a cluster REST config", cloud.Cluster.Provider())
+		}
+		restConfig, err := restConfigProv.RESTConfig(ctx, spec)
+		if err != nil {
+			return fmt.Errorf("building REST config for %s: %w", spec.ID, err)
+		}
+
+		profile, err := resolveProfile(ctx, resolver, spec)
+		if err != nil {
+			return err
+		}
+
+		if err := installer.Install(ctx, restConfig, argoCDAddon(profile)); err != nil {
+			return fmt.Errorf("installing argocd for %s: %w", spec.ID, err)
+		}
+		logger.Info("installed argocd", "cluster", spec.ID)
+
+		repoURL, err := repoProv.RepoURL(ctx, spec)
+		if err != nil {
+			return fmt.Errorf("resolving repository URL for %s: %w", spec.ID, err)
+		}
+		rootApp, err := argocd.RenderRootApplication(repoURL)
+		if err != nil {
+			return fmt.Errorf("rendering root Application for %s: %w", spec.ID, err)
+		}
+		if err := applier.Apply(ctx, restConfig, rootApp); err != nil {
+			return fmt.Errorf("applying root Application for %s: %w", spec.ID, err)
+		}
+		logger.Info("applied app-of-apps root application", "cluster", spec.ID)
+
+		committed, err := repo.ReconcileAppOfApps(ctx, repoProv, spec, profile)
+		if err != nil {
+			return fmt.Errorf("committing app-of-apps for %s: %w", spec.ID, err)
+		}
+		if committed {
+			logger.Info("committed app-of-apps addon applications", "cluster", spec.ID)
+		}
+		return nil
+	}
 }
 
 // resolveProfile resolves spec's profile, applies its per-cluster override

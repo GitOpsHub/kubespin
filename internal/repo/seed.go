@@ -11,15 +11,37 @@ import (
 	"github.com/GitOpsHub/kubespin/internal/core"
 )
 
-// state is the .state.yaml contract: the last-applied hash used for
+// state is the .state.yaml contract: the last-applied hashes used for
 // idempotent diffing. Not user-authored.
 //
-// Only addons are hashed here. Infra drift is detected by
-// ClusterProvisioner.Reconcile diffing the spec directly against live cloud
-// state (M2), which needs no hash of its own; hashing it here as well would
-// just be a second, redundant source of truth to keep in sync.
+// Infra drift is detected by ClusterProvisioner.Reconcile diffing the spec
+// directly against live cloud state (M2), which needs no hash of its own;
+// hashing it here as well would just be a second, redundant source of truth
+// to keep in sync.
 type state struct {
 	AddonsHash string `yaml:"addonsHash"`
+	// AppsHash is the app-of-apps addon Applications' combined hash (M5),
+	// separate from AddonsHash because the two are reconciled independently:
+	// an addons.yaml change and an Argo CD Application manifest change don't
+	// happen on the same schedule, and each function that writes this struct
+	// must not clobber the other's field — see loadState.
+	AppsHash string `yaml:"appsHash,omitempty"`
+}
+
+// loadState reads checkout's current .state.yaml, or a zero state if it has
+// none yet (a first apply). Every writer of StateFile reads through this
+// first and only overwrites its own field, so ReconcileAddons and
+// ReconcileAppOfApps can run independently without erasing each other's hash.
+func loadState(checkout *Checkout) (state, error) {
+	current, ok := checkout.File(StateFile)
+	if !ok {
+		return state{}, nil
+	}
+	var s state
+	if err := yaml.Unmarshal(current, &s); err != nil {
+		return state{}, fmt.Errorf("parsing %s: %w", StateFile, err)
+	}
+	return s, nil
 }
 
 // Render produces the desired cluster.yaml and addons.yaml content for spec
@@ -85,17 +107,16 @@ func reconcile(
 		return false, fmt.Errorf("reading repository for %s: %w", spec.ID, err)
 	}
 
-	if current, ok := checkout.File(StateFile); ok {
-		var currentState state
-		if err := yaml.Unmarshal(current, &currentState); err != nil {
-			return false, fmt.Errorf("parsing %s for %s: %w", StateFile, spec.ID, err)
-		}
-		if currentState.AddonsHash == desiredHash {
-			return false, nil
-		}
+	currentState, err := loadState(checkout)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", spec.ID, err)
 	}
+	if currentState.AddonsHash == desiredHash {
+		return false, nil
+	}
+	currentState.AddonsHash = desiredHash
 
-	stateYAML, err := yaml.Marshal(state{AddonsHash: desiredHash})
+	stateYAML, err := yaml.Marshal(currentState)
 	if err != nil {
 		return false, fmt.Errorf("rendering %s: %w", StateFile, err)
 	}

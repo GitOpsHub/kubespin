@@ -23,7 +23,7 @@ import (
 // cached. Its lifetime is bounded by the presigned URL's own X-Amz-Expires
 // (PresignGetCallerIdentity's 60s default), the same default
 // aws-iam-authenticator itself uses.
-const eksTokenPrefix = "k8s-aws-v1."
+const eksTokenPrefix = "k8s-aws-v1." //nolint:gosec // not a credential, just the token's format prefix
 
 // stsPresignAPI mints that bearer token. Narrowed to this one operation so
 // the whole RESTConfig path is testable without AWS credentials, the same way
@@ -63,7 +63,7 @@ func (p *stsPresigner) PresignGetCallerIdentityURL(ctx context.Context, clusterN
 		},
 	)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("presigning GetCallerIdentity for %s: %w", clusterName, err)
 	}
 	return presigned.URL, nil
 }

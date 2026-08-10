@@ -32,6 +32,20 @@ const (
 	installNamespace = Namespace
 )
 
+// DefaultAddon is what Install uses when a cluster's resolved profile carries
+// no "argocd" catalog entry of its own — true of tier-small today (M4's
+// catalog only tracks Argo CD's version starting at tier-standard, so `fleet
+// audit`/`fleet update` can pin it there). Argo CD still has to be installed
+// on every tier regardless: app-of-apps cannot sync into a cluster that
+// doesn't have it yet.
+var DefaultAddon = core.AddonRef{
+	Name:       "argocd",
+	Chart:      "argo-cd",
+	Repository: "https://argoproj.github.io/argo-helm",
+	Version:    "7.7.11",
+	Namespace:  installNamespace,
+}
+
 // Installer installs or upgrades Argo CD itself into a cluster — the one
 // piece of the addon pipeline that has to exist before app-of-apps can sync
 // anything into it, so it is not delivered as an Argo CD Application like
@@ -87,7 +101,7 @@ func (h *HelmInstaller) Install(ctx context.Context, restConfig *rest.Config, ad
 		up.RepoURL = addon.Repository
 		up.Version = addon.Version
 		up.Install = false
-		chartPath, err := up.ChartPathOptions.LocateChart(addon.Chart, settings)
+		chartPath, err := up.LocateChart(addon.Chart, settings)
 		if err != nil {
 			return fmt.Errorf("locating chart %s: %w", addon.Chart, err)
 		}
@@ -108,7 +122,7 @@ func (h *HelmInstaller) Install(ctx context.Context, restConfig *rest.Config, ad
 	inst.CreateNamespace = true
 	inst.RepoURL = addon.Repository
 	inst.Version = addon.Version
-	chartPath, err := inst.ChartPathOptions.LocateChart(addon.Chart, settings)
+	chartPath, err := inst.LocateChart(addon.Chart, settings)
 	if err != nil {
 		return fmt.Errorf("locating chart %s: %w", addon.Chart, err)
 	}
@@ -133,7 +147,7 @@ func releaseExists(cfg *action.Configuration, releaseName string) (bool, error) 
 	case errors.Is(err, driver.ErrReleaseNotFound):
 		return false, nil
 	default:
-		return false, err
+		return false, fmt.Errorf("checking release history for %s: %w", releaseName, err)
 	}
 }
 
@@ -145,7 +159,7 @@ func (h *HelmInstaller) actionConfig(restConfig *rest.Config) (*action.Configura
 	getter := &staticRESTClientGetter{cfg: restConfig}
 	debugLog := func(format string, v ...any) { h.logger.Debug(fmt.Sprintf(format, v...)) }
 	if err := cfg.Init(getter, installNamespace, "secret", debugLog); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("initialising helm action configuration: %w", err)
 	}
 	return cfg, nil
 }
@@ -164,7 +178,7 @@ func (g *staticRESTClientGetter) ToRESTConfig() (*rest.Config, error) { return g
 func (g *staticRESTClientGetter) ToDiscoveryClient() (discovery.CachedDiscoveryInterface, error) {
 	dc, err := discovery.NewDiscoveryClientForConfig(g.cfg)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("building discovery client: %w", err)
 	}
 	return memory.NewMemCacheClient(dc), nil
 }
@@ -172,7 +186,7 @@ func (g *staticRESTClientGetter) ToDiscoveryClient() (discovery.CachedDiscoveryI
 func (g *staticRESTClientGetter) ToRESTMapper() (meta.RESTMapper, error) {
 	dc, err := g.ToDiscoveryClient()
 	if err != nil {
-		return nil, err
+		return nil, err // already wrapped by ToDiscoveryClient
 	}
 	mapper := restmapper.NewDeferredDiscoveryRESTMapper(dc)
 	return restmapper.NewShortcutExpander(mapper, dc, func(string) {}), nil

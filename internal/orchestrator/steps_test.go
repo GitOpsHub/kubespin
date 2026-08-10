@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/client-go/rest"
+
+	"github.com/GitOpsHub/kubespin/internal/argocd"
 	"github.com/GitOpsHub/kubespin/internal/catalog"
 	"github.com/GitOpsHub/kubespin/internal/core"
 	"github.com/GitOpsHub/kubespin/internal/provisioner"
@@ -117,6 +120,14 @@ func (f *fakeCloud) EnsureNetwork(
 	return provisioner.NetworkResult{SubnetIDs: subnets}, nil
 }
 
+// RESTConfig fakes provisioner.RESTConfigProvisioner: installArgoCDStep only
+// needs some non-nil config to hand to the (also fake) Installer/KubeApplier
+// below, never a reachable cluster.
+func (f *fakeCloud) RESTConfig(context.Context, core.ClusterSpec) (*rest.Config, error) {
+	f.calls = append(f.calls, "RESTConfig")
+	return &rest.Config{Host: "https://fake.example.com"}, nil
+}
+
 func (f *fakeCloud) cloud() Cloud {
 	return Cloud{
 		Cluster:  f,
@@ -129,14 +140,46 @@ func (f *fakeCloud) cloud() Cloud {
 	}
 }
 
+// fakeInstaller and fakeApplier stand in for the real Helm install and
+// server-side-apply paths, which both need a reachable cluster this test
+// environment does not have. They record just enough to prove the
+// orchestrator wired them correctly.
+type fakeInstaller struct {
+	calls int
+	err   error
+}
+
+func (f *fakeInstaller) Install(context.Context, *rest.Config, core.AddonRef) error {
+	f.calls++
+	return f.err
+}
+
+type fakeApplier struct {
+	calls     int
+	manifests [][]byte
+	err       error
+}
+
+func (f *fakeApplier) Apply(_ context.Context, _ *rest.Config, manifest []byte) error {
+	f.calls++
+	f.manifests = append(f.manifests, manifest)
+	return f.err
+}
+
 func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+func provisioningSteps(
+	cloud Cloud, repoProv repo.Provisioner, resolver catalog.Resolver, reg registry.Registry, logger *slog.Logger,
+) map[core.Phase]Step {
+	return ProvisioningSteps(cloud, repoProv, resolver, reg, &fakeInstaller{}, &fakeApplier{}, logger)
+}
 
 func runWithCloud(t *testing.T, f *fakeCloud) (registry.Record, error) {
 	t.Helper()
 
 	reg := registry.NewMemory()
 	o := New(reg,
-		WithSteps(ProvisioningSteps(f.cloud(), repo.NewMemory(), catalog.NewBuiltinResolver(), reg, quietLogger())),
+		WithSteps(provisioningSteps(f.cloud(), repo.NewMemory(), catalog.NewBuiltinResolver(), reg, quietLogger())),
 		WithHolder("test-runner"),
 		WithLogger(quietLogger()),
 	)
@@ -210,7 +253,7 @@ func TestProvisioningSteps_RecordsOIDCIssuer(t *testing.T) {
 	f := newFakeCloud()
 	reg := registry.NewMemory()
 	o := New(reg,
-		WithSteps(ProvisioningSteps(f.cloud(), repo.NewMemory(), catalog.NewBuiltinResolver(), reg, quietLogger())),
+		WithSteps(provisioningSteps(f.cloud(), repo.NewMemory(), catalog.NewBuiltinResolver(), reg, quietLogger())),
 		WithHolder("test-runner"),
 		WithLogger(quietLogger()),
 	)
@@ -283,7 +326,7 @@ func TestProvisioningSteps_MissingIngestionEndpointIsNotFatal(t *testing.T) {
 
 	reg := registry.NewMemory()
 	o := New(reg,
-		WithSteps(ProvisioningSteps(cloud, repo.NewMemory(), catalog.NewBuiltinResolver(), reg, quietLogger())),
+		WithSteps(provisioningSteps(cloud, repo.NewMemory(), catalog.NewBuiltinResolver(), reg, quietLogger())),
 		WithLogger(quietLogger()),
 	)
 
@@ -299,28 +342,92 @@ func TestProvisioningSteps_MissingIngestionEndpointIsNotFatal(t *testing.T) {
 	}
 }
 
-// The Argo CD bootstrap (M5) is still a no-op, so a run reaches ready with a
-// real cluster, identity, and seeded repository, but no addons synced —
-// exactly the M3 gate and no more.
-func TestProvisioningSteps_LaterPhasesRemainNoOps(t *testing.T) {
-	steps := ProvisioningSteps(newFakeCloud().cloud(), repo.NewMemory(), catalog.NewBuiltinResolver(), registry.NewMemory(), quietLogger())
+// PhaseArgoCDInstalled ("verify addons healthy") remains a no-op: this
+// codebase has no live way to check Argo CD sync health without a real
+// cluster, so it stays a placeholder rather than a step that always
+// trivially "succeeds".
+func TestProvisioningSteps_ArgoCDInstalledRemainsANoOp(t *testing.T) {
+	steps := provisioningSteps(newFakeCloud().cloud(), repo.NewMemory(), catalog.NewBuiltinResolver(), registry.NewMemory(), quietLogger())
 
-	for _, phase := range []core.Phase{core.PhaseRepoPushed, core.PhaseArgoCDInstalled} {
-		step, ok := steps[phase]
-		if !ok {
-			t.Fatalf("no step registered for %s", phase)
-		}
-		if err := step.Run(t.Context(), testSpec(), registry.Record{}); err != nil {
-			t.Errorf("step for %s returned %v, want a no-op", phase, err)
-		}
+	step, ok := steps[core.PhaseArgoCDInstalled]
+	if !ok {
+		t.Fatal("no step registered for PhaseArgoCDInstalled")
 	}
+	if err := step.Run(t.Context(), testSpec(), registry.Record{}); err != nil {
+		t.Errorf("step for %s returned %v, want a no-op", core.PhaseArgoCDInstalled, err)
+	}
+}
+
+// PhaseRepoPushed now installs Argo CD, applies the root Application, and
+// commits the app-of-apps addon Applications (M5).
+func TestProvisioningSteps_InstallsArgoCDAndAppliesAppOfApps(t *testing.T) {
+	f := newFakeCloud()
+	installer := &fakeInstaller{}
+	applier := &fakeApplier{}
+	repoProv := repo.NewMemory()
+	steps := ProvisioningSteps(f.cloud(), repoProv, catalog.NewBuiltinResolver(), registry.NewMemory(), installer, applier, quietLogger())
+
+	spec := testSpec()
+	// installArgoCDStep resolves the repository's clone URL, so the repo has
+	// to exist first — exactly the order a real run reaches it in, via
+	// PhaseIdentityBound's own step.
+	if err := steps[core.PhaseIdentityBound].Run(t.Context(), spec, registry.Record{}); err != nil {
+		t.Fatalf("seeding repository: %v", err)
+	}
+
+	if err := steps[core.PhaseRepoPushed].Run(t.Context(), spec, registry.Record{}); err != nil {
+		t.Fatalf("installing argocd: %v", err)
+	}
+
+	if installer.calls != 1 {
+		t.Errorf("Install called %d times, want 1", installer.calls)
+	}
+	if applier.calls != 1 {
+		t.Errorf("Apply called %d times, want 1", applier.calls)
+	}
+
+	checkout, err := repoProv.Clone(t.Context(), spec)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if _, ok := checkout.File(argocd.AppsDir + "/cert-manager.yaml"); !ok {
+		t.Error("expected an app-of-apps Application to have been committed for cert-manager")
+	}
+}
+
+// A cluster whose ClusterProvisioner cannot build a REST config (no cloud
+// implements this today, but the type assertion has to fail safely for a
+// future one that doesn't yet) must not silently skip the Argo CD install.
+func TestProvisioningSteps_NoRESTConfigCapabilityIsAnError(t *testing.T) {
+	cloud := newFakeCloud().cloud()
+	cloud.Cluster = restConfiglessCluster{cloud.Cluster}
+
+	repoProv := repo.NewMemory()
+	steps := ProvisioningSteps(
+		cloud, repoProv, catalog.NewBuiltinResolver(), registry.NewMemory(),
+		&fakeInstaller{}, &fakeApplier{}, quietLogger(),
+	)
+
+	spec := testSpec()
+	if err := steps[core.PhaseIdentityBound].Run(t.Context(), spec, registry.Record{}); err != nil {
+		t.Fatalf("seeding repository: %v", err)
+	}
+	if err := steps[core.PhaseRepoPushed].Run(t.Context(), spec, registry.Record{}); err == nil {
+		t.Fatal("expected an error for a provider without RESTConfig capability")
+	}
+}
+
+// restConfiglessCluster wraps a ClusterProvisioner without exposing
+// RESTConfig, so it fails the type assertion installArgoCDStep makes.
+type restConfiglessCluster struct {
+	provisioner.ClusterProvisioner
 }
 
 // PhaseIdentityBound now does real work: it must create and seed the
 // cluster's repository.
 func TestProvisioningSteps_SeedsRepository(t *testing.T) {
 	repoProv := repo.NewMemory()
-	steps := ProvisioningSteps(newFakeCloud().cloud(), repoProv, catalog.NewBuiltinResolver(), registry.NewMemory(), quietLogger())
+	steps := provisioningSteps(newFakeCloud().cloud(), repoProv, catalog.NewBuiltinResolver(), registry.NewMemory(), quietLogger())
 
 	step, ok := steps[core.PhaseIdentityBound]
 	if !ok {
@@ -344,7 +451,7 @@ func TestProvisioningSteps_SeedsRepository(t *testing.T) {
 // just accepted and ignored.
 func TestProvisioningSteps_SeedsRepository_AppliesOverrides(t *testing.T) {
 	repoProv := repo.NewMemory()
-	steps := ProvisioningSteps(newFakeCloud().cloud(), repoProv, catalog.NewBuiltinResolver(), registry.NewMemory(), quietLogger())
+	steps := provisioningSteps(newFakeCloud().cloud(), repoProv, catalog.NewBuiltinResolver(), registry.NewMemory(), quietLogger())
 
 	spec := testSpec()
 	spec.Overrides = []core.AddonOverride{{Name: "cert-manager", Version: "1.16.0"}}

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/go-github/v75/github"
@@ -137,14 +138,28 @@ func (f *fakeGitHub) GetContents(
 	}
 	tree := f.trees[f.commits[commitSHA].GetTree().GetSHA()]
 
-	content, ok := tree[path]
-	if !ok {
-		return nil, nil, resp404(), fmt.Errorf("404")
+	if content, ok := tree[path]; ok {
+		return &github.RepositoryContent{
+			Content:  github.Ptr(base64.StdEncoding.EncodeToString([]byte(content))),
+			Encoding: github.Ptr("base64"),
+		}, nil, ok200(), nil
 	}
-	return &github.RepositoryContent{
-		Content:  github.Ptr(base64.StdEncoding.EncodeToString([]byte(content))),
-		Encoding: github.Ptr("base64"),
-	}, nil, ok200(), nil
+
+	// path did not match a file exactly; treat it as a directory listing, the
+	// same fallback the real Contents API offers.
+	prefix := path + "/"
+	var dirContents []*github.RepositoryContent
+	for p := range tree {
+		if rest, ok := strings.CutPrefix(p, prefix); ok && !strings.Contains(rest, "/") {
+			dirContents = append(dirContents, &github.RepositoryContent{
+				Path: github.Ptr(p), Type: github.Ptr("file"),
+			})
+		}
+	}
+	if len(dirContents) > 0 {
+		return nil, dirContents, ok200(), nil
+	}
+	return nil, nil, resp404(), fmt.Errorf("404")
 }
 
 func (f *fakeGitHub) UpdateBranchProtection(

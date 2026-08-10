@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/go-github/v75/github"
 
+	"github.com/GitOpsHub/kubespin/internal/argocd"
 	"github.com/GitOpsHub/kubespin/internal/core"
 )
 
@@ -60,6 +61,12 @@ type Provisioner interface {
 	// is idempotent — archiving an already-archived or absent repository is a
 	// no-op — so a retried teardown converges rather than failing.
 	Archive(ctx context.Context, spec core.ClusterSpec) error
+
+	// RepoURL returns the repository's clone URL — what the app-of-apps root
+	// Application (internal/argocd.RenderRootApplication) points Argo CD's own
+	// repo-server at, so it must be a URL Argo CD's repo-server can clone, not
+	// merely an identifier.
+	RepoURL(ctx context.Context, spec core.ClusterSpec) (string, error)
 }
 
 // githubProvisioner is the real Provisioner, backed by GitHub's REST and
@@ -229,6 +236,17 @@ func (p *githubProvisioner) Clone(ctx context.Context, spec core.ClusterSpec) (*
 	return p.cloneBranch(ctx, spec, repository.GetDefaultBranch())
 }
 
+// RepoURL returns the repository's HTTPS clone URL.
+func (p *githubProvisioner) RepoURL(ctx context.Context, spec core.ClusterSpec) (string, error) {
+	n := names{spec}
+
+	repository, _, err := p.c.repo.Get(ctx, p.c.org, n.repoName())
+	if err != nil {
+		return "", fmt.Errorf("reading repository %s: %w", n.repoName(), err)
+	}
+	return repository.GetCloneURL(), nil
+}
+
 func (p *githubProvisioner) cloneBranch(ctx context.Context, spec core.ClusterSpec, branch string) (*Checkout, error) {
 	n := names{spec}
 
@@ -259,7 +277,54 @@ func (p *githubProvisioner) cloneBranch(ctx context.Context, spec core.ClusterSp
 		checkout.files[path] = []byte(decoded)
 	}
 
+	appPaths, err := p.listAppsDir(ctx, n, branch)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range appPaths {
+		content, _, resp, err := p.c.repo.GetContents(ctx, p.c.org, n.repoName(), path,
+			&github.RepositoryContentGetOptions{Ref: branch})
+		if err != nil {
+			if notFound(resp) {
+				continue
+			}
+			return nil, fmt.Errorf("reading %s from %s: %w", path, n.repoName(), err)
+		}
+		decoded, err := content.GetContent()
+		if err != nil {
+			return nil, fmt.Errorf("decoding %s from %s: %w", path, n.repoName(), err)
+		}
+		checkout.files[path] = []byte(decoded)
+	}
+
 	return checkout, nil
+}
+
+// listAppsDir lists the app-of-apps directory's current files, so cloneBranch
+// can track them in Checkout the same way it tracks the three fixed files
+// above. Without this, every addon Application under argocd.AppsDir would
+// look "new" on every Push — checkout would never have seen it — and a
+// no-change apply would recommit the whole directory instead of making no
+// commit at all.
+func (p *githubProvisioner) listAppsDir(ctx context.Context, n names, branch string) ([]string, error) {
+	_, dirContents, resp, err := p.c.repo.GetContents(ctx, p.c.org, n.repoName(), argocd.AppsDir,
+		&github.RepositoryContentGetOptions{Ref: branch})
+	if err != nil {
+		if notFound(resp) {
+			// No apps/ directory yet — the first apply that installs Argo CD
+			// creates it.
+			return nil, nil
+		}
+		return nil, fmt.Errorf("listing %s in %s: %w", argocd.AppsDir, n.repoName(), err)
+	}
+
+	paths := make([]string, 0, len(dirContents))
+	for _, entry := range dirContents {
+		if entry.GetType() == "file" {
+			paths = append(paths, entry.GetPath())
+		}
+	}
+	return paths, nil
 }
 
 // Push commits every file in files that differs from checkout, as one atomic
