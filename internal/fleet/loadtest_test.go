@@ -143,7 +143,7 @@ func TestLoad_Update(t *testing.T) {
 
 	const concurrency = 20
 	start := time.Now()
-	results, err := Update(context.Background(), reg, registry.Filter{}, resolver, repoProv, "cert-manager", "1.16.0", concurrency)
+	results, err := Update(context.Background(), reg, registry.Filter{}, resolver, repoProv, "cert-manager", "1.16.0", concurrency, 0)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Update: %v", err)

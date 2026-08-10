@@ -36,6 +36,7 @@ func newFleetCommand() *cobra.Command {
 		newFleetUpdateCommand(),
 		newFleetAuditCommand(),
 		newFleetStatusCommand(),
+		newFleetDashboardCommand(),
 	)
 	return fleetCmd
 }
@@ -47,8 +48,15 @@ func newFleetUpdateCommand() *cobra.Command {
 		Long: `update patches the repository of every cluster matching the given profile,
 staged through a rate-limited worker pool.
 
-Canary-first staging (updating a canary tier before the rest of the fleet)
-is not yet implemented: every matching cluster is updated in the same wave.
+With --canary-count set, the first N matching clusters (ordered
+deterministically by cluster ID, so a wave is reproducible run to run) are
+updated first, as a canary wave. If any canary cluster's update fails, the
+rest of the fleet is left untouched and reported "skipped" — canarying exists
+to catch a bad version before it reaches every cluster, so a canary failure
+must stop the rollout rather than continue past it. Only a clean canary wave
+rolls to the rest, in a second wave. --canary-count 0 (the default) skips
+canarying and updates every matching cluster in one wave.
+
 --provider is the only filter that currently narrows a wave; --profile is
 accepted but not yet applied, because the Fleet Registry's query filter has
 no profile dimension to select on.
@@ -60,6 +68,10 @@ failed wave is safe.`,
 		Example: `  # Roll a new Argo CD version across every cluster, 8 at a time
   ./bin/kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8 \
     --github-org GitOpsHub --registry-region us-east-1
+
+  # Canary the first 3 clusters before rolling to the rest of the fleet
+  ./bin/kubespin fleet update --component cert-manager --version 1.15.1 \
+    --canary-count 3 --github-org GitOpsHub --registry-region us-east-1
 
   # Scope the wave to one tier and one cloud
   ./bin/kubespin fleet update --component cert-manager --version 1.15.1 \
@@ -74,6 +86,7 @@ failed wave is safe.`,
 	fs.String("component", "", "addon to update")
 	fs.String("version", "", "target version")
 	fs.Int("concurrency", 4, "maximum concurrent repository updates")
+	fs.Int("canary-count", 0, "update this many clusters first and abort before the rest of the fleet if any fail (0 disables canarying)")
 	fs.String("provider", "", "restrict to one cloud provider")
 	fs.String("github-org", "", "GitHub organization cluster repositories live in")
 	fs.String("github-base-url", "", "GitHub Enterprise API base URL (leave empty for github.com)")
@@ -123,8 +136,12 @@ func runFleetUpdate(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("reading --concurrency: %w", err)
 	}
+	canaryCount, err := cmd.Flags().GetInt("canary-count")
+	if err != nil {
+		return fmt.Errorf("reading --canary-count: %w", err)
+	}
 
-	results, err := fleet.Update(ctx, reg, filter, resolver, repoProv, component, version, concurrency,
+	results, err := fleet.Update(ctx, reg, filter, resolver, repoProv, component, version, concurrency, canaryCount,
 		fleet.WithLogger(LoggerFrom(ctx)))
 	if err != nil {
 		return fmt.Errorf("running fleet update: %w", err)
@@ -136,9 +153,12 @@ func runFleetUpdate(cmd *cobra.Command, _ []string) error {
 func reportUpdateResults(cmd *cobra.Command, results []fleet.UpdateResult, _ *Config) error {
 	out := cmd.OutOrStdout()
 
-	var failed int
+	var failed, skipped int
 	for _, r := range results {
 		switch {
+		case r.Skipped:
+			skipped++
+			_, _ = fmt.Fprintf(out, "%s: skipped (canary wave failed)\n", r.ClusterID)
 		case r.Err != nil:
 			failed++
 			_, _ = fmt.Fprintf(out, "%s: FAILED: %v\n", r.ClusterID, r.Err)
@@ -148,7 +168,7 @@ func reportUpdateResults(cmd *cobra.Command, results []fleet.UpdateResult, _ *Co
 			_, _ = fmt.Fprintf(out, "%s: already up to date\n", r.ClusterID)
 		}
 	}
-	_, _ = fmt.Fprintf(out, "%d cluster(s), %d failed\n", len(results), failed)
+	_, _ = fmt.Fprintf(out, "%d cluster(s), %d failed, %d skipped\n", len(results), failed, skipped)
 
 	if failed > 0 {
 		return fmt.Errorf("fleet update: %d of %d clusters failed", failed, len(results))
@@ -164,8 +184,11 @@ func newFleetAuditCommand() *cobra.Command {
 the cluster.yaml in that cluster's repository, and reports findings. It
 detects changes made outside kubespin, such as a manually resized node pool.
 
-audit is read-only: it never reconciles or commits. Persisting findings back
-into the Fleet Registry is not yet implemented; this prints them.`,
+audit is read-only: it never reconciles or commits infrastructure or a
+cluster's repository. It does write one thing: each cluster's findings (or a
+clean result) are persisted to the Fleet Registry, so 'fleet status' and
+other fleet-wide tooling can read the most recent audit result without
+re-running one.`,
 		Example: `  # Audit every cluster in the fleet
   ./bin/kubespin fleet audit --github-org GitOpsHub --registry-region us-east-1
 
@@ -352,13 +375,19 @@ func reportStatuses(cmd *cobra.Command, statuses []fleet.ClusterStatus, output s
 		}
 		return nil
 	case "table", "":
-		_, _ = fmt.Fprintf(out, "%-30s %-8s %-18s %-6s %s\n", "CLUSTER", "PROVIDER", "PHASE", "STALE", "LAST REPORTED")
+		_, _ = fmt.Fprintf(out, "%-30s %-8s %-18s %-6s %-9s %s\n",
+			"CLUSTER", "PROVIDER", "PHASE", "STALE", "DRIFT", "LAST REPORTED")
 		for _, s := range statuses {
 			last := "never"
 			if !s.LastReportedAt.IsZero() {
 				last = s.LastReportedAt.Format(time.RFC3339)
 			}
-			_, _ = fmt.Fprintf(out, "%-30s %-8s %-18s %-6t %s\n", s.ClusterID, s.Provider, s.Phase, s.Stale, last)
+			drift := "never audited"
+			if !s.FindingsAt.IsZero() {
+				drift = fmt.Sprintf("%d findings", s.FindingsCount)
+			}
+			_, _ = fmt.Fprintf(out, "%-30s %-8s %-18s %-6t %-9s %s\n",
+				s.ClusterID, s.Provider, s.Phase, s.Stale, drift, last)
 		}
 		return nil
 	default:

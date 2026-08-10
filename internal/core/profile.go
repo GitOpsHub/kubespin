@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 )
 
 // namePattern constrains profile and addon names to a DNS-label-ish shape, since
@@ -41,6 +42,13 @@ type AddonRef struct {
 	Version    string         `yaml:"version" json:"version"`
 	Namespace  string         `yaml:"namespace" json:"namespace"`
 	Values     map[string]any `yaml:"values,omitempty" json:"values,omitempty"`
+
+	// Providers restricts this addon to the named clouds, e.g. Karpenter
+	// (EKS-only). Empty means every provider — most addons in the catalog are
+	// cloud-agnostic and leave this unset. Profile.ForProvider is what acts on
+	// it; a profile resolved without going through ForProvider still carries
+	// every addon regardless of this field.
+	Providers []Provider `yaml:"providers,omitempty" json:"providers,omitempty"`
 }
 
 // Validate reports whether the addon reference is complete enough to render.
@@ -63,7 +71,19 @@ func (a AddonRef) Validate() error {
 	if a.Namespace == "" {
 		errs = append(errs, fmt.Errorf("%w: addon %q: namespace is required", ErrInvalidSpec, a.Name))
 	}
+	for _, p := range a.Providers {
+		if !p.Valid() {
+			errs = append(errs, fmt.Errorf("%w: addon %q: provider %q is not supported", ErrInvalidSpec, a.Name, p))
+		}
+	}
 	return errors.Join(errs...)
+}
+
+// SupportsProvider reports whether the addon should be delivered to a cluster
+// on provider: true when Providers is empty (every provider) or provider is
+// named in it.
+func (a AddonRef) SupportsProvider(provider Provider) bool {
+	return len(a.Providers) == 0 || slices.Contains(a.Providers, provider)
 }
 
 // AddonOverride patches one addon of a resolved profile, by name, as part of a
@@ -105,6 +125,23 @@ type Profile struct {
 
 // Ref returns the reference identifying this profile.
 func (p Profile) Ref() ProfileRef { return ProfileRef{Name: p.Name, Version: p.Version} }
+
+// ForProvider returns a copy of p with every addon that does not support
+// provider dropped (see AddonRef.SupportsProvider). Callers resolve a profile
+// for a specific cluster's provider through this before applying override
+// patches, so an addon like Karpenter (EKS-only) never renders into a GCP or
+// Azure cluster's addons.yaml, and an override naming it on those clouds
+// correctly fails as unknown rather than silently applying.
+func (p Profile) ForProvider(provider Provider) Profile {
+	out := p
+	out.Addons = make([]AddonRef, 0, len(p.Addons))
+	for _, a := range p.Addons {
+		if a.SupportsProvider(provider) {
+			out.Addons = append(out.Addons, a)
+		}
+	}
+	return out
+}
 
 // Validate checks the profile and every addon it carries, rejecting duplicate
 // addon names — two Argo CD Applications cannot share a name.

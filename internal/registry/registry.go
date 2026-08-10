@@ -73,6 +73,17 @@ type Record struct {
 	// attempt to reach the cluster.
 	LastReportedAt time.Time
 
+	// Findings is the drift `fleet audit` last found between this cluster's
+	// live infra and its cluster.yaml, one string per finding. An empty,
+	// non-nil-implying slice with a non-zero FindingsAt means the cluster was
+	// audited and found clean; a zero FindingsAt means it has never been
+	// audited. Audit is the only writer — `apply`/`delete` never touch this,
+	// the same read-only boundary AuditOne itself enforces.
+	Findings []string
+
+	// FindingsAt is when Findings was last written. Zero means never audited.
+	FindingsAt time.Time
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 
@@ -178,6 +189,12 @@ type Registry interface {
 	// cluster, which is why it is its own method rather than an overload of
 	// Touch.
 	RecordOIDCIssuer(ctx context.Context, id core.ClusterID, issuer string) error
+
+	// RecordFindings persists the result of the most recent `fleet audit` run
+	// for a cluster, replacing whatever findings were recorded before. Like
+	// Touch it carries no version check: audit findings are observational
+	// metadata, not a phase transition, and must not contend with one.
+	RecordFindings(ctx context.Context, id core.ClusterID, findings []string, at time.Time) error
 
 	// List returns records matching filter.
 	List(ctx context.Context, filter Filter) ([]Record, error)

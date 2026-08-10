@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 
 	"github.com/GitOpsHub/kubespin/internal/catalog"
@@ -17,6 +18,11 @@ type UpdateResult struct {
 	ClusterID core.ClusterID
 	Committed bool
 	Err       error
+
+	// Skipped is true when the canary wave failed and this cluster's own
+	// update never ran because of it — the whole point of canarying is to
+	// find that out before touching the rest of the fleet.
+	Skipped bool
 }
 
 // UpdateOne patches a single cluster's repository so its override for
@@ -34,6 +40,7 @@ func UpdateOne(
 	if err != nil {
 		return false, fmt.Errorf("resolving profile %s for %s: %w", spec.Profile, spec.ID, err)
 	}
+	profile = profile.ForProvider(spec.Provider)
 
 	overrides := setComponentVersion(spec.Overrides, component, version)
 
@@ -66,13 +73,23 @@ func setComponentVersion(overrides []core.AddonOverride, component, version stri
 }
 
 // Update rolls component to version across every cluster matching filter,
-// bounded by concurrency. Like Audit, one cluster's failure does not abort
-// the wave: a rate-limited GitHub API or one cluster with a malformed
-// override must not block updating the rest of the fleet.
+// bounded by concurrency.
+//
+// When canaryCount is positive, the first canaryCount clusters (ordered
+// deterministically by ClusterID, so a wave is reproducible run to run) are
+// updated first, as a wave of their own. If any of them fail, the remaining
+// clusters are reported Skipped rather than touched — canarying exists
+// specifically to catch a bad version before it reaches the whole fleet, so
+// silently continuing past a canary failure would defeat the point. Only on
+// a clean canary wave does the rest of the fleet update, in a second wave.
+//
+// Like Audit, one cluster's failure does not abort its own wave: a
+// rate-limited GitHub API or one cluster with a malformed override must not
+// block updating the rest of that wave.
 func Update(
 	ctx context.Context, reg registry.Registry, filter registry.Filter,
 	resolver catalog.Resolver, repoProv repo.Provisioner,
-	component, version string, concurrency int, opts ...Option,
+	component, version string, concurrency, canaryCount int, opts ...Option,
 ) ([]UpdateResult, error) {
 	logger := resolveOptions(opts).logger
 
@@ -80,13 +97,61 @@ func Update(
 	if err != nil {
 		return nil, fmt.Errorf("listing fleet registry: %w", err)
 	}
+	sort.Slice(records, func(i, j int) bool { return records[i].ClusterID < records[j].ClusterID })
+
 	if concurrency < 1 {
 		concurrency = 1
 	}
-	logger.Info("starting fleet update wave",
-		"component", component, "version", version, "clusters", len(records),
-		"provider_filter", filter.Provider, "concurrency", concurrency)
+	if canaryCount < 0 {
+		canaryCount = 0
+	}
+	if canaryCount > len(records) {
+		canaryCount = len(records)
+	}
 
+	canary, rest := records[:canaryCount], records[canaryCount:]
+
+	var results []UpdateResult
+	if len(canary) > 0 {
+		logger.Info("starting canary update wave",
+			"component", component, "version", version, "clusters", len(canary), "concurrency", concurrency)
+		results = append(results, updateWave(ctx, canary, resolver, repoProv, component, version, concurrency, logger)...)
+
+		if failed := countFailedUpdates(results); failed > 0 {
+			logger.Warn("canary wave had failures, skipping the remaining fleet",
+				"failed", failed, "canary_size", len(canary), "skipped", len(rest))
+			for _, rec := range rest {
+				results = append(results, UpdateResult{ClusterID: rec.ClusterID, Skipped: true})
+			}
+			return results, nil
+		}
+	}
+
+	logger.Info("starting fleet update wave",
+		"component", component, "version", version, "clusters", len(rest),
+		"provider_filter", filter.Provider, "concurrency", concurrency)
+	results = append(results, updateWave(ctx, rest, resolver, repoProv, component, version, concurrency, logger)...)
+
+	return results, nil
+}
+
+func countFailedUpdates(results []UpdateResult) int {
+	n := 0
+	for _, r := range results {
+		if r.Err != nil {
+			n++
+		}
+	}
+	return n
+}
+
+// updateWave runs updateRecord across records, bounded by concurrency. It is
+// the unit Update stages twice (canary, then the rest of the fleet) so both
+// waves get the same worker-pool and per-cluster-failure behavior.
+func updateWave(
+	ctx context.Context, records []registry.Record, resolver catalog.Resolver, repoProv repo.Provisioner,
+	component, version string, concurrency int, logger *slog.Logger,
+) []UpdateResult {
 	results := make([]UpdateResult, len(records))
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
@@ -103,7 +168,7 @@ func Update(
 	}
 	wg.Wait()
 
-	return results, nil
+	return results
 }
 
 // updateRecord reads a cluster's own cluster.yaml before updating it, so its

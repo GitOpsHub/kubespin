@@ -312,6 +312,71 @@ func runContract(t *testing.T, newRegistry factory) {
 		}
 	})
 
+	t.Run("RecordFindings persists drift without bumping version", func(t *testing.T) {
+		clock := newFakeClock()
+		r := newRegistry(t, clock)
+		rec := seed(t, r, clock, "team-alpha")
+
+		findings := []string{"node pool default drifted", "access drifted"}
+		at := clock.Now()
+		if err := r.RecordFindings(context.Background(), rec.ClusterID, findings, at); err != nil {
+			t.Fatalf("RecordFindings: %v", err)
+		}
+
+		stored, err := r.Get(context.Background(), rec.ClusterID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if len(stored.Findings) != len(findings) {
+			t.Fatalf("Findings = %v, want %v", stored.Findings, findings)
+		}
+		for i, f := range findings {
+			if stored.Findings[i] != f {
+				t.Errorf("Findings[%d] = %q, want %q", i, stored.Findings[i], f)
+			}
+		}
+		if !stored.FindingsAt.Equal(at) {
+			t.Errorf("FindingsAt = %v, want %v", stored.FindingsAt, at)
+		}
+		if stored.Version != rec.Version {
+			t.Errorf("Version = %d, want it unchanged at %d", stored.Version, rec.Version)
+		}
+	})
+
+	t.Run("RecordFindings with a clean audit stores an empty, non-nil result", func(t *testing.T) {
+		clock := newFakeClock()
+		r := newRegistry(t, clock)
+		rec := seed(t, r, clock, "team-alpha")
+
+		at := clock.Now()
+		if err := r.RecordFindings(context.Background(), rec.ClusterID, nil, at); err != nil {
+			t.Fatalf("RecordFindings: %v", err)
+		}
+
+		stored, err := r.Get(context.Background(), rec.ClusterID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if len(stored.Findings) != 0 {
+			t.Errorf("Findings = %v, want empty", stored.Findings)
+		}
+		// FindingsAt being set is what distinguishes "audited, found nothing"
+		// from "never audited" — both have an empty Findings slice.
+		if stored.FindingsAt.IsZero() {
+			t.Error("FindingsAt should be set even for a clean audit")
+		}
+	})
+
+	t.Run("RecordFindings on a missing cluster", func(t *testing.T) {
+		clock := newFakeClock()
+		r := newRegistry(t, clock)
+
+		err := r.RecordFindings(context.Background(), "absent-cluster", []string{"x"}, clock.Now())
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("error = %v, want one wrapping ErrNotFound", err)
+		}
+	})
+
 	t.Run("list filters", func(t *testing.T) {
 		clock := newFakeClock()
 		r := newRegistry(t, clock)

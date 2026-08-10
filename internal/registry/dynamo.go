@@ -229,6 +229,40 @@ func (d *DynamoDB) RecordOIDCIssuer(ctx context.Context, id core.ClusterID, issu
 	return nil
 }
 
+// RecordFindings sets the cluster's most recent audit findings.
+func (d *DynamoDB) RecordFindings(ctx context.Context, id core.ClusterID, findings []string, at time.Time) error {
+	values := make([]types.AttributeValue, len(findings))
+	for i, f := range findings {
+		values[i] = &types.AttributeValueMemberS{Value: f}
+	}
+
+	_, err := d.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:        aws.String(d.table),
+		Key:              key(id),
+		UpdateExpression: aws.String("SET #findings = :findings, #findingsAt = :at"),
+		// No version assertion: audit findings are observational metadata, the
+		// same reasoning Touch and RecordOIDCIssuer above use.
+		ConditionExpression: aws.String("attribute_exists(#id)"),
+		ExpressionAttributeNames: map[string]string{
+			"#id":         attrClusterID,
+			"#findings":   attrFindings,
+			"#findingsAt": attrFindingsAt,
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":findings": &types.AttributeValueMemberL{Value: values},
+			":at":       &types.AttributeValueMemberS{Value: at.UTC().Format(time.RFC3339Nano)},
+		},
+	})
+	if err != nil {
+		if conditionFailed(err) {
+			return fmt.Errorf("%w: %s", ErrNotFound, id)
+		}
+		return fmt.Errorf("recording audit findings for %s: %w", id, err)
+	}
+	d.log().Debug("recorded audit findings", "cluster", id, "findings", len(findings), "at", at)
+	return nil
+}
+
 // List returns records matching filter.
 //
 // A provider filter is served by the ProviderPhaseIndex GSI; without one there

@@ -7,8 +7,15 @@ Roll a component version across every matching cluster
 update patches the repository of every cluster matching the given profile,
 staged through a rate-limited worker pool.
 
-Canary-first staging (updating a canary tier before the rest of the fleet)
-is not yet implemented: every matching cluster is updated in the same wave.
+With --canary-count set, the first N matching clusters (ordered
+deterministically by cluster ID, so a wave is reproducible run to run) are
+updated first, as a canary wave. If any canary cluster's update fails, the
+rest of the fleet is left untouched and reported "skipped" — canarying exists
+to catch a bad version before it reaches every cluster, so a canary failure
+must stop the rollout rather than continue past it. Only a clean canary wave
+rolls to the rest, in a second wave. --canary-count 0 (the default) skips
+canarying and updates every matching cluster in one wave.
+
 --provider is the only filter that currently narrows a wave; --profile is
 accepted but not yet applied, because the Fleet Registry's query filter has
 no profile dimension to select on.
@@ -29,6 +36,10 @@ kubespin fleet update [flags]
   ./bin/kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8 \
     --github-org GitOpsHub --registry-region us-east-1
 
+  # Canary the first 3 clusters before rolling to the rest of the fleet
+  ./bin/kubespin fleet update --component cert-manager --version 1.15.1 \
+    --canary-count 3 --github-org GitOpsHub --registry-region us-east-1
+
   # Scope the wave to one tier and one cloud
   ./bin/kubespin fleet update --component cert-manager --version 1.15.1 \
     --profile tier-standard@1.0.0 --provider aws \
@@ -38,6 +49,7 @@ kubespin fleet update [flags]
 ### Options
 
 ```
+      --canary-count int           update this many clusters first and abort before the rest of the fleet if any fail (0 disables canarying)
       --component string           addon to update
       --concurrency int            maximum concurrent repository updates (default 4)
       --github-base-url string     GitHub Enterprise API base URL (leave empty for github.com)

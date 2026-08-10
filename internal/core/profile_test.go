@@ -79,6 +79,46 @@ func TestProfileValidate(t *testing.T) {
 	})
 }
 
+func TestAddonRefSupportsProvider(t *testing.T) {
+	agnostic := validAddon()
+	if !agnostic.SupportsProvider(ProviderGCP) {
+		t.Error("addon with no Providers should support every provider")
+	}
+
+	gated := validAddon()
+	gated.Providers = []Provider{ProviderAWS}
+	if !gated.SupportsProvider(ProviderAWS) {
+		t.Error("addon gated to aws should support aws")
+	}
+	if gated.SupportsProvider(ProviderGCP) {
+		t.Error("addon gated to aws should not support gcp")
+	}
+}
+
+func TestProfileForProvider(t *testing.T) {
+	agnostic := validAddon()
+	awsOnly := AddonRef{
+		Name: "karpenter", Chart: "karpenter", Repository: "oci://example",
+		Version: "1.0.0", Namespace: "karpenter", Providers: []Provider{ProviderAWS},
+	}
+	p := Profile{Name: "tier-standard", Version: "1.0.0", Addons: []AddonRef{agnostic, awsOnly}}
+
+	forAWS := p.ForProvider(ProviderAWS)
+	if len(forAWS.Addons) != 2 {
+		t.Fatalf("ForProvider(aws) dropped an addon it should keep: got %d addons", len(forAWS.Addons))
+	}
+
+	forGCP := p.ForProvider(ProviderGCP)
+	if len(forGCP.Addons) != 1 || forGCP.Addons[0].Name != agnostic.Name {
+		t.Fatalf("ForProvider(gcp) should drop the aws-only addon, got %+v", forGCP.Addons)
+	}
+
+	// The original profile's backing array must not be mutated by filtering.
+	if len(p.Addons) != 2 {
+		t.Fatalf("ForProvider mutated the source profile: %+v", p.Addons)
+	}
+}
+
 func TestAddonOverrideValidate(t *testing.T) {
 	if err := (AddonOverride{Name: "cert-manager"}).Validate(); err != nil {
 		t.Fatalf("valid override rejected: %v", err)

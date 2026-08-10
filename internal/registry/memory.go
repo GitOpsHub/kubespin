@@ -142,6 +142,22 @@ func (m *Memory) RecordOIDCIssuer(_ context.Context, id core.ClusterID, issuer s
 	return nil
 }
 
+// RecordFindings sets the cluster's most recent audit findings.
+func (m *Memory) RecordFindings(_ context.Context, id core.ClusterID, findings []string, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	stored, ok := m.records[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+
+	stored.Findings = append([]string(nil), findings...)
+	stored.FindingsAt = at
+	m.records[id] = stored
+	return nil
+}
+
 // List returns records matching filter, ordered by cluster ID.
 func (m *Memory) List(_ context.Context, filter Filter) ([]Record, error) {
 	m.mu.Lock()

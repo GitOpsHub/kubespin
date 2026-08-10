@@ -8,8 +8,11 @@ audit describes live infrastructure through each cloud's SDK, diffs it against
 the cluster.yaml in that cluster's repository, and reports findings. It
 detects changes made outside kubespin, such as a manually resized node pool.
 
-audit is read-only: it never reconciles or commits. Persisting findings back
-into the Fleet Registry is not yet implemented; this prints them.
+audit is read-only: it never reconciles or commits infrastructure or a
+cluster's repository. It does write one thing: each cluster's findings (or a
+clean result) are persisted to the Fleet Registry, so 'fleet status' and
+other fleet-wide tooling can read the most recent audit result without
+re-running one.
 
 ```
 kubespin fleet audit [flags]

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/GitOpsHub/kubespin/internal/core"
 	"github.com/GitOpsHub/kubespin/internal/provisioner"
@@ -15,11 +16,12 @@ import (
 // Option configures a fleet-wide operation.
 //
 // Options are variadic on Status, Audit, and Update so those functions keep
-// their existing positional signatures; today the only one is WithLogger.
+// their existing positional signatures.
 type Option func(*options)
 
 type options struct {
 	logger *slog.Logger
+	now    func() time.Time
 }
 
 // WithLogger sets the logger. Fleet logging is supplementary diagnostic
@@ -34,8 +36,18 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
+// WithClock replaces Audit's time source, so a finding's recorded timestamp
+// is testable without depending on wall-clock time.
+func WithClock(now func() time.Time) Option {
+	return func(o *options) {
+		if now != nil {
+			o.now = now
+		}
+	}
+}
+
 func resolveOptions(opts []Option) options {
-	o := options{logger: slog.Default()}
+	o := options{logger: slog.Default(), now: time.Now}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -67,7 +79,8 @@ func Audit(
 	ctx context.Context, reg registry.Registry, filter registry.Filter,
 	clusters ClusterProvisionerFactory, repoProv repo.Provisioner, concurrency int, opts ...Option,
 ) ([]AuditResult, error) {
-	logger := resolveOptions(opts).logger
+	resolved := resolveOptions(opts)
+	logger := resolved.logger
 
 	records, err := reg.List(ctx, filter)
 	if err != nil {
@@ -91,7 +104,7 @@ func Audit(
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			results[i] = auditRecord(ctx, rec, clusters, repoProv, logger)
+			results[i] = auditRecord(ctx, reg, rec, clusters, repoProv, resolved.now, logger)
 		}(i, rec)
 	}
 	wg.Wait()
@@ -99,9 +112,15 @@ func Audit(
 	return results, nil
 }
 
+// auditRecord audits one cluster and, when the audit itself succeeds,
+// persists the findings (even an empty list, meaning "clean") to the Fleet
+// Registry via RecordFindings. A write failure there is reported as this
+// cluster's error — the audit ran, but its result did not durably land
+// anywhere fleet-wide tooling can read it back from, which is exactly what
+// this method exists to fix.
 func auditRecord(
-	ctx context.Context, rec registry.Record, clusters ClusterProvisionerFactory, repoProv repo.Provisioner,
-	logger *slog.Logger,
+	ctx context.Context, reg registry.Registry, rec registry.Record, clusters ClusterProvisionerFactory,
+	repoProv repo.Provisioner, now func() time.Time, logger *slog.Logger,
 ) AuditResult {
 	logger.Debug("auditing cluster", "cluster", rec.ClusterID, "provider", rec.Provider, "region", rec.Region)
 
@@ -112,13 +131,25 @@ func auditRecord(
 	}
 
 	findings, err := AuditOne(ctx, cluster, repoProv, rec.ClusterID, rec.Provider, rec.Region)
-	switch {
-	case err != nil:
+	if err != nil {
 		logger.Debug("cluster audit failed", "cluster", rec.ClusterID, "error", err)
-	case len(findings) > 0:
+		return AuditResult{ClusterID: rec.ClusterID, Err: err}
+	}
+
+	if len(findings) > 0 {
 		logger.Debug("cluster drifted", "cluster", rec.ClusterID, "findings", len(findings))
-	default:
+	} else {
 		logger.Debug("cluster has no drift", "cluster", rec.ClusterID)
 	}
-	return AuditResult{ClusterID: rec.ClusterID, Findings: findings, Err: err}
+
+	details := make([]string, len(findings))
+	for i, f := range findings {
+		details[i] = f.Detail
+	}
+	if err := reg.RecordFindings(ctx, rec.ClusterID, details, now()); err != nil {
+		logger.Warn("could not persist audit findings", "cluster", rec.ClusterID, "error", err)
+		return AuditResult{ClusterID: rec.ClusterID, Findings: findings, Err: fmt.Errorf("persisting findings for %s: %w", rec.ClusterID, err)}
+	}
+
+	return AuditResult{ClusterID: rec.ClusterID, Findings: findings}
 }

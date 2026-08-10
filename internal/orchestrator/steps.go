@@ -177,6 +177,7 @@ func resolveProfile(ctx context.Context, resolver catalog.Resolver, spec core.Cl
 	if err != nil {
 		return core.Profile{}, fmt.Errorf("resolving profile %s for %s: %w", spec.Profile, spec.ID, err)
 	}
+	profile = profile.ForProvider(spec.Provider)
 
 	// Below tier-standard, "argocd" is never in profile.Addons (see
 	// argoCDAddon), so catalog.Merge would reject an override naming it as

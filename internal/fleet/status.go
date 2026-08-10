@@ -25,6 +25,13 @@ type ClusterStatus struct {
 	Phase          core.Phase
 	Stale          bool
 	LastReportedAt time.Time
+
+	// FindingsCount and FindingsAt reflect the cluster's most recent `fleet
+	// audit` run, read straight off the Fleet Registry record. FindingsAt
+	// zero means the cluster has never been audited; that is distinct from
+	// FindingsCount 0, which means the last audit found no drift.
+	FindingsCount int
+	FindingsAt    time.Time
 }
 
 // Status reads the Fleet Registry and reports every matching cluster's
@@ -59,6 +66,7 @@ func Status(
 		out = append(out, ClusterStatus{
 			ClusterID: rec.ClusterID, Provider: rec.Provider, Phase: rec.Phase,
 			Stale: stale, LastReportedAt: rec.LastReportedAt,
+			FindingsCount: len(rec.Findings), FindingsAt: rec.FindingsAt,
 		})
 	}
 	return out, nil

@@ -22,10 +22,9 @@ func withAddons(base []core.AddonRef, extra ...core.AddonRef) []core.AddonRef {
 // it), but from this tier up it is also tracked here so `fleet audit` and
 // `fleet update` can see and pin its version like any other addon.
 //
-// Karpenter is EKS-specific; this catalog has no per-provider addon
-// filtering yet (core.AddonRef carries no provider constraint), so it is
-// listed unconditionally here. The real platform-profiles repo (M4's still-
-// open item) will need that filtering before this tier is provider-safe.
+// Karpenter is EKS-specific: its AddonRef.Providers restricts it to AWS, so
+// core.Profile.ForProvider drops it for GCP/Azure clusters before an
+// override patch or Argo CD ever sees it.
 var tierStandard = core.Profile{
 	Name:    "tier-standard",
 	Version: "1.0.0",
@@ -57,8 +56,7 @@ var tierStandard = core.Profile{
 			Repository: "oci://public.ecr.aws/karpenter/karpenter",
 			Version:    "1.0.6",
 			Namespace:  "karpenter",
-			// EKS-only; see the package-level note above.
-			Values: map[string]any{"providerOnly": "aws"},
+			Providers:  []core.Provider{core.ProviderAWS},
 		},
 	),
 }

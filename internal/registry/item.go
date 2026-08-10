@@ -23,6 +23,8 @@ const (
 	attrOIDCIssuer     = "OIDCIssuer"
 	attrVersion        = "Version"
 	attrLastReportedAt = "LastReportedAt"
+	attrFindings       = "Findings"
+	attrFindingsAt     = "FindingsAt"
 	attrCreatedAt      = "CreatedAt"
 	attrUpdatedAt      = "UpdatedAt"
 	attrLeaseHolder    = "LeaseHolder"
@@ -71,6 +73,16 @@ func marshalRecord(rec Record) map[string]types.AttributeValue {
 		item[attrLeaseHolder] = &types.AttributeValueMemberS{Value: rec.Lease.Holder}
 		item[attrLeaseExpiresAt] = &types.AttributeValueMemberN{Value: epochMillis(rec.Lease.ExpiresAt)}
 	}
+	// Absent, like LastReportedAt, when the cluster has never been audited —
+	// distinct from an empty Findings list, which means a clean audit ran.
+	if !rec.FindingsAt.IsZero() {
+		values := make([]types.AttributeValue, len(rec.Findings))
+		for i, f := range rec.Findings {
+			values[i] = &types.AttributeValueMemberS{Value: f}
+		}
+		item[attrFindings] = &types.AttributeValueMemberL{Value: values}
+		item[attrFindingsAt] = &types.AttributeValueMemberS{Value: rec.FindingsAt.UTC().Format(time.RFC3339Nano)}
+	}
 
 	return item
 }
@@ -106,6 +118,7 @@ func unmarshalRecord(item map[string]types.AttributeValue) (Record, error) {
 		{attrCreatedAt, &rec.CreatedAt},
 		{attrUpdatedAt, &rec.UpdatedAt},
 		{attrLastReportedAt, &rec.LastReportedAt},
+		{attrFindingsAt, &rec.FindingsAt},
 	} {
 		raw := stringAttr(item, field.name)
 		if raw == "" {
@@ -116,6 +129,18 @@ func unmarshalRecord(item map[string]types.AttributeValue) (Record, error) {
 			return Record{}, fmt.Errorf("parsing %s %q: %w", field.name, raw, err)
 		}
 		*field.into = parsed.UTC()
+	}
+
+	if list, ok := item[attrFindings].(*types.AttributeValueMemberL); ok {
+		findings := make([]string, len(list.Value))
+		for i, v := range list.Value {
+			s, ok := v.(*types.AttributeValueMemberS)
+			if !ok {
+				return Record{}, fmt.Errorf("record %s has a non-string finding at index %d", rec.ClusterID, i)
+			}
+			findings[i] = s.Value
+		}
+		rec.Findings = findings
 	}
 
 	if holder := stringAttr(item, attrLeaseHolder); holder != "" {

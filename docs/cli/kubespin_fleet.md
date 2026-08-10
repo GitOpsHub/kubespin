@@ -39,6 +39,7 @@ kubespin fleet [flags]
 * [kubespin](kubespin.md)	 - Provision and manage Kubernetes clusters across EKS, GKE, and AKS
 * [kubespin fleet audit](kubespin_fleet_audit.md)	 - Diff live cloud infrastructure against each cluster's desired state
 * [kubespin fleet bootstrap](kubespin_fleet_bootstrap.md)	 - Provision the shared fleet infrastructure in the fleet account
+* [kubespin fleet dashboard](kubespin_fleet_dashboard.md)	 - Render a static HTML snapshot of fleet sync status, drift, and staleness
 * [kubespin fleet status](kubespin_fleet_status.md)	 - Report sync, drift, and staleness across the fleet
 * [kubespin fleet update](kubespin_fleet_update.md)	 - Roll a component version across every matching cluster
 

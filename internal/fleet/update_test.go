@@ -115,7 +115,7 @@ func TestUpdate_RunsAcrossEveryMatchingCluster(t *testing.T) {
 		seedClusterRepo(t, rp, spec, profile)
 	}
 
-	results, err := Update(context.Background(), reg, registry.Filter{}, resolver, rp, "cert-manager", "1.16.0", 4)
+	results, err := Update(context.Background(), reg, registry.Filter{}, resolver, rp, "cert-manager", "1.16.0", 4, 0)
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -125,6 +125,83 @@ func TestUpdate_RunsAcrossEveryMatchingCluster(t *testing.T) {
 	for _, r := range results {
 		if r.Err != nil {
 			t.Errorf("cluster %s: %v", r.ClusterID, r.Err)
+		}
+		if !r.Committed {
+			t.Errorf("cluster %s: expected a commit", r.ClusterID)
+		}
+	}
+}
+
+func TestUpdate_CanaryWaveFailureSkipsTheRest(t *testing.T) {
+	reg := registry.NewMemory()
+	rp := repo.NewMemory()
+	resolver := catalog.NewBuiltinResolver()
+
+	// team-a sorts first (canary), but its repository is never seeded, so its
+	// update fails. team-b is fully seeded and would otherwise succeed.
+	specs := []core.ClusterSpec{builtinTierSmallSpec("team-a"), builtinTierSmallSpec("team-b")}
+	profile, err := resolver.Resolve(context.Background(), specs[0].Profile)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	for _, spec := range specs {
+		if _, err := reg.Create(context.Background(), registry.NewRecord(spec, timeNow())); err != nil {
+			t.Fatalf("seeding registry for %s: %v", spec.ID, err)
+		}
+	}
+	seedClusterRepo(t, rp, specs[1], profile) // only team-b
+
+	results, err := Update(context.Background(), reg, registry.Filter{}, resolver, rp, "cert-manager", "1.16.0", 4, 1)
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %+v, want 2", results)
+	}
+
+	byID := make(map[core.ClusterID]UpdateResult, len(results))
+	for _, r := range results {
+		byID[r.ClusterID] = r
+	}
+
+	if byID["team-a"].Err == nil {
+		t.Error("expected the canary cluster's update to fail")
+	}
+	if !byID["team-b"].Skipped {
+		t.Error("expected the rest of the fleet to be skipped after a canary failure")
+	}
+	if byID["team-b"].Committed {
+		t.Error("a skipped cluster must not have been committed")
+	}
+}
+
+func TestUpdate_CleanCanaryWaveRollsToTheRest(t *testing.T) {
+	reg := registry.NewMemory()
+	rp := repo.NewMemory()
+	resolver := catalog.NewBuiltinResolver()
+
+	specs := []core.ClusterSpec{builtinTierSmallSpec("team-a"), builtinTierSmallSpec("team-b")}
+	profile, err := resolver.Resolve(context.Background(), specs[0].Profile)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	for _, spec := range specs {
+		if _, err := reg.Create(context.Background(), registry.NewRecord(spec, timeNow())); err != nil {
+			t.Fatalf("seeding registry for %s: %v", spec.ID, err)
+		}
+		seedClusterRepo(t, rp, spec, profile)
+	}
+
+	results, err := Update(context.Background(), reg, registry.Filter{}, resolver, rp, "cert-manager", "1.16.0", 4, 1)
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	for _, r := range results {
+		if r.Err != nil {
+			t.Errorf("cluster %s: %v", r.ClusterID, r.Err)
+		}
+		if r.Skipped {
+			t.Errorf("cluster %s: should not have been skipped after a clean canary wave", r.ClusterID)
 		}
 		if !r.Committed {
 			t.Errorf("cluster %s: expected a commit", r.ClusterID)
@@ -148,7 +225,7 @@ func TestUpdate_PreservesExistingOverrides(t *testing.T) {
 		t.Fatalf("seeding registry: %v", err)
 	}
 
-	if _, err := Update(context.Background(), reg, registry.Filter{}, resolver, rp, "cert-manager", "1.16.0", 4); err != nil {
+	if _, err := Update(context.Background(), reg, registry.Filter{}, resolver, rp, "cert-manager", "1.16.0", 4, 0); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
