@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -18,18 +19,41 @@ import (
 //
 // This is the one part of this package that reaches the network — to each
 // cluster's own cloud-hosted OIDC issuer, not to anything under kubespin's
-// control — and so is the one part not exercised by this package's tests,
-// the same way this project's cloud provisioners' tests stop at the SDK
-// boundary. Verifier's tests instead supply a fixed key through KeyResolver,
-// which is enough to prove the verification logic itself (issuer binding,
-// expiry, signature) is correct.
+// control. Its caching and rotation behaviour is exercised against an
+// httptest issuer (jwks_test.go), since a stale cache is a silent
+// per-cluster outage rather than a visible failure. Verifier's own tests
+// supply a fixed key through KeyResolver instead, which is enough to prove
+// the verification logic (issuer binding, expiry, signature) is correct.
 type JWKSResolver struct {
 	client *http.Client
-	// cache avoids a discovery + JWKS round trip per status push; entries
-	// never expire within a process lifetime because a cluster's issuer keys
-	// only rotate on a timescale far longer than any single process runs.
-	cache map[string][]jwk
+	now    func() time.Time
+
+	// mu guards cache. The Lambda runtime delivers one invocation at a time
+	// per execution environment, so this is not contended in production today
+	// — but an unsynchronised map is a fatal "concurrent map writes" panic the
+	// first time this resolver is served from anything concurrent, and it is
+	// an exported type.
+	mu    sync.Mutex
+	cache map[string]keySet
 }
+
+// keySet is one issuer's cached JWKS and when it was fetched.
+type keySet struct {
+	keys      []jwk
+	fetchedAt time.Time
+}
+
+const (
+	// jwksCacheTTL bounds how long a key set is trusted without a refetch.
+	// Caching avoids a discovery + JWKS round trip on every status push, and
+	// every cluster pushes every couple of minutes.
+	jwksCacheTTL = time.Hour
+
+	// jwksMinRefetchInterval rate-limits the refetch an unknown kid triggers,
+	// so a stream of tokens bearing garbage kids cannot turn into a stream of
+	// outbound requests to the issuer.
+	jwksMinRefetchInterval = time.Minute
+)
 
 // NewJWKSResolver builds a resolver using client, or http.DefaultClient if
 // client is nil.
@@ -37,7 +61,7 @@ func NewJWKSResolver(client *http.Client) *JWKSResolver {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return &JWKSResolver{client: client, cache: map[string][]jwk{}}
+	return &JWKSResolver{client: client, now: time.Now, cache: map[string]keySet{}}
 }
 
 type oidcDiscovery struct {
@@ -62,24 +86,83 @@ type jwk struct {
 }
 
 // Resolve implements KeyResolver.
+//
+// A cache miss on kid triggers a refetch rather than an immediate rejection.
+// That is what makes this survive issuer key rotation: every cloud rotates
+// its clusters' OIDC signing keys, and a cached set that is never revisited
+// starts failing every push from that cluster the moment it does — a silent,
+// per-cluster outage that looks like a bad token and lasts until the process
+// happens to restart. Since the whole architecture depends on clusters
+// pushing status outward, a cluster that cannot push is a cluster the fleet
+// stops being able to see.
 func (r *JWKSResolver) Resolve(ctx context.Context, issuer, kid string) (any, error) {
-	keys, ok := r.cache[issuer]
-	if !ok {
-		var err error
-		keys, err = r.fetchKeys(ctx, issuer)
-		if err != nil {
-			return nil, err
-		}
-		r.cache[issuer] = keys
+	if k, ok := r.cachedKey(issuer, kid); ok {
+		return publicKeyFromJWK(k)
 	}
 
-	for _, k := range keys {
-		if k.Kid != kid {
-			continue
-		}
+	keys, err := r.refresh(ctx, issuer)
+	if err != nil {
+		return nil, err
+	}
+	if k, ok := findKey(keys, kid); ok {
 		return publicKeyFromJWK(k)
 	}
 	return nil, fmt.Errorf("no signing key %q found for issuer %s", kid, issuer)
+}
+
+// cachedKey returns kid from the cached set for issuer, if the set is still
+// fresh and actually contains it.
+func (r *JWKSResolver) cachedKey(issuer, kid string) (jwk, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	entry, ok := r.cache[issuer]
+	if !ok || r.now().Sub(entry.fetchedAt) >= jwksCacheTTL {
+		return jwk{}, false
+	}
+	return findKey(entry.keys, kid)
+}
+
+// refresh fetches issuer's keys, subject to the refetch rate limit. When the
+// limit applies it returns whatever is cached, so the caller reports an
+// unknown key rather than hammering the issuer.
+func (r *JWKSResolver) refresh(ctx context.Context, issuer string) ([]jwk, error) {
+	r.mu.Lock()
+	entry, cached := r.cache[issuer]
+	if cached && r.now().Sub(entry.fetchedAt) < jwksMinRefetchInterval {
+		r.mu.Unlock()
+		return entry.keys, nil
+	}
+	r.mu.Unlock()
+
+	// Fetched outside the lock: this is a network round trip, and holding a
+	// mutex across it would serialise every verification behind the slowest
+	// issuer.
+	keys, err := r.fetchKeys(ctx, issuer)
+	if err != nil {
+		// A failed refetch must not discard a cached set that may still be
+		// perfectly valid — the issuer being briefly unreachable is not
+		// evidence its keys changed.
+		if cached {
+			return entry.keys, nil
+		}
+		return nil, err
+	}
+
+	r.mu.Lock()
+	r.cache[issuer] = keySet{keys: keys, fetchedAt: r.now()}
+	r.mu.Unlock()
+
+	return keys, nil
+}
+
+func findKey(keys []jwk, kid string) (jwk, bool) {
+	for _, k := range keys {
+		if k.Kid == kid {
+			return k, true
+		}
+	}
+	return jwk{}, false
 }
 
 func (r *JWKSResolver) fetchKeys(ctx context.Context, issuer string) ([]jwk, error) {

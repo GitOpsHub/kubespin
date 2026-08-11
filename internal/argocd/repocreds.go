@@ -11,7 +11,7 @@ import (
 // so there is nothing per-repository to key the name on, and a stable name
 // is what makes re-applying it on every apply converge rather than
 // accumulating one Secret per run.
-const repoCredsSecretName = "repo-creds"
+const repoCredsSecretName = "repo-creds" //nolint:gosec // a Secret's name, not a credential
 
 // repoCredsSecret is the subset of a core/v1 Secret this package writes, the
 // same local-mirror-of-the-CRD approach Application takes for the Argo CD

@@ -26,6 +26,12 @@ allowlist by default, so nothing (not even the operator) can reach the public
 endpoint until --authorized-cidrs includes the caller's IP. AWS and Azure
 public endpoints are open to 0.0.0.0/0 unless --authorized-cidrs is set.
 
+That step waits for Argo CD to actually be running, not just for its
+manifests to be accepted, so it takes a few minutes on a fresh cluster while
+images are pulled. An Argo CD that never becomes ready — pods that cannot be
+scheduled or cannot pull — fails the step there rather than looking like
+addons that silently never sync.
+
 ```
 kubespin apply [flags]
 ```

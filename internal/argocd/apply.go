@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -36,6 +38,11 @@ type KubeApplier interface {
 // same discipline HelmInstaller follows for Argo CD's own install.
 type DynamicApplier struct {
 	logger *slog.Logger
+
+	// crdInterval and crdTimeout bound the wait in restMapping. Fields rather
+	// than constants only so tests need not sleep for real seconds.
+	crdInterval time.Duration
+	crdTimeout  time.Duration
 }
 
 // NewDynamicApplier builds a DynamicApplier.
@@ -43,7 +50,11 @@ func NewDynamicApplier(logger *slog.Logger) *DynamicApplier {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &DynamicApplier{logger: logger}
+	return &DynamicApplier{
+		logger:      logger,
+		crdInterval: crdEstablishInterval,
+		crdTimeout:  crdEstablishTimeout,
+	}
 }
 
 // Apply implements KubeApplier via a server-side apply patch: re-applying an
@@ -62,10 +73,9 @@ func (a *DynamicApplier) Apply(ctx context.Context, restConfig *rest.Config, man
 	}
 	mapper := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(dc))
 
-	mapping, err := mapper.RESTMapping(obj.GroupVersionKind().GroupKind(), obj.GroupVersionKind().Version)
+	mapping, err := a.restMapping(ctx, mapper, obj)
 	if err != nil {
-		return fmt.Errorf("resolving REST mapping for %s %s/%s: %w",
-			obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
+		return err
 	}
 
 	dyn, err := dynamic.NewForConfig(restConfig)
@@ -89,6 +99,73 @@ func (a *DynamicApplier) Apply(ctx context.Context, restConfig *rest.Config, man
 
 	a.logger.Info("applied manifest", "kind", obj.GetKind(), "namespace", obj.GetNamespace(), "name", obj.GetName())
 	return nil
+}
+
+// crdEstablishInterval and crdEstablishTimeout bound the wait for a
+// just-installed CRD to become usable.
+const (
+	crdEstablishInterval = 2 * time.Second
+	crdEstablishTimeout  = 90 * time.Second
+)
+
+// restMapping resolves obj's kind to a REST resource, waiting for the kind to
+// appear in discovery rather than failing the moment it is absent.
+//
+// This exists because of the order the Argo CD bootstrap necessarily runs in.
+// HelmInstaller does not wait for its release to converge, so Install returns
+// once the chart's manifests — including Argo CD's own CRDs — have been
+// submitted, not once the API server has established them. The very next
+// thing apply does is server-side-apply the root Application, an
+// argoproj.io/v1alpha1 resource whose type only exists because that chart
+// just created its CRD. Between those two moments the API server has to
+// register the new type and discovery has to surface it, which takes seconds.
+// Resolving the mapping once therefore failed with "no matches for kind
+// Application" on fresh clusters — intermittently, which is the worst way for
+// the last step of a half-hour provision to fail.
+//
+// Only a no-match is retried, and the cached discovery document is reset
+// before each attempt: a stale cache is the actual reason the kind looks
+// missing, so retrying without clearing it would spin until the timeout.
+func (a *DynamicApplier) restMapping(
+	ctx context.Context, mapper meta.ResettableRESTMapper, obj *unstructured.Unstructured,
+) (*meta.RESTMapping, error) {
+	gvk := obj.GroupVersionKind()
+
+	interval, timeout := a.crdInterval, a.crdTimeout
+	if interval <= 0 {
+		interval = crdEstablishInterval
+	}
+	if timeout <= 0 {
+		timeout = crdEstablishTimeout
+	}
+	deadline := time.Now().Add(timeout)
+
+	for {
+		mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+		if err == nil {
+			return mapping, nil
+		}
+		if !meta.IsNoMatchError(err) {
+			return nil, fmt.Errorf("resolving REST mapping for %s %s/%s: %w",
+				obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
+		}
+
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf(
+				"resolving REST mapping for %s %s/%s: the cluster still does not serve %s after %s: %w",
+				obj.GetKind(), obj.GetNamespace(), obj.GetName(), gvk.GroupVersion(), timeout, err)
+		}
+
+		a.logger.Info("waiting for the cluster to serve a just-installed resource type",
+			"kind", obj.GetKind(), "group_version", gvk.GroupVersion().String())
+		mapper.Reset()
+
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("waiting for %s to be served: %w", gvk.GroupVersion(), ctx.Err())
+		case <-time.After(interval):
+		}
+	}
 }
 
 func boolPtr(b bool) *bool { return &b }

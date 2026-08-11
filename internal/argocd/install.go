@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart/loader"
@@ -56,6 +57,11 @@ type Installer interface {
 	// in place otherwise. It must be safe to call on every apply — a
 	// no-change call should not error, matching every other Reconcile-shaped
 	// call in this codebase.
+	//
+	// It returns only once Argo CD is actually running, not merely once its
+	// manifests have been submitted. Callers rely on that: the caller's very
+	// next act is to apply an Application, a resource type that exists only
+	// because this call created its CRD.
 	Install(ctx context.Context, restConfig *rest.Config, addon core.AddonRef) error
 }
 
@@ -72,14 +78,35 @@ type Installer interface {
 // pure functions of their inputs.
 type HelmInstaller struct {
 	logger *slog.Logger
+
+	// timeout bounds the wait for the release to become ready. A field rather
+	// than a constant so a caller on a slow or quota-constrained cluster can
+	// raise it without patching this package.
+	timeout time.Duration
 }
+
+// InstallTimeout is how long Install waits for Argo CD's workloads to become
+// ready before giving up. Generous, because the wait is dominated by pulling
+// Argo CD's images onto fresh nodes, and because failing a cluster that was
+// merely slow would be worse than waiting: the phase is not recorded until
+// this returns, so a premature failure re-runs the whole install.
+const InstallTimeout = 10 * time.Minute
 
 // NewHelmInstaller builds a HelmInstaller.
 func NewHelmInstaller(logger *slog.Logger) *HelmInstaller {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &HelmInstaller{logger: logger}
+	return &HelmInstaller{logger: logger, timeout: InstallTimeout}
+}
+
+// waitTimeout returns the configured timeout, defaulting when the struct was
+// built as a bare literal.
+func (h *HelmInstaller) waitTimeout() time.Duration {
+	if h.timeout <= 0 {
+		return InstallTimeout
+	}
+	return h.timeout
 }
 
 // Install implements Installer.
@@ -101,6 +128,10 @@ func (h *HelmInstaller) Install(ctx context.Context, restConfig *rest.Config, ad
 		up.RepoURL = addon.Repository
 		up.Version = addon.Version
 		up.Install = false
+		// See the Wait/Atomic reasoning on the install path below.
+		up.Wait = true
+		up.Timeout = h.waitTimeout()
+		up.Atomic = false
 		chartPath, err := up.LocateChart(addon.Chart, settings)
 		if err != nil {
 			return fmt.Errorf("locating chart %s: %w", addon.Chart, err)
@@ -109,6 +140,8 @@ func (h *HelmInstaller) Install(ctx context.Context, restConfig *rest.Config, ad
 		if err != nil {
 			return fmt.Errorf("loading chart %s: %w", addon.Chart, err)
 		}
+		h.logger.Info("upgrading argocd and waiting for it to become ready",
+			"chart", addon.Chart, "version", addon.Version, "timeout", h.waitTimeout())
 		if _, err := up.RunWithContext(ctx, ReleaseName, chrt, addon.Values); err != nil {
 			return fmt.Errorf("upgrading %s: %w", ReleaseName, err)
 		}
@@ -122,6 +155,23 @@ func (h *HelmInstaller) Install(ctx context.Context, restConfig *rest.Config, ad
 	inst.CreateNamespace = true
 	inst.RepoURL = addon.Repository
 	inst.Version = addon.Version
+
+	// Wait, so that "installed argocd" means Argo CD is actually running.
+	// Without it Run returns once the manifests are submitted, which made
+	// this step report success for a release that then never became ready —
+	// an Argo CD whose pods cannot schedule or pull surfaced later as addons
+	// mysteriously never syncing, rather than here, where the cause is
+	// obvious. It also ordered this step ahead of itself: the root
+	// Application applied moments later needs the CRDs this release creates.
+	//
+	// Not Atomic. A rollback would uninstall a part-working release, and the
+	// phase is not recorded on failure anyway, so the retry re-enters here
+	// and converges via the upgrade path above — the same create-or-update,
+	// never-delete discipline internal/fleetinfra follows. Rolling back would
+	// only make each attempt slower and destroy the evidence of why it hung.
+	inst.Wait = true
+	inst.Timeout = h.waitTimeout()
+	inst.Atomic = false
 	chartPath, err := inst.LocateChart(addon.Chart, settings)
 	if err != nil {
 		return fmt.Errorf("locating chart %s: %w", addon.Chart, err)
@@ -130,6 +180,10 @@ func (h *HelmInstaller) Install(ctx context.Context, restConfig *rest.Config, ad
 	if err != nil {
 		return fmt.Errorf("loading chart %s: %w", addon.Chart, err)
 	}
+	// Pulling Argo CD's images onto fresh nodes takes minutes; say so rather
+	// than looking hung.
+	h.logger.Info("installing argocd and waiting for it to become ready; this takes a few minutes",
+		"chart", addon.Chart, "version", addon.Version, "timeout", h.waitTimeout())
 	if _, err := inst.RunWithContext(ctx, chrt, addon.Values); err != nil {
 		return fmt.Errorf("installing %s: %w", ReleaseName, err)
 	}

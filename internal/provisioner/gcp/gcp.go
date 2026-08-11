@@ -309,7 +309,7 @@ func waitGlobalOperation(ctx context.Context, ops *compute.GlobalOperationsServi
 	for op.Status != "DONE" {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("waiting for operation %s: %w", op.Name, ctx.Err())
 		case <-time.After(operationPollInterval):
 		}
 		var err error
@@ -325,7 +325,7 @@ func waitRegionOperation(ctx context.Context, ops *compute.RegionOperationsServi
 	for op.Status != "DONE" {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("waiting for operation %s: %w", op.Name, ctx.Err())
 		case <-time.After(operationPollInterval):
 		}
 		var err error

@@ -41,35 +41,37 @@ func (o *Orchestrator) Delete(ctx context.Context, spec core.ClusterSpec, teardo
 	}
 	defer o.release(ctx, spec.ID)
 
+	// Teardown blocks on the cloud actually deleting the cluster, which takes
+	// longer than the lease TTL just as creation does — so it runs under the
+	// same heartbeat Apply uses. See keepLeaseAlive.
+	runCtx, stopHeartbeat := o.keepLeaseAlive(ctx, spec.ID)
+	defer stopHeartbeat()
+
 	// Re-read under the lease: another run may have advanced (or finished)
 	// teardown between the first read and acquiring it.
-	if rec, err = o.registry.Get(ctx, spec.ID); err != nil {
-		return rec, fmt.Errorf("reading %s: %w", spec.ID, err)
+	if rec, err = o.registry.Get(runCtx, spec.ID); err != nil {
+		return rec, leaseFailure(runCtx, fmt.Errorf("reading %s: %w", spec.ID, err))
 	}
 	if rec.Phase == core.PhaseDecommissioned {
 		return rec, nil
 	}
 
 	if rec.Phase != core.PhaseDecommissioning {
-		if rec, err = o.registry.UpdatePhase(ctx, rec, core.PhaseDecommissioning); err != nil {
-			return rec, fmt.Errorf("marking %s decommissioning: %w", spec.ID, err)
+		if rec, err = o.registry.UpdatePhase(runCtx, rec, core.PhaseDecommissioning); err != nil {
+			return rec, leaseFailure(runCtx, fmt.Errorf("marking %s decommissioning: %w", spec.ID, err))
 		}
 		o.logger.Info("marked cluster decommissioning", "cluster", spec.ID)
 	}
 
-	if _, err := o.registry.RenewLease(ctx, spec.ID, o.holder, o.leaseTTL); err != nil {
-		return rec, fmt.Errorf("renewing lease on %s: %w", spec.ID, err)
-	}
-
-	if err := teardown(ctx, spec, rec); err != nil {
+	if err := teardown(runCtx, spec, rec); err != nil {
 		// The phase is deliberately left at decommissioning: a retried delete
 		// resumes teardown rather than believing the cluster is still live.
-		return rec, fmt.Errorf("tearing down %s: %w", spec.ID, err)
+		return rec, leaseFailure(runCtx, fmt.Errorf("tearing down %s: %w", spec.ID, err))
 	}
 
-	updated, err := o.registry.UpdatePhase(ctx, rec, core.PhaseDecommissioned)
+	updated, err := o.registry.UpdatePhase(runCtx, rec, core.PhaseDecommissioned)
 	if err != nil {
-		return rec, fmt.Errorf("marking %s decommissioned: %w", spec.ID, err)
+		return rec, leaseFailure(runCtx, fmt.Errorf("marking %s decommissioned: %w", spec.ID, err))
 	}
 	o.logger.Info("cluster decommissioned", "cluster", spec.ID)
 	return updated, nil

@@ -172,7 +172,7 @@ func (p *NetworkProvisioner) ensureSubnetwork(
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("waiting for the subnetwork to become ready: %w", ctx.Err())
 		case <-time.After(subnetworkReadyBackoff):
 		}
 	}

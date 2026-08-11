@@ -2,6 +2,7 @@ package argocd
 
 import (
 	"testing"
+	"time"
 
 	"k8s.io/client-go/rest"
 
@@ -60,3 +61,22 @@ func TestInstall_MissingRepositoryIsAnError(t *testing.T) {
 // build discovery/REST-mapper clients against; nothing in this file's tests
 // makes a network call through it.
 var restConfigStub = rest.Config{Host: "https://127.0.0.1:6443"}
+
+// TestHelmInstaller_WaitTimeout covers the readiness-wait bound. Install
+// blocks until Argo CD is actually running, so a zero timeout on a
+// bare-literal HelmInstaller would mean "no bound at all" — Helm treats 0 as
+// no deadline, which would let a stuck install hang an apply indefinitely.
+func TestHelmInstaller_WaitTimeout(t *testing.T) {
+	if got := NewHelmInstaller(nil).waitTimeout(); got != InstallTimeout {
+		t.Errorf("waitTimeout = %s, want %s", got, InstallTimeout)
+	}
+
+	// Built as a bare struct literal, as this package's own tests do.
+	if got := (&HelmInstaller{}).waitTimeout(); got != InstallTimeout {
+		t.Errorf("waitTimeout on a zero-value installer = %s, want the default %s", got, InstallTimeout)
+	}
+
+	if got := (&HelmInstaller{timeout: time.Minute}).waitTimeout(); got != time.Minute {
+		t.Errorf("waitTimeout = %s, want the configured 1m", got)
+	}
+}

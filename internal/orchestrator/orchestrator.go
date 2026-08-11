@@ -190,21 +190,26 @@ func (o *Orchestrator) Apply(ctx context.Context, spec core.ClusterSpec) (regist
 	}
 	defer o.release(ctx, spec.ID)
 
+	// Steps outlast the TTL, so the lease is held by a heartbeat rather than by
+	// the between-steps renewals alone. runCtx dies the moment it lapses.
+	runCtx, stopHeartbeat := o.keepLeaseAlive(ctx, spec.ID)
+	defer stopHeartbeat()
+
 	// Re-read under the lease. Between the first read and acquiring, another run
 	// may have advanced the cluster — resuming from the earlier phase would
 	// re-execute work that is already done.
-	if rec, err = o.registry.Get(ctx, spec.ID); err != nil {
-		return rec, fmt.Errorf("reading %s: %w", spec.ID, err)
+	if rec, err = o.registry.Get(runCtx, spec.ID); err != nil {
+		return rec, leaseFailure(runCtx, fmt.Errorf("reading %s: %w", spec.ID, err))
 	}
 
-	rec, err = o.run(ctx, spec, rec)
+	rec, err = o.run(runCtx, spec, rec)
 	if err != nil {
-		return rec, err
+		return rec, leaseFailure(runCtx, err)
 	}
 
 	if rec.Phase == core.PhaseReady && o.readyReconcile != nil {
-		if err := o.readyReconcile(ctx, spec, rec); err != nil {
-			return rec, fmt.Errorf("reconciling %s: %w", spec.ID, err)
+		if err := o.readyReconcile(runCtx, spec, rec); err != nil {
+			return rec, leaseFailure(runCtx, fmt.Errorf("reconciling %s: %w", spec.ID, err))
 		}
 	}
 	return rec, nil
@@ -282,9 +287,10 @@ func (o *Orchestrator) advance(
 		return rec, fmt.Errorf("no step registered for phase %s", rec.Phase)
 	}
 
-	// Renewed before each step rather than on a timer: steps are the long
-	// operations, and a renewal that races a step boundary is the case that
-	// matters.
+	// A step boundary is the cheapest place to discover the lease is gone —
+	// before committing to another multi-minute cloud operation rather than
+	// part-way through one. keepLeaseAlive's heartbeat is what actually holds
+	// the lease across the step; this is the fast-fail check.
 	if _, err := o.registry.RenewLease(ctx, spec.ID, o.holder, o.leaseTTL); err != nil {
 		return rec, fmt.Errorf("renewing lease on %s: %w", spec.ID, err)
 	}

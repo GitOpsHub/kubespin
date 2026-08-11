@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"k8s.io/client-go/rest"
@@ -221,12 +222,55 @@ func StatusReporter() Component {
 type WaitOptions struct {
 	Interval time.Duration
 	Timeout  time.Duration
+
+	// MaxDescribeErrors is how many *consecutive* failed Describe calls are
+	// tolerated before the wait gives up. Zero means DefaultMaxDescribeErrors.
+	//
+	// Polling a control plane for half an hour means hundreds of API calls
+	// against a cloud that throttles, load-balances, and occasionally drops a
+	// connection. Treating the first such blip as fatal — as this did — threw
+	// away a cluster creation that was proceeding perfectly well, and left the
+	// registry a phase behind reality. A run only fails once the errors are
+	// persistent enough to mean something is genuinely wrong.
+	MaxDescribeErrors int
+
+	// Logger reports transient polling failures that were ridden out. They are
+	// invisible otherwise, which makes a slow provision impossible to explain
+	// after the fact.
+	Logger *slog.Logger
 }
+
+// DefaultMaxDescribeErrors tolerates a brief outage — with the default
+// 30-second interval, roughly two and a half minutes of consecutive failures.
+const DefaultMaxDescribeErrors = 5
 
 // DefaultWaitOptions suit real cluster creation, which takes 10-30 minutes on
 // every cloud.
 func DefaultWaitOptions() WaitOptions {
-	return WaitOptions{Interval: 30 * time.Second, Timeout: 45 * time.Minute}
+	return WaitOptions{
+		Interval:          30 * time.Second,
+		Timeout:           45 * time.Minute,
+		MaxDescribeErrors: DefaultMaxDescribeErrors,
+	}
+}
+
+// withDefaults fills in the zero values, so a caller passing a bare
+// WaitOptions{} (as tests and the fleet commands do) still polls sanely.
+func (o WaitOptions) withDefaults() WaitOptions {
+	defaults := DefaultWaitOptions()
+	if o.Interval <= 0 {
+		o.Interval = defaults.Interval
+	}
+	if o.Timeout <= 0 {
+		o.Timeout = defaults.Timeout
+	}
+	if o.MaxDescribeErrors <= 0 {
+		o.MaxDescribeErrors = defaults.MaxDescribeErrors
+	}
+	if o.Logger == nil {
+		o.Logger = slog.Default()
+	}
+	return o
 }
 
 // WaitUntilActive polls Describe until the cluster settles.
@@ -237,43 +281,68 @@ func DefaultWaitOptions() WaitOptions {
 func WaitUntilActive(
 	ctx context.Context, p ClusterProvisioner, spec core.ClusterSpec, opts WaitOptions,
 ) (ClusterState, error) {
-	if opts.Interval <= 0 {
-		opts.Interval = time.Second
-	}
-
+	opts = opts.withDefaults()
 	deadline := time.Now().Add(opts.Timeout)
-	if opts.Timeout <= 0 {
-		deadline = time.Now().Add(DefaultWaitOptions().Timeout)
-	}
 
+	var (
+		last     ClusterState
+		failures int
+	)
 	for {
 		state, err := p.Describe(ctx, spec)
-		if err != nil {
-			return state, fmt.Errorf("describing %s: %w", spec.ID, err)
-		}
+		if err == nil {
+			last, failures = state, 0
 
-		switch state.Status {
-		case StatusActive:
-			return state, nil
-		case StatusFailed:
-			return state, fmt.Errorf("%w: %s", ErrClusterFailed, spec.ID)
-		case StatusAbsent:
-			// Creation was requested but the cloud has not registered it yet;
-			// keep polling rather than treating this as a failure.
-		case StatusCreating, StatusUpdating, StatusDeleting:
+			switch state.Status {
+			case StatusActive:
+				return state, nil
+			case StatusFailed:
+				return state, fmt.Errorf("%w: %s", ErrClusterFailed, spec.ID)
+			case StatusAbsent:
+				// Creation was requested but the cloud has not registered it yet;
+				// keep polling rather than treating this as a failure.
+			case StatusCreating, StatusUpdating, StatusDeleting:
+			}
+		} else {
+			if failed := describeFailure(ctx, spec, err, &failures, opts, "become active"); failed != nil {
+				return last, failed
+			}
 		}
 
 		if time.Now().After(deadline) {
-			return state, fmt.Errorf("timed out waiting for %s to become active; last status %s",
-				spec.ID, state.Status)
+			return last, fmt.Errorf("timed out waiting for %s to become active; last status %s",
+				spec.ID, last.Status)
 		}
 
 		select {
 		case <-ctx.Done():
-			return state, fmt.Errorf("waiting for %s: %w", spec.ID, ctx.Err())
+			return last, fmt.Errorf("waiting for %s: %w", spec.ID, ctx.Err())
 		case <-time.After(opts.Interval):
 		}
 	}
+}
+
+// describeFailure decides whether a failed poll ends the wait.
+//
+// It returns nil to keep polling, having counted the failure, and a non-nil
+// error once the failures are consecutive enough to mean the cloud is not
+// merely blipping — or immediately if the caller's context is done, which is
+// never transient.
+func describeFailure(
+	ctx context.Context, spec core.ClusterSpec, err error, failures *int, opts WaitOptions, goal string,
+) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("waiting for %s to %s: %w", spec.ID, goal, err)
+	}
+
+	*failures++
+	if *failures >= opts.MaxDescribeErrors {
+		return fmt.Errorf("describing %s: %d consecutive failures: %w", spec.ID, *failures, err)
+	}
+
+	opts.Logger.Warn("could not read cluster state; retrying",
+		"cluster", spec.ID, "failures", *failures, "tolerated", opts.MaxDescribeErrors, "error", err)
+	return nil
 }
 
 // WaitUntilGone polls Describe until the cluster no longer exists.
@@ -287,33 +356,36 @@ func WaitUntilActive(
 func WaitUntilGone(
 	ctx context.Context, p ClusterProvisioner, spec core.ClusterSpec, opts WaitOptions,
 ) error {
-	if opts.Interval <= 0 {
-		opts.Interval = DefaultWaitOptions().Interval
-	}
-	if opts.Timeout <= 0 {
-		opts.Timeout = DefaultWaitOptions().Timeout
-	}
+	opts = opts.withDefaults()
 	deadline := time.Now().Add(opts.Timeout)
 
+	var (
+		last     ClusterState
+		failures int
+	)
 	for {
 		state, err := p.Describe(ctx, spec)
-		if err != nil {
-			return fmt.Errorf("describing %s: %w", spec.ID, err)
-		}
+		if err == nil {
+			last, failures = state, 0
 
-		switch state.Status {
-		case StatusAbsent:
-			return nil
-		case StatusFailed:
-			// The cloud gave up mid-deletion; leaving the phase at
-			// decommissioning is what lets a retried delete resume.
-			return fmt.Errorf("%w: %s failed while deleting", ErrClusterFailed, spec.ID)
-		case StatusDeleting, StatusActive, StatusCreating, StatusUpdating:
+			switch state.Status {
+			case StatusAbsent:
+				return nil
+			case StatusFailed:
+				// The cloud gave up mid-deletion; leaving the phase at
+				// decommissioning is what lets a retried delete resume.
+				return fmt.Errorf("%w: %s failed while deleting", ErrClusterFailed, spec.ID)
+			case StatusDeleting, StatusActive, StatusCreating, StatusUpdating:
+			}
+		} else {
+			if failed := describeFailure(ctx, spec, err, &failures, opts, "be deleted"); failed != nil {
+				return failed
+			}
 		}
 
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timed out waiting for %s to be deleted; last status %s",
-				spec.ID, state.Status)
+				spec.ID, last.Status)
 		}
 
 		select {

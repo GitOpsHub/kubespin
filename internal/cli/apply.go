@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -44,7 +47,13 @@ connection-timeout error. --access public avoids that, but on GCP it is not
 enough by itself: GKE enables master-authorized-networks with an empty
 allowlist by default, so nothing (not even the operator) can reach the public
 endpoint until --authorized-cidrs includes the caller's IP. AWS and Azure
-public endpoints are open to 0.0.0.0/0 unless --authorized-cidrs is set.`,
+public endpoints are open to 0.0.0.0/0 unless --authorized-cidrs is set.
+
+That step waits for Argo CD to actually be running, not just for its
+manifests to be accepted, so it takes a few minutes on a fresh cluster while
+images are pulled. An Argo CD that never becomes ready — pods that cannot be
+scheduled or cannot pull — fails the step there rather than looking like
+addons that silently never sync.`,
 		Example: `  # AWS, private API server, default node pool
   ./bin/kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
     --access private --profile tier-small@1.0.0 \
@@ -498,14 +507,20 @@ func runDelete(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-// confirmDelete prompts on stdin/stdout for an explicit "yes" before a
+// confirmDelete prompts on stdin/stdout for the cluster ID before a
 // destructive teardown proceeds. --yes skips this for scripted use.
+//
+// Anything that is not the cluster ID declines, including an empty line and
+// EOF. Reading the line rather than scanning a whitespace-delimited token is
+// what makes that true: pressing Enter at this prompt, or piping in nothing,
+// is how a person backs out, and it used to fail the command with "unexpected
+// newline" instead — an error report for what was really a successful abort.
 func confirmDelete(cmd *cobra.Command, spec core.ClusterSpec) (bool, error) {
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "This will decommission cluster %s and delete its cloud resources. Type the cluster ID to confirm: ", spec.ID)
 
-	var response string
-	if _, err := fmt.Fscanln(cmd.InOrStdin(), &response); err != nil {
+	line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
 		return false, fmt.Errorf("reading confirmation: %w", err)
 	}
-	return response == spec.ID.String(), nil
+	return strings.TrimSpace(line) == spec.ID.String(), nil
 }
