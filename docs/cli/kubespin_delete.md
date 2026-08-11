@@ -34,7 +34,7 @@ kubespin delete [flags]
     --profile tier-small@1.0.0 --github-org GitOpsHub --registry-region us-east-1
 
   # GCP, scripted (no interactive confirmation)
-  kubespin delete --provider gcp --gcp-project my-gcp-project --region us-central1 \
+  kubespin delete --provider gcp --gcp-project kubernetes-dev-502710 --region us-central1 \
     --cluster-id demo-gcp --profile tier-small@1.0.0 \
     --github-org GitOpsHub --registry-region us-east-1 --yes
 

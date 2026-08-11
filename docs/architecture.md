@@ -2,7 +2,8 @@
 
 This document covers the decisions that are hard to recover by reading any
 single file. For flag-level detail see the [CLI reference](cli/kubespin.md); for
-the milestone sequence see [EXECUTION-PLAN.md](https://github.com/GitOpsHub/kubespin/blob/main/EXECUTION-PLAN.md).
+the milestone sequence see
+[IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md](https://github.com/GitOpsHub/kubespin/blob/main/IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md).
 
 ## The shape of the system
 

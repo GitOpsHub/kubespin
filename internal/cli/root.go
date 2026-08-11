@@ -30,7 +30,7 @@ reporter to the Fleet Registry.`,
 		Example: `  # Spin up the shared fleet infrastructure once, then a cluster
   kubespin login
   make lambda
-  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+  kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1
   kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
     --access private --profile tier-small@1.0.0 \
     --github-org GitOpsHub --registry-region us-east-1

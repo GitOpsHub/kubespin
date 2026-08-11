@@ -141,7 +141,7 @@ kubespin login --only gcp
 
 kubespin apply \
   --provider gcp \
-  --gcp-project my-gcp-project \
+  --gcp-project kubernetes-dev-502710 \
   --region us-central1 \
   --cluster-id demo-gcp \
   --access public \
@@ -178,7 +178,7 @@ Use `--disk-size` (added alongside `--instance-type`/`--min-size`/
 ```bash
 kubespin apply \
   --provider gcp \
-  --gcp-project my-gcp-project \
+  --gcp-project kubernetes-dev-502710 \
   --region us-central1 \
   --cluster-id demo-gcp \
   --access private \
@@ -330,13 +330,13 @@ including required IAM permissions, in [Fleet bootstrap](fleet-bootstrap.md).
 make lambda
 
 # 2. Preview
-kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
+kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1 --dry-run
 
 # 3. Apply
-kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1
 
 # 4. Re-run the preview: everything must now report in sync
-kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
+kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1 --dry-run
 ```
 
 ```bash
@@ -352,6 +352,9 @@ kubespin fleet status --registry-region us-east-1
 kubespin fleet status --stale-only --stale-threshold 30m --registry-region us-east-1
 kubespin fleet status --output json --registry-region us-east-1
 kubespin fleet status --provider aws --phase ready --registry-region us-east-1
+
+# Same data, rendered as a static HTML snapshot you can open in a browser
+kubespin fleet dashboard --registry-region us-east-1
 ```
 
 ```bash
@@ -370,7 +373,7 @@ kubespin fleet audit \
   --github-org "$GITHUB_ORG" --registry-region us-east-1
 
 kubespin fleet audit --provider gcp --concurrency 8 \
-  --gcp-project my-gcp-project \
+  --gcp-project kubernetes-dev-502710 \
   --github-org "$GITHUB_ORG" --registry-region us-east-1
 ```
 
@@ -400,7 +403,7 @@ kubespin delete \
 # Scripted: skip the confirmation prompt
 kubespin delete \
   --provider gcp \
-  --gcp-project my-gcp-project \
+  --gcp-project kubernetes-dev-502710 \
   --region us-central1 \
   --cluster-id demo-gcp \
   --profile tier-small@1.0.0 \
@@ -437,6 +440,7 @@ two act on it:
 | `fleet update` | **Ignored.** The wave commits. |
 | `fleet audit` | Not applicable — read-only by construction. |
 | `fleet status` | Not applicable — read-only by construction. |
+| `fleet dashboard` | Not applicable — read-only by construction. |
 
 Passing `--dry-run` still logs `dry run: no changes will be made` on every
 command, because that line is emitted by the shared root pre-run. On `delete`

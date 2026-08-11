@@ -36,21 +36,26 @@ see [IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md](https://github.com/GitO
 for the acceptance criteria each milestone is actually gated on, milestone by
 milestone. In short:
 
-- **M0-M4, M6, M8, M9 are done** at the package level, fully unit-tested
+- **M0-M6, M8, M9 are done** at the package level, fully unit-tested
   against fakes (cloud SDK fakes, an in-memory registry, an in-memory
   GitHub-shaped repo). None of it has run against a real cloud account, a
   real GitHub org, or a real Kubernetes cluster — that verification needs
   live infrastructure this environment does not have, and is called out
   explicitly wherever it applies.
-- **M5 (Argo CD bootstrap) is partial.** App-of-apps manifest rendering and
-  ingress access-mode templating are done and wired in
-  ([internal/argocd](https://github.com/GitOpsHub/kubespin/tree/main/internal/argocd)). The actual Helm-as-library
-  install is not: an early attempt pulled in Helm's full transitive
-  dependency tree (~450 lines of new `go.sum` — OCI registry, Prometheus,
-  Redis, SQL drivers) for code with no caller yet, since minting a
-  `*rest.Config` for a freshly created cluster needs a per-cloud token
-  scheme (IAM-signed / Google OAuth / Azure AD) that doesn't exist. That
-  trade wasn't worth it, so it was reverted rather than merged half-working.
+- **M5 (Argo CD bootstrap) is done.** App-of-apps manifest rendering and
+  ingress access-mode templating
+  ([internal/argocd](https://github.com/GitOpsHub/kubespin/tree/main/internal/argocd)) are wired in, and so is the
+  Helm-as-library install itself: `argocd.HelmInstaller` runs
+  `helm upgrade --install` semantics via `helm.sh/helm/v3/pkg/action` against
+  a `*rest.Config` minted per cloud (`provisioner.RESTConfigProvisioner`,
+  implemented by all three `ClusterProvisioner`s — a presigned STS token on
+  AWS, an Application Default Credentials OAuth token on GCP, the kubeconfig
+  `ListClusterUserCredentials` returns on Azure). The root Application is
+  applied directly via `argocd.KubeApplier` (client-go dynamic client,
+  server-side apply), never committed to the repo it manages. Live-cluster
+  install/upgrade itself has no test coverage — that needs a reachable API
+  server, the same live-infra gap as every cloud SDK call in this codebase —
+  but everything else is unit tested.
 - **M7 (`tier-standard`/`tier-regulated`) is data-complete, verification-
   incomplete.** Both profiles resolve and validate; whether Kyverno actually
   denies what it's supposed to, whether Velero actually restores a PVC —
@@ -69,7 +74,7 @@ and [internal/fleet](https://github.com/GitOpsHub/kubespin/tree/main/internal/fl
 
 ## Open questions
 
-Three decisions are still outstanding, and each blocks a specific milestone
+Two decisions are still outstanding, and each blocks a specific milestone
 from moving past "implemented against fakes" to "verified for real":
 
 1. **GitHub Enterprise Server or Enterprise Cloud?** Changes how the
@@ -77,10 +82,9 @@ from moving past "implemented against fakes" to "verified for real":
    operations are designed against. Blocks live verification of M3, M4, M8, M9.
 2. **The fleet AWS account ID and region.** Needed to actually run
    `fleet bootstrap`; everything up to that point is verified without them.
-3. **Per-cloud cluster credential acquisition** (an IAM-signed token for
-   EKS, a Google OAuth token for GKE, an Azure AD token for AKS) — how
-   `apply` gets a `*rest.Config` for a cluster it just created. This is
-   what's actually blocking M5's Helm-as-library Argo CD install; it's a
-   real design question, not an implementation detail, and deserves its own
-   decision rather than being guessed at inside a milestone that assumes
-   it's already solved.
+
+Per-cloud cluster credential acquisition (an IAM-signed token for EKS, a
+Google OAuth token for GKE, an Azure AD token for AKS) — the `*rest.Config`
+`apply` needs to install Argo CD on a cluster it just created — is resolved:
+`provisioner.RESTConfigProvisioner`, implemented per cloud. What remains
+there is live-cluster verification, the same gap as everything else above.

@@ -102,12 +102,12 @@ kubespin apply --provider aws --cluster-id eks-demo-01 --region us-east-1 \
   --registry-region us-east-1 --dry-run
 
 # Apply — GCP, same idea (subnetwork auto-created if --subnets is omitted)
-kubespin apply --provider gcp --gcp-project my-project --cluster-id gke-demo-01 \
+kubespin apply --provider gcp --gcp-project kubernetes-dev-502710 --cluster-id gke-demo-01 \
   --region us-central1 --access private --github-org GitOpsHub \
   --profile tier-small@1.0.0 --registry-region us-east-1
 
 # Apply — Azure, with an operator-supplied subnet instead of an auto-created one
-kubespin apply --provider azure --azure-subscription <subscription-id> \
+kubespin apply --provider azure --azure-subscription 3df9adbd-ea55-4c92-964c-0252031979de \
   --cluster-id aks-demo-01 --region eastus --access private \
   --subnets /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet> \
   --github-org GitOpsHub --profile tier-small@1.0.0 --registry-region us-east-1

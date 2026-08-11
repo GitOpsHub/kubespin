@@ -39,6 +39,7 @@ directory. Override the destination with `make build INSTALL_DIR=...`.
 | `kubespin fleet update` | Roll a component version across every matching cluster, in waves. |
 | `kubespin fleet audit` | Diff live cloud infrastructure against each cluster's `cluster.yaml`. |
 | `kubespin fleet status` | Report sync, drift, and staleness across the fleet. |
+| `kubespin fleet dashboard` | Render a static HTML snapshot of fleet sync status, drift, and staleness. |
 
 See [Example workflows](#example-workflows) below for real invocations of
 each, or [docs/examples.md](docs/examples.md) for the full walkthrough.
@@ -66,7 +67,7 @@ kubespin fleet status --phase ready --registry-region us-east-1
 
 ```bash
 # GCP, public cluster, custom node pool
-kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
+kubespin apply --provider gcp --gcp-project kubernetes-dev-502710 --region us-central1 \
   --cluster-id demo-gcp --access public --profile tier-small@1.0.0 \
   --instance-type e2-standard-4 --desired-size 3 \
   --github-org "$GITHUB_ORG" --registry-region us-east-1
@@ -93,7 +94,7 @@ kubespin apply --provider azure --azure-subscription "$AZURE_SUBSCRIPTION_ID" \
 ```bash
 # Fleet-wide: bootstrap once, then operate across every cluster
 make lambda
-kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1
 kubespin fleet status --registry-region us-east-1
 kubespin fleet update --component argo-cd --version 2.11.0 \
   --github-org "$GITHUB_ORG" --registry-region us-east-1
@@ -190,4 +191,3 @@ Start at [docs/](docs/README.md).
 Planning documents:
 
 - [IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md](IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md) — milestones and acceptance criteria
-- [EXECUTION-PLAN.md](EXECUTION-PLAN.md) — locked decisions and PR-sized breakdown

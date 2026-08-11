@@ -21,7 +21,7 @@ func newFleetCommand() *cobra.Command {
 		Use:   "fleet",
 		Short: "Operate on the whole fleet rather than a single cluster",
 		Example: `  # The typical fleet lifecycle, in order
-  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+  kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1
   kubespin fleet status --registry-region us-east-1
   kubespin fleet update --component argo-cd --version 2.11.0 \
     --github-org GitOpsHub --registry-region us-east-1
@@ -197,8 +197,8 @@ re-running one.`,
     --github-org GitOpsHub --registry-region us-east-1
 
   # A fleet with GCP or Azure clusters needs their project/subscription too
-  kubespin fleet audit --gcp-project my-gcp-project \
-    --azure-subscription <subscription-id> \
+  kubespin fleet audit --gcp-project kubernetes-dev-502710 \
+    --azure-subscription 3df9adbd-ea55-4c92-964c-0252031979de \
     --github-org GitOpsHub --registry-region us-east-1`,
 		Args: cobra.NoArgs,
 		RunE: runFleetAudit,

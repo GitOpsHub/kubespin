@@ -25,13 +25,13 @@ kubespin fleet bootstrap [flags]
   make lambda
 
   # Preview what bootstrap would create
-  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
+  kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1 --dry-run
 
   # Provision it for real
-  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+  kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1
 
   # Re-running is safe; a converged fleet reports no changes
-  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
+  kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1 --dry-run
 ```
 
 ## Options

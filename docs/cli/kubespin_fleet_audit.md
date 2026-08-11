@@ -29,8 +29,8 @@ kubespin fleet audit [flags]
     --github-org GitOpsHub --registry-region us-east-1
 
   # A fleet with GCP or Azure clusters needs their project/subscription too
-  kubespin fleet audit --gcp-project my-gcp-project \
-    --azure-subscription <subscription-id> \
+  kubespin fleet audit --gcp-project kubernetes-dev-502710 \
+    --azure-subscription 3df9adbd-ea55-4c92-964c-0252031979de \
     --github-org GitOpsHub --registry-region us-east-1
 ```
 
