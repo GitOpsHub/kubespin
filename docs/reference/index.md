@@ -16,6 +16,10 @@ pages describe code structure, not flags.
 
 ## Provisioning
 
+Start with the [AWS vs. GCP vs. Azure comparison](provisioners.md) if you want
+the three clouds side by side; the per-cloud pages below are the full
+method-level reference.
+
 | Package | Covers |
 |---|---|
 | [internal/provisioner (shared) + internal/provisioner/aws](provisioner-aws.md) | `ClusterProvisioner`/`IdentityProvisioner`/`NetworkProvisioner` interfaces; EKS, IRSA, VPC auto-creation |

@@ -28,13 +28,13 @@ here is cloud-specific to that pair.
 |---|---|---|---|
 | [`eksAPI`, `iamAPI`, `ec2API`](#eksapi-iamapi-ec2api-interfaces) | interfaces | aws.go | narrow SDK v2 client interfaces |
 | [`Clients`](#clients) | struct | aws.go | shared SDK clients + logger |
-| [AWS-managed policy / OIDC constants](#aws-managed-policy--oidc-constants) | constants | aws.go | policy ARNs, OIDC thumbprint |
-| [`names`](#names--deterministic-resource-naming) | struct | aws.go | deterministic resource naming from cluster ID |
+| [AWS-managed policy / OIDC constants](#aws-managed-policy-oidc-constants) | constants | aws.go | policy ARNs, OIDC thumbprint |
+| [`names`](#names-deterministic-resource-naming) | struct | aws.go | deterministic resource naming from cluster ID |
 | [`ClusterProvisioner`](#clusterprovisioner_1) | struct | cluster.go | EKS cluster + node group lifecycle |
 | [Role helpers](#role-helpers) | functions | cluster.go | `ensureRole`, `attachPolicies`, `eksServiceTrust` |
 | [Validation and misc](#validation-and-misc) | functions | cluster.go | `validateForEKS`, `findPool`, `record` |
 | [`IdentityProvisioner`](#identityprovisioner_1) | struct | identity.go | IRSA role + OIDC provider management |
-| [REST config / bearer token minting](#kubeauthgo--rest-config--bearer-token-minting) | functions | kubeauth.go | STS-presigned bearer token for `*rest.Config` |
+| [REST config / bearer token minting](#kubeauthgo-rest-config-bearer-token-minting) | functions | kubeauth.go | STS-presigned bearer token for `*rest.Config` |
 | [`NetworkProvisioner`](#networkprovisioner_1) | struct | network.go | VPC/subnet auto-creation and egress rules |
 
 ## Shared interfaces (`provisioner.go`)
@@ -368,6 +368,8 @@ Implements `provisioner.ClusterProvisioner` and (via `kubeauth.go`) `provisioner
         - Both keep the private endpoint enabled so in-VPC traffic never leaves the network.
     - **Invariant:** this is the same function `reconcileAccess` calls to flip access mode later, so creation and reconciliation share one source of truth for endpoint config.
 
+#### `ClusterState`
+
 ??? note "`Describe(ctx, spec) (provisioner.ClusterState, error)`"
 
     - **Behavior:**
@@ -380,6 +382,8 @@ Implements `provisioner.ClusterProvisioner` and (via `kubeauth.go`) `provisioner
         - `Failed`/anything else `→Failed`
     - `accessFrom(cfg)` returns `core.AccessPublic` if `cfg.EndpointPublicAccess` is true, else `core.AccessPrivate`.
     - `describeNodePools` lists node groups (`ListNodegroups`) then `DescribeNodegroup`s each, mapping to `core.NodePool{Name, Labels, DiskSizeGB, InstanceType (first entry), MinSize, MaxSize, DesiredSize}`. `poolNameFromNodeGroup` strips the `<clusterID>-` prefix EKS's node group name carries to recover the pool name from `spec.NodePools`. Results are sorted by name for deterministic output.
+
+#### `Change`
 
 ??? note "`Reconcile(ctx, spec) (provisioner.Change, error)`"
 
@@ -579,6 +583,8 @@ VPC/subnet auto-creation and egress.
 ??? note "`carveSubnetCIDR(vpcCIDR, index) (string, error)`"
 
     - **Behavior:** parses `vpcCIDR` as IPv4, requires it to be at least a `/24` (errors otherwise), and computes the `index`-th `/24` block by adding `index * 256` to the base IP as a big-endian uint32.
+
+#### `names`
 
 ??? note "`tagNameFilter(name)` / `tagSpec(resourceType, name, spec)`"
 

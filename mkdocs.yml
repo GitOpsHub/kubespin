@@ -104,6 +104,7 @@ nav:
       - internal/core: reference/core.md
       - internal/auth: reference/auth.md
       - internal/fleetinfra: reference/fleetinfra.md
+      - Provisioners AWS vs GCP vs Azure: reference/provisioners.md
       - internal/provisioner + aws: reference/provisioner-aws.md
       - internal/provisioner/gcp: reference/provisioner-gcp.md
       - internal/provisioner/azure: reference/provisioner-azure.md

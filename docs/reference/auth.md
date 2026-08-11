@@ -10,14 +10,14 @@
 | [StatusDetail](#statusdetail) | struct | auth.go | Session detail (message + expiry) reported by a `Provider` |
 | [Result](#result) | struct | auth.go | Outcome of one operation against one provider |
 | [Registry](#registry) | struct | auth.go | Holds every configured provider in report order |
-| [Option](#option--options) | func type | auth.go | Functional option over provider constructor settings |
+| [Option](#option) | func type | auth.go | Functional option over provider constructor settings |
 | [WithLogger](#withlogger) | func | auth.go | Sets the logger used by a provider constructor |
 | [NewRegistry](#newregistry) | func | auth.go | Builds a `Registry` over the given providers |
 | [Status](#status) | func | auth.go | Concurrently checks every provider's auth state |
 | [Login](#login) | func | auth.go | Concurrently authenticates every provider |
 | [Logout](#logout) | func | auth.go | Concurrently clears every provider's cached session |
 | [EnsureAll](#ensureall) | func | auth.go | Preflight that errors fast if any provider is unauthenticated |
-| [commandRunner / commandOutput](#commandrunner--commandoutput) | func type | auth.go | Abstractions over shelling out to a CLI |
+| [commandRunner / commandOutput](#commandrunner-commandoutput) | func type | auth.go | Abstractions over shelling out to a CLI |
 | [AWSProvider](#awsprovider) | struct | aws.go | Authenticates via AWS IAM Identity Center (SSO) |
 | [NewAWSProvider](#newawsprovider) | func | aws.go | Builds a provider scoped to one named AWS profile |
 | [stsAPI](#stsapi) | interface | aws.go | Narrowed AWS STS client interface for testability |
@@ -29,6 +29,8 @@
 | [WriteTable](#writetable) | func | status.go | Renders `Result`s as a `✓`/`✗` table for the CLI |
 
 ## auth.go
+
+#### Provider
 
 ??? abstract "Signature — `Provider` interface"
 
@@ -49,6 +51,8 @@
     - **Behavior:** reached uniformly by the orchestrator functions and by every command that needs credentials, so none of them branch on which cloud they're talking to.
     - **Invariants:** implemented by `AWSProvider`, `GCPProvider`, and `AzureProvider`; adding a new cloud is a new file implementing this interface, not a change to `login`/`status`/`logout`.
 
+#### StatusDetail
+
 ??? abstract "Signature — `StatusDetail` struct"
 
     ```go
@@ -64,6 +68,8 @@
     - **Behavior:** what a `Provider` reports about its own session beyond the plain authenticated/not-authenticated bit.
     - **Invariants:** `ExpiresAt == nil` means unknown/not applicable — **not** "never expires".
 
+#### Result
+
 ??? abstract "Signature — `Result` struct"
 
     ```go
@@ -78,6 +84,8 @@
     - **Behavior:** the outcome of running one operation against one provider; `Status`/`Login`/`Logout` each return a slice of these — one per provider, in the same order the providers were given — rather than failing the whole batch on the first error.
     - **Invariants:** a `login` run against three clouds still reports all three even if one fails.
 
+#### Registry
+
 ??? abstract "Signature — `Registry` struct"
 
     ```go
@@ -91,6 +99,8 @@
         - `NewRegistry(providers ...Provider) *Registry` — builds a registry over the given providers, in report order.
         - `(*Registry) Select(names []string) ([]Provider, error)` — returns the providers named (case-insensitively), in registry order, or an error naming any name that matched nothing. An empty `names` list selects every provider — this is what backs `--only`.
 
+#### Option
+
 ??? abstract "Signature — `Option` / `options`"
 
     ```go
@@ -102,6 +112,8 @@
 
     - **Behavior:** `options` carries settings shared by every provider constructor in the package, so a caller configures all three clouds the same way; `Option` is a functional option over it.
 
+#### WithLogger
+
 ??? note "Signature — `WithLogger`"
 
     ```go
@@ -111,6 +123,8 @@
     - **Behavior:** sets the logger used by a provider constructor. Without it, a provider logs to `slog.Default()`.
     - **Invariants:** a `nil` logger is ignored (the provider keeps `slog.Default()`); logging in this package is Debug-level on purpose since `kubespin login`/`status` already report per-provider outcomes to the operator — this is only the "which CLI did we actually shell out to" detail needed when diagnosing a problem.
 
+#### NewRegistry
+
 ??? note "Signature — `NewRegistry`"
 
     ```go
@@ -118,6 +132,8 @@
     ```
 
     - **Behavior:** builds a `Registry` over the given providers, in report order.
+
+#### Status
 
 ??? note "Signature — `Status`"
 
@@ -128,6 +144,8 @@
     - **Behavior:** checks every provider concurrently.
     - **Invariants:** has no side effects and never returns an error itself — per-provider failures are carried in each `Result` — so it is safe to run as often as a caller likes, including as a preflight before every cloud-calling command.
 
+#### Login
+
 ??? note "Signature — `Login`"
 
     ```go
@@ -135,6 +153,8 @@
     ```
 
     - **Behavior:** authenticates every provider concurrently — each may pop open a browser and there is no dependency between them, so running them one at a time would just be a needless wait. A provider whose session already looks valid is left alone unless `force` is set. After `Login` runs, it re-checks `IsAuthenticated` and reports that as the result's authenticated state.
+
+#### Logout
 
 ??? note "Signature — `Logout`"
 
@@ -144,6 +164,8 @@
 
     - **Behavior:** clears every provider's cached session concurrently.
 
+#### EnsureAll
+
 ??? note "Signature — `EnsureAll`"
 
     ```go
@@ -152,6 +174,8 @@
 
     - **Behavior:** the preflight every command that calls a cloud SDK should run before it does anything else. Runs `Status` and, if any provider is not authenticated, returns an error naming all of them (sorted) and pointing at `kubespin login --only <providers>`, rather than surfacing a cryptic SDK auth error partway through provisioning.
     - **Invariants:** returns `nil` if every provider is authenticated.
+
+#### commandRunner / commandOutput
 
 ??? abstract "Signature — `commandRunner` / `commandOutput`"
 
@@ -174,6 +198,8 @@
 
 ## aws.go
 
+#### AWSProvider
+
 ??? abstract "Signature — `AWSProvider` struct"
 
     ```go
@@ -191,6 +217,8 @@
     - **Behavior:** authenticates via AWS IAM Identity Center (SSO) — the same flow documented in `docs/fleet-bootstrap.md` for the Fleet Registry account.
     - **Invariants:** constructing an `AWSProvider` succeeds even before the operator has ever logged in or run `aws configure` — a missing `"default"` profile section falls back to the SDK's unscoped default resolution, but a named profile that doesn't exist still errors since the operator explicitly asked for it.
 
+#### NewAWSProvider
+
 ??? note "Signature — `NewAWSProvider`"
 
     ```go
@@ -199,6 +227,8 @@
 
     - **Behavior:** builds a provider scoped to one named profile in `~/.aws/config`. An empty `profile` defaults to `"default"`.
     - **Invariants:** see the `AWSProvider` invariant above for the fallback behavior on a missing default profile.
+
+#### stsAPI
 
 ??? abstract "Signature — `stsAPI` interface"
 
@@ -211,6 +241,8 @@
     - **Behavior:** narrow single-method interface over the AWS STS client, existing solely to make `AWSProvider.IsAuthenticated` testable without live cloud credentials.
 
 ## azure.go
+
+#### AzureProvider
 
 ??? abstract "Signature — `AzureProvider` struct"
 
@@ -226,6 +258,8 @@
     - **Behavior:** authenticates via the `az` CLI. `internal/provisioner/azure`'s `NewDefaultAzureCredential` falls back to exactly this cached session once no environment/managed-identity credential is available, so a logged-in `az` CLI is what makes kubespin's own Azure client construction work.
     - **Invariants:** `IsAuthenticated` requests a real management-plane token (`azureManagementScope = "https://management.azure.com/.default"`) rather than just checking `az account show`, so an expired or revoked session is reported accurately.
 
+#### NewAzureProvider
+
 ??? note "Signature — `NewAzureProvider`"
 
     ```go
@@ -233,6 +267,8 @@
     ```
 
     - **Behavior:** builds a provider over the `az` CLI's cached session.
+
+#### tokenCredential
 
 ??? abstract "Signature — `tokenCredential` interface"
 
@@ -245,6 +281,8 @@
     - **Behavior:** narrow single-method interface over the Azure `azidentity` credential, existing solely to make `AzureProvider.IsAuthenticated` testable without live cloud credentials.
 
 ## gcp.go
+
+#### GCPProvider
 
 ??? abstract "Signature — `GCPProvider` struct"
 
@@ -259,6 +297,8 @@
     - **Behavior:** authenticates via `gcloud`: a user login (for interactive/CLI use) plus Application Default Credentials (what the GCP SDK clients in `internal/provisioner/gcp` actually read).
     - **Invariants:** `Login`/`Logout` always perform *both* the user login/revoke and the Application Default Credentials login/revoke — skipping the ADC leg is the classic "gcloud works but my Go program can't authenticate" trap.
 
+#### NewGCPProvider
+
 ??? note "Signature — `NewGCPProvider`"
 
     ```go
@@ -268,6 +308,8 @@
     - **Behavior:** builds a provider that shells out to the `gcloud` CLI.
 
 ## status.go
+
+#### WriteTable
 
 ??? note "Signature — `WriteTable`"
 

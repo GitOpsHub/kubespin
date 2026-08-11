@@ -25,6 +25,8 @@
 
 ## cluster.go
 
+#### ErrInvalidSpec
+
 ??? warning "Signature: `ErrInvalidSpec`"
 
     ```go
@@ -33,6 +35,8 @@
 
     - **Behavior:** sentinel wrapping every validation failure produced by this package's `Validate` methods.
     - **Invariants:** callers must branch with `errors.Is(err, core.ErrInvalidSpec)` rather than matching on message text.
+
+#### Provider
 
 ??? abstract "Signature: `Provider`"
 
@@ -48,6 +52,8 @@
 
     - **Behavior:** identifies the cloud a cluster is provisioned on; each has an implementation under `internal/provisioner`.
 
+#### Providers
+
 ??? note "Signature: `Providers`, `(Provider) Valid`, `(Provider) String`"
 
     ```go
@@ -57,6 +63,8 @@
     ```
 
     - **Behavior:** `Providers` returns all three constants in the order help text should show them; `Valid` is true only for the three constants; `String` renders the raw value.
+
+#### Access
 
 ??? abstract "Signature: `Access`"
 
@@ -81,6 +89,8 @@
 
     - **Behavior:** `Valid` is true for `AccessPrivate` or `AccessPublic`; `String` renders the raw value.
 
+#### ClusterID
+
 ??? abstract "Signature: `ClusterID`"
 
     ```go
@@ -98,6 +108,8 @@
     ```
 
     - **Behavior:** `Validate` requires a match against `^[a-z][a-z0-9-]{1,38}[a-z0-9]$` (3-40 chars, lowercase alphanumeric or hyphen, starting with a letter, ending alphanumeric — legal simultaneously as a GitHub repo suffix, a DNS label, and a cloud resource name); empty IDs get a dedicated message.
+
+#### NodePool
 
 ??? abstract "Signature: `NodePool`"
 
@@ -123,6 +135,8 @@
 
     - **Behavior:** joins every violation found rather than stopping at the first.
     - **Invariants:** `Name` required; `InstanceType` required; `MinSize >= 0`; `MaxSize >= 1`; `MinSize <= MaxSize`; `DesiredSize` within `[MinSize, MaxSize]`; `DiskSizeGB >= 0`. Cross-pool checks (unique names within a spec) live on `ClusterSpec.Validate`, not here.
+
+#### ClusterSpec
 
 ??? abstract "Signature: `ClusterSpec`"
 
@@ -166,6 +180,8 @@
 
 A cluster's position in the provisioning state machine. The orchestrator resumes a failed `apply` by re-entering at the recorded phase, which is what makes retry and first run the same code path. See the [architecture doc's phase diagram](../architecture.md#the-phase-state-machine) for the visual state machine; it is not duplicated here.
 
+#### ErrInvalidTransition
+
 ??? warning "Signature: `ErrInvalidTransition`"
 
     ```go
@@ -174,6 +190,8 @@ A cluster's position in the provisioning state machine. The orchestrator resumes
 
     - **Behavior:** returned by `ValidateTransition` when a phase change is not legal.
     - **Invariants:** the Fleet Registry checks this on every write, so an illegal state machine move fails at the storage boundary instead of being silently persisted.
+
+#### Phase
 
 ??? abstract "Signature: `Phase`"
 
@@ -205,6 +223,8 @@ A cluster's position in the provisioning state machine. The orchestrator resumes
 
     - **Behavior:** `Valid` is derived from `PhaseOrder`, not the transition table, since terminal phases have no successor but are still valid phases to be in; `Terminal` is true only for `PhaseDecommissioned`; `Next` returns the happy-path successor phase from `forwardTransitions`, and `false` if `p` has none (i.e. `PhaseReady` or `PhaseDecommissioned`).
 
+#### PhaseOrder
+
 ??? abstract "Signature: `PhaseOrder`"
 
     ```go
@@ -218,6 +238,8 @@ A cluster's position in the provisioning state machine. The orchestrator resumes
     - **Behavior:** every phase, in state machine order, for display and iteration.
     - **Invariants:** this is the authoritative list of phases — `Phase.Valid` is derived from it, so a new phase constant is only recognized once it is registered here.
 
+#### CanTransition
+
 ??? note "Signature: `CanTransition`"
 
     ```go
@@ -226,6 +248,8 @@ A cluster's position in the provisioning state machine. The orchestrator resumes
 
     - **Behavior:** reports whether `from -> to` is legal; both phases must be `Valid`.
     - **Invariants:** three rules in precedence order: (1) a phase may always transition to itself (idempotent no-op on retry); (2) any live (non-terminal) phase may enter `PhaseDecommissioning`; (3) otherwise only the single forward step recorded in `forwardTransitions` is legal — no skipping ahead, no rollback.
+
+#### ValidateTransition
 
 ??? note "Signature: `ValidateTransition`"
 
@@ -236,6 +260,8 @@ A cluster's position in the provisioning state machine. The orchestrator resumes
     - **Behavior:** wraps `CanTransition` with a descriptive, `ErrInvalidTransition`-wrapped error — reports unknown phases by name, or `from -> to` when both are known but the move isn't allowed; returns `nil` when the transition is legal.
 
 ## profile.go
+
+#### ProfileRef
 
 ??? abstract "Signature: `ProfileRef`"
 
@@ -249,6 +275,8 @@ A cluster's position in the provisioning state machine. The orchestrator resumes
     - **Behavior:** points at a versioned profile in the platform-profiles repository.
     - **Invariants:** pinning the version is what makes `fleet update` a deliberate, staged action rather than an implicit consequence of someone merging to the catalog.
 
+#### Profile
+
 ??? note "Signature: `(ProfileRef) Validate`, `(ProfileRef) String`"
 
     ```go
@@ -257,6 +285,8 @@ A cluster's position in the provisioning state machine. The orchestrator resumes
     ```
 
     - **Behavior:** `Validate` requires `Name` to match the shared name pattern (`^[a-z][a-z0-9-]{1,61}[a-z0-9]$`) and `Version` to be set; `String` renders as `"name@version"`.
+
+#### AddonRef
 
 ??? abstract "Signature: `AddonRef`"
 
@@ -284,6 +314,8 @@ A cluster's position in the provisioning state machine. The orchestrator resumes
 
     - **Behavior:** `Validate` requires `Name` (valid name pattern), `Chart`, `Repository`, `Namespace`, and each entry in `Providers` to be `Valid()`; `SupportsProvider` is true when `Providers` is empty or contains `provider`.
     - **Invariants:** `Version` is mandatory — an unpinned addon would make a cluster's resolved state unreproducible, breaking the `.state.yaml` no-op guarantee.
+
+#### AddonOverride
 
 ??? abstract "Signature: `AddonOverride`"
 
