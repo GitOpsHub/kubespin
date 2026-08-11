@@ -41,7 +41,7 @@ kubespin apply [flags]
 ```bash
   # AWS, private API server, default node pool
   kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
-    --access public --profile tier-small@1.0.0 \
+    --access private --profile tier-small@1.0.0 \
     --github-org GitOpsHub --registry-region us-east-1
 
   # GCP, public API server, larger node pool — authorized-cidrs is required on GCP
@@ -49,13 +49,13 @@ kubespin apply [flags]
   kubespin apply --provider gcp --gcp-project kubernetes-dev-502710 --region us-central1 \
     --cluster-id demo-gcp --access public --authorized-cidrs 203.0.113.4/32 \
     --profile tier-small@1.0.0 \
-    --instance-type e2-medium --desired-size 2 \
+    --instance-type e2-standard-4 --desired-size 3 \
     --github-org GitOpsHub --registry-region us-east-1
 
   # Azure, resolving addons from a platform-profiles repo instead of the builtin catalog
   kubespin apply --provider azure --azure-subscription 3df9adbd-ea55-4c92-964c-0252031979de --region eastus \
-    --cluster-id demo-azure --access public --profile tier-standard@1.0.0 \
-    --instance-type Standard_D2s_v7 --desired-size 2 \
+    --cluster-id demo-azure --access private --profile tier-standard@1.0.0 \
+    --instance-type Standard_D4s_v7 \
     --profiles-repo platform-profiles \
     --github-org GitOpsHub --registry-region us-east-1
 
@@ -70,27 +70,30 @@ kubespin apply [flags]
       --authorized-cidrs strings    CIDR blocks allowed to reach the API server when --access public (GCP: required to reach the endpoint at all, since GKE enables master-authorized-networks with an empty allowlist by default; AWS/Azure: public endpoints are open to 0.0.0.0/0 unless this is set)
       --azure-subscription string   Azure subscription hosting the cluster (required for --provider azure)
       --cluster-id string           cluster identifier (also the repository suffix)
-      --desired-size int32          desired size of the default node pool (default 2)
-      --disk-size int32             boot disk size in GB for the default node pool's nodes (0 = cloud default; GKE regional clusters multiply this by the number of zones, so it is worth setting explicitly on quota-constrained projects)
+      --desired-size int32          desired size of the default node pool (--spot defaults this lower, see --spot) (default 2)
+      --disk-size int32             boot disk size in GB for the default node pool's nodes (0 = cloud default; GKE regional clusters multiply this by the number of zones, so it is worth setting explicitly on quota-constrained projects; --spot picks a smaller default, see --spot)
       --gcp-project string          GCP project hosting the cluster (required for --provider gcp)
+      --gcp-public-nodes            give GKE nodes public IPs instead of provisioning a Cloud Router + Cloud NAT for them (GCP only). --spot already enables this; only needed to use it without spot.
       --github-base-url string      GitHub Enterprise API base URL (leave empty for github.com)
       --github-org string           GitHub organization cluster repositories are created in
       --github-upload-url string    GitHub Enterprise upload URL (leave empty for github.com)
   -h, --help                        help for apply
       --ingestion-endpoint string   Central Ingestion API host the cluster must be able to reach
-      --instance-type string        instance type for the default node pool (defaults to a cloud-appropriate value per --provider when unset: m6i.large on aws, e2-standard-4 on gcp, Standard_D4s_v7 on azure) (default "m6i.large")
+      --instance-type string        instance type for the default node pool (defaults to a cloud-appropriate value per --provider when unset: m6i.large on aws, e2-standard-4 on gcp, Standard_D4s_v7 on azure; --spot picks a smaller cloud-appropriate default instead, see --spot) (default "m6i.large")
       --kubernetes-version string   Kubernetes minor version, e.g. 1.34
-      --max-size int32              maximum size of the default node pool (default 5)
-      --min-size int32              minimum size of the default node pool (default 1)
+      --max-size int32              maximum size of the default node pool (--spot defaults this lower, see --spot) (default 5)
+      --min-size int32              minimum size of the default node pool (--spot defaults this lower, see --spot) (default 1)
       --profile string              profile reference from platform-profiles, e.g. tier-small@1.0.0
       --profiles-repo string        platform-profiles repository name to resolve profiles from (uses the builtin catalog if empty)
       --provider string             cloud provider: aws, gcp, or azure
       --region string               cloud region
       --spec string                 path to a cluster.yaml describing the cluster
+      --spot                        one flag for the cheapest dev/learning cluster on any cloud: spot/preemptible instances (AWS/GCP; AKS's default pool must stay on-demand, so this part is a no-op on --provider azure), plus a smaller default --instance-type/--min-size/--max-size/--desired-size/--disk-size sized to still run the tier-small addon set (t3.medium/e2-medium/Standard_B2s, 1/2/1 nodes) — pass any of those flags explicitly to override just that piece. On GCP this also switches to a zonal cluster (eligible for GCP's free zonal-cluster tier) and gives nodes public IPs instead of provisioning Cloud NAT, unless --zone/--gcp-public-nodes override it.
       --subnet-cidr string          address prefix for the subnet kubespin creates when --subnets is omitted (Azure default 10.0.1.0/24, GCP default 10.0.0.0/20)
       --subnets strings             existing subnets to place the cluster in
       --vnet-cidr string            address space for the VNet kubespin creates when --subnets is omitted (Azure only, default 10.0.0.0/16)
       --vpc-cidr string             address space for the VPC kubespin creates when --subnets is omitted (AWS only, default 10.0.0.0/16)
+      --zone string                 GCP zone (e.g. us-central1-a) requesting a zonal GKE cluster instead of the default regional one (GCP only). --spot already sets this; only needed to pick a specific zone, or to go zonal without spot.
 ```
 
 ## Options inherited from parent commands

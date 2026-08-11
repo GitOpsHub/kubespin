@@ -84,6 +84,25 @@ func (id ClusterID) Validate() error {
 
 func (id ClusterID) String() string { return string(id) }
 
+// CapacityType selects the purchasing option for a node pool's instances.
+type CapacityType string
+
+// Node pool capacity types. CapacityTypeOnDemand is also the zero value, so
+// an unset CapacityType (every spec written before this field existed)
+// behaves exactly as before.
+const (
+	CapacityTypeOnDemand CapacityType = "on-demand"
+	CapacityTypeSpot     CapacityType = "spot"
+)
+
+// Valid reports whether c is empty (defaults to on-demand) or a known
+// capacity type.
+func (c CapacityType) Valid() bool {
+	return c == "" || c == CapacityTypeOnDemand || c == CapacityTypeSpot
+}
+
+func (c CapacityType) String() string { return string(c) }
+
 // NodePool is a homogeneous group of worker nodes. Sizing changes here are
 // infra diffs: they resolve to a cloud SDK reconcile, never to a git commit.
 type NodePool struct {
@@ -94,6 +113,11 @@ type NodePool struct {
 	DesiredSize  int32             `yaml:"desiredSize" json:"desiredSize"`
 	DiskSizeGB   int32             `yaml:"diskSizeGB,omitempty" json:"diskSizeGB,omitempty"`
 	Labels       map[string]string `yaml:"labels,omitempty" json:"labels,omitempty"`
+
+	// CapacityType requests spot/preemptible instances instead of on-demand.
+	// Empty means on-demand. AWS and GCP honor this; AKS requires its
+	// default/system node pool to stay on-demand, so it is a no-op there.
+	CapacityType CapacityType `yaml:"capacityType,omitempty" json:"capacityType,omitempty"`
 }
 
 // Validate checks a single node pool in isolation. Cross-pool checks (unique
@@ -105,6 +129,10 @@ func (np NodePool) Validate() error {
 	}
 	if np.InstanceType == "" {
 		errs = append(errs, fmt.Errorf("%w: node pool %q: instance type is required", ErrInvalidSpec, np.Name))
+	}
+	if !np.CapacityType.Valid() {
+		errs = append(errs, fmt.Errorf("%w: node pool %q: capacityType %q must be on-demand or spot",
+			ErrInvalidSpec, np.Name, np.CapacityType))
 	}
 	if np.MinSize < 0 {
 		errs = append(errs, fmt.Errorf("%w: node pool %q: minSize must not be negative", ErrInvalidSpec, np.Name))
@@ -136,6 +164,21 @@ type ClusterSpec struct {
 	KubernetesVersion string     `yaml:"kubernetesVersion,omitempty" json:"kubernetesVersion,omitempty"`
 	NodePools         []NodePool `yaml:"nodePools" json:"nodePools"`
 	Profile           ProfileRef `yaml:"profile" json:"profile"`
+
+	// Zone, when set, requests a zonal GKE cluster (control plane in a single
+	// zone) instead of the default regional cluster. GCP-only; ignored on
+	// AWS/Azure. A zonal cluster has no HA control plane but is what makes a
+	// GCP cluster eligible for the one-free-zonal-cluster-per-billing-account
+	// tier, so it exists for cost-sensitive dev clusters. Empty preserves the
+	// existing regional behavior.
+	Zone string `yaml:"zone,omitempty" json:"zone,omitempty"`
+
+	// PublicNodes, when true, skips GKE's private-nodes configuration and the
+	// Cloud Router/Cloud NAT it requires, giving nodes public IPs instead.
+	// GCP-only; ignored on AWS/Azure. Trades network isolation for avoiding
+	// Cloud NAT's always-on hourly + data processing charges — meant for
+	// cost-sensitive dev clusters, not production.
+	PublicNodes bool `yaml:"publicNodes,omitempty" json:"publicNodes,omitempty"`
 
 	// AuthorizedCIDRs restricts API server access. It is meaningful only for
 	// AccessPublic; a private cluster has no public endpoint to restrict.
@@ -205,6 +248,12 @@ func (s ClusterSpec) Validate() error {
 	}
 	if s.Access == AccessPrivate && len(s.AuthorizedCIDRs) > 0 {
 		errs = append(errs, fmt.Errorf("%w: authorizedCIDRs is meaningless for a private cluster", ErrInvalidSpec))
+	}
+	if s.Provider != ProviderGCP && s.Zone != "" {
+		errs = append(errs, fmt.Errorf("%w: zone is meaningful only for provider gcp", ErrInvalidSpec))
+	}
+	if s.Provider != ProviderGCP && s.PublicNodes {
+		errs = append(errs, fmt.Errorf("%w: publicNodes is meaningful only for provider gcp", ErrInvalidSpec))
 	}
 	if len(s.NodePools) == 0 {
 		errs = append(errs, fmt.Errorf("%w: at least one node pool is required", ErrInvalidSpec))

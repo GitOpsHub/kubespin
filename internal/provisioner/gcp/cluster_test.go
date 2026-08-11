@@ -34,6 +34,72 @@ func TestClusterProvisioner_Create_NewCluster(t *testing.T) {
 	}
 }
 
+func TestClusterProvisioner_Create_RegionalByDefault(t *testing.T) {
+	f := newFakeGCP()
+	p := NewClusterProvisioner(f.clients())
+	spec := testSpec()
+
+	if err := p.Create(context.Background(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	want := "projects/" + testProject + "/locations/" + spec.Region
+	if f.createParent != want {
+		t.Errorf("CreateCluster parent = %q, want %q (regional)", f.createParent, want)
+	}
+}
+
+func TestClusterProvisioner_Create_ZonalWhenZoneSet(t *testing.T) {
+	f := newFakeGCP()
+	p := NewClusterProvisioner(f.clients())
+	spec := testSpec()
+	spec.Zone = "us-central1-a"
+
+	if err := p.Create(context.Background(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	want := "projects/" + testProject + "/locations/" + spec.Zone
+	if f.createParent != want {
+		t.Errorf("CreateCluster parent = %q, want %q (zonal)", f.createParent, want)
+	}
+}
+
+func TestClusterProvisioner_Create_SpotNodePool(t *testing.T) {
+	f := newFakeGCP()
+	p := NewClusterProvisioner(f.clients())
+	spec := testSpec()
+	spec.NodePools[0].CapacityType = core.CapacityTypeSpot
+	f.activeCluster(spec)
+
+	if err := p.Create(context.Background(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	np, ok := f.nodePools["default"]
+	if !ok {
+		t.Fatal("expected the default node pool to have been created")
+	}
+	if !np.Config.Spot {
+		t.Error("expected the node pool's Config.Spot to be true")
+	}
+}
+
+func TestClusterProvisioner_Create_PublicNodesSkipsPrivateNodes(t *testing.T) {
+	f := newFakeGCP()
+	p := NewClusterProvisioner(f.clients())
+	spec := testSpec()
+	spec.PublicNodes = true
+
+	if err := p.Create(context.Background(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if f.cluster.PrivateClusterConfig.EnablePrivateNodes { //nolint:staticcheck // production code still writes this field, see cluster.go
+		t.Error("expected EnablePrivateNodes to be false when PublicNodes is set")
+	}
+}
+
 func TestClusterProvisioner_Create_Idempotent(t *testing.T) {
 	f := newFakeGCP()
 	p := NewClusterProvisioner(f.clients())

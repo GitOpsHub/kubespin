@@ -10,6 +10,7 @@ is no central Argo CD hub, and nothing ever reaches inbound into a cluster.
 |---|---|
 | [Architecture](architecture.md) | You need to understand *why* the system is shaped this way before changing it |
 | [Examples](examples.md) | You want a working command to copy-paste for a specific scenario |
+| [Low-cost dev clusters](low-cost-dev-clusters.md) | You're on a cloud free tier and want the cheapest cluster for learning Kubernetes |
 | [Fleet bootstrap](fleet-bootstrap.md) | You are provisioning the shared fleet infrastructure, or something went wrong doing so |
 | [Runbook](runbook.md) | Something in the fleet is broken and you're on call |
 | [Development](development.md) | You are writing code in this repository |

@@ -5,6 +5,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v6"
+
 	"github.com/GitOpsHub/kubespin/internal/core"
 	"github.com/GitOpsHub/kubespin/internal/provisioner"
 )
@@ -29,6 +31,9 @@ func TestClusterProvisioner_Create_NewCluster(t *testing.T) {
 	}
 	if !*f.cluster.Properties.SecurityProfile.WorkloadIdentity.Enabled {
 		t.Error("expected workload identity to be enabled")
+	}
+	if f.cluster.SKU == nil || f.cluster.SKU.Tier == nil || *f.cluster.SKU.Tier != armcontainerservice.ManagedClusterSKUTierFree {
+		t.Errorf("SKU tier = %v, want %s (no control-plane charge)", f.cluster.SKU, armcontainerservice.ManagedClusterSKUTierFree)
 	}
 }
 

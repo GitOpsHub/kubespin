@@ -53,6 +53,7 @@ kubespin delete [flags]
       --desired-size int32          desired size of the default node pool (unused by delete, kept for spec compatibility) (default 2)
       --disk-size int32             boot disk size in GB for the default node pool's nodes (unused by delete, kept for spec compatibility)
       --gcp-project string          GCP project hosting the cluster (required for --provider gcp)
+      --gcp-public-nodes            unused by delete, kept for spec compatibility
       --github-base-url string      GitHub Enterprise API base URL (leave empty for github.com)
       --github-org string           GitHub organization the cluster repository lives in
       --github-upload-url string    GitHub Enterprise upload URL (leave empty for github.com)
@@ -65,11 +66,13 @@ kubespin delete [flags]
       --provider string             cloud provider: aws, gcp, or azure
       --region string               cloud region
       --spec string                 path to a cluster.yaml describing the cluster
+      --spot                        unused by delete, kept for spec compatibility
       --subnet-cidr string          unused by delete, kept for spec compatibility
       --subnets strings             existing subnets the cluster was placed in
       --vnet-cidr string            unused by delete, kept for spec compatibility
       --vpc-cidr string             unused by delete, kept for spec compatibility
       --yes                         skip the interactive confirmation prompt
+      --zone string                 unused by delete, kept for spec compatibility
 ```
 
 ## Options inherited from parent commands

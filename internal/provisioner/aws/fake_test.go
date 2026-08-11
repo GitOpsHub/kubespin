@@ -192,6 +192,7 @@ func (f *fakeAWS) CreateNodegroup(_ context.Context, in *eks.CreateNodegroupInpu
 		InstanceTypes: in.InstanceTypes,
 		ScalingConfig: in.ScalingConfig,
 		Labels:        in.Labels,
+		CapacityType:  in.CapacityType,
 	}
 	return &eks.CreateNodegroupOutput{}, nil
 }

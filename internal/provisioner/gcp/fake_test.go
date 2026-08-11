@@ -23,14 +23,15 @@ import (
 type fakeGCP struct {
 	calls []string
 
-	cluster     *containerpb.Cluster
-	nodePools   map[string]*containerpb.NodePool
-	svcAccts    map[string]*iam.ServiceAccount // resource -> account
-	policies    map[string]*iam.Policy         // resource -> policy
-	firewalls   map[string]*compute.Firewall
-	networks    map[string]*compute.Network    // name -> network
-	subnetworks map[string]*compute.Subnetwork // "region/name" -> subnetwork
-	routers     map[string]*compute.Router     // "region/name" -> router
+	cluster      *containerpb.Cluster
+	createParent string // the Parent passed to the last CreateCluster call
+	nodePools    map[string]*containerpb.NodePool
+	svcAccts     map[string]*iam.ServiceAccount // resource -> account
+	policies     map[string]*iam.Policy         // resource -> policy
+	firewalls    map[string]*compute.Firewall
+	networks     map[string]*compute.Network    // name -> network
+	subnetworks  map[string]*compute.Subnetwork // "region/name" -> subnetwork
+	routers      map[string]*compute.Router     // "region/name" -> router
 }
 
 func newFakeGCP() *fakeGCP {
@@ -97,6 +98,7 @@ func (f *fakeGCP) GetCluster(_ context.Context, req *containerpb.GetClusterReque
 
 func (f *fakeGCP) CreateCluster(_ context.Context, req *containerpb.CreateClusterRequest, _ ...gax.CallOption) (*containerpb.Operation, error) {
 	f.record("CreateCluster")
+	f.createParent = req.Parent
 	if f.cluster != nil {
 		return nil, status.Error(codes.AlreadyExists, "cluster exists")
 	}

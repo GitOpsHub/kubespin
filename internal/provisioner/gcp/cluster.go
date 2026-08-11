@@ -115,12 +115,23 @@ func placeholderNodePool(spec core.ClusterSpec) *containerpb.NodePool {
 		Name:             pool.Name,
 		InitialNodeCount: pool.DesiredSize,
 		Locations:        []string{defaultZone(spec)},
-		Config:           &containerpb.NodeConfig{MachineType: pool.InstanceType, Labels: pool.Labels, DiskSizeGb: pool.DiskSizeGB},
+		Config:           nodeConfig(pool),
 		Autoscaling: &containerpb.NodePoolAutoscaling{
 			Enabled:      true,
 			MinNodeCount: pool.MinSize,
 			MaxNodeCount: pool.MaxSize,
 		},
+	}
+}
+
+// nodeConfig builds a node pool's Config, requesting Spot VMs when the pool's
+// CapacityType asks for it.
+func nodeConfig(pool core.NodePool) *containerpb.NodeConfig {
+	return &containerpb.NodeConfig{
+		MachineType: pool.InstanceType,
+		Labels:      pool.Labels,
+		DiskSizeGb:  pool.DiskSizeGB,
+		Spot:        pool.CapacityType == core.CapacityTypeSpot,
 	}
 }
 
@@ -134,6 +145,9 @@ func placeholderNodePool(spec core.ClusterSpec) *containerpb.NodePool {
 // reason. Pinning to one zone keeps DesiredSize meaning what it says; the
 // control plane itself stays regional (multi-zone) regardless.
 func defaultZone(spec core.ClusterSpec) string {
+	if spec.Zone != "" {
+		return spec.Zone
+	}
 	return spec.Region + "-a"
 }
 
@@ -173,9 +187,15 @@ func (p *ClusterProvisioner) subnetworkNetwork(ctx context.Context, spec core.Cl
 // privateClusterConfig translates the access mode into GKE's private cluster
 // settings. AccessPrivate hides even the public endpoint; AccessPublic keeps
 // both endpoints, restricted by authorizedNetworksConfig when CIDRs are given.
+//
+// spec.PublicNodes opts nodes out of EnablePrivateNodes entirely (giving them
+// public IPs), which is what lets network.go skip the Cloud Router/Cloud NAT
+// it would otherwise need to provision unconditionally. It is meant for
+// cost-sensitive dev clusters, not production, and is independent of Access,
+// which governs the control plane endpoint rather than node reachability.
 func privateClusterConfig(spec core.ClusterSpec) *containerpb.PrivateClusterConfig {
 	return &containerpb.PrivateClusterConfig{
-		EnablePrivateNodes:    true,
+		EnablePrivateNodes:    !spec.PublicNodes,
 		EnablePrivateEndpoint: spec.Access == core.AccessPrivate,
 	}
 }
@@ -397,7 +417,7 @@ func (p *ClusterProvisioner) createNodePool(ctx context.Context, spec core.Clust
 			Name:             pool.Name,
 			InitialNodeCount: pool.DesiredSize,
 			Locations:        []string{defaultZone(spec)},
-			Config:           &containerpb.NodeConfig{MachineType: pool.InstanceType, Labels: pool.Labels, DiskSizeGb: pool.DiskSizeGB},
+			Config:           nodeConfig(pool),
 			Autoscaling: &containerpb.NodePoolAutoscaling{
 				Enabled:      true,
 				MinNodeCount: pool.MinSize,
@@ -458,6 +478,9 @@ func (p *ClusterProvisioner) alreadyGoing(ctx context.Context, spec core.Cluster
 func validateForGKE(spec core.ClusterSpec) error {
 	if len(spec.Subnets) == 0 {
 		return fmt.Errorf("%w: GKE requires a subnetwork", core.ErrInvalidSpec)
+	}
+	if spec.Zone != "" && !strings.HasPrefix(spec.Zone, spec.Region+"-") {
+		return fmt.Errorf("%w: zone %q must be within region %q", core.ErrInvalidSpec, spec.Zone, spec.Region)
 	}
 	return nil
 }

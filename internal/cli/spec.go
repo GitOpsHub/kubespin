@@ -27,6 +27,29 @@ var defaultInstanceType = map[core.Provider]string{
 	core.ProviderAzure: "Standard_D4s_v7",
 }
 
+// spotNodePoolDefault is the node pool shape --spot implies unless the
+// operator overrides a piece of it explicitly. tier-small's addon set
+// (cilium, kube-prometheus-stack, ingress-nginx, kyverno, ...) needs more
+// headroom than a free-tier micro instance provides — these are the
+// smallest instance types that reliably schedule it, not each cloud's
+// absolute cheapest SKU, plus a small node count and disk size to match.
+// This is what lets --spot alone be enough for a cheap dev cluster instead
+// of also requiring --instance-type/--min-size/--max-size/--desired-size/
+// --disk-size to avoid launching at m6i.large-equivalent size and cost.
+type spotNodePoolDefault struct {
+	instanceType string
+	minSize      int32
+	maxSize      int32
+	desiredSize  int32
+	diskSizeGB   int32
+}
+
+var spotNodePoolDefaults = map[core.Provider]spotNodePoolDefault{
+	core.ProviderAWS:   {instanceType: "t3.medium", minSize: 1, maxSize: 2, desiredSize: 1, diskSizeGB: 20},
+	core.ProviderGCP:   {instanceType: "e2-medium", minSize: 1, maxSize: 2, desiredSize: 1, diskSizeGB: 30},
+	core.ProviderAzure: {instanceType: "Standard_B2s", minSize: 1, maxSize: 2, desiredSize: 1, diskSizeGB: 30},
+}
+
 // loadSpec builds a cluster spec from --spec, or from the individual flags.
 //
 // The file form is the same cluster.yaml that lives in a cluster's repository,
@@ -91,6 +114,7 @@ func applySpecFlags(cmd *cobra.Command, spec *core.ClusterSpec) error {
 		{"vpc-cidr", func() string { return spec.VPCCIDR }, func(v string) { spec.VPCCIDR = v }},
 		{"vnet-cidr", func() string { return spec.VNetCIDR }, func(v string) { spec.VNetCIDR = v }},
 		{"subnet-cidr", func() string { return spec.SubnetCIDR }, func(v string) { spec.SubnetCIDR = v }},
+		{"zone", func() string { return spec.Zone }, func(v string) { spec.Zone = v }},
 	} {
 		// An explicitly-set flag always wins. A flag left at its default only
 		// applies when the file did not set the field, so passing a spec file
@@ -142,6 +166,32 @@ func applySpecFlags(cmd *cobra.Command, spec *core.ClusterSpec) error {
 		}
 	}
 
+	if flags.Changed("gcp-public-nodes") {
+		publicNodes, err := flags.GetBool("gcp-public-nodes")
+		if err != nil {
+			return fmt.Errorf("reading --gcp-public-nodes: %w", err)
+		}
+		spec.PublicNodes = publicNodes
+	}
+
+	spot, err := flags.GetBool("spot")
+	if err != nil {
+		return fmt.Errorf("reading --spot: %w", err)
+	}
+	// --spot alone is meant to be enough for a cheap GCP dev cluster: unless
+	// --zone/--gcp-public-nodes were passed explicitly, it also switches the
+	// cluster to zonal (free-tier eligible) and gives nodes public IPs
+	// (skipping Cloud NAT), rather than requiring three separate flags to get
+	// the low-cost configuration.
+	if spot && spec.Provider == core.ProviderGCP {
+		if !flags.Changed("zone") && spec.Zone == "" {
+			spec.Zone = spec.Region + "-a"
+		}
+		if !flags.Changed("gcp-public-nodes") {
+			spec.PublicNodes = true
+		}
+	}
+
 	return applyNodePoolFlags(cmd, spec)
 }
 
@@ -154,13 +204,25 @@ func applyNodePoolFlags(cmd *cobra.Command, spec *core.ClusterSpec) error {
 	}
 	flags := cmd.Flags()
 
+	spot, err := flags.GetBool("spot")
+	if err != nil {
+		return fmt.Errorf("reading --spot: %w", err)
+	}
+	spotDefault, hasSpotDefault := spotNodePoolDefaults[spec.Provider]
+	useSpotDefault := spot && hasSpotDefault
+
 	instanceType, err := flags.GetString("instance-type")
 	if err != nil {
 		return fmt.Errorf("reading --instance-type: %w", err)
 	}
 	if !flags.Changed("instance-type") {
-		if def, ok := defaultInstanceType[spec.Provider]; ok {
-			instanceType = def
+		switch {
+		case useSpotDefault:
+			instanceType = spotDefault.instanceType
+		default:
+			if def, ok := defaultInstanceType[spec.Provider]; ok {
+				instanceType = def
+			}
 		}
 	}
 	minSize, err := flags.GetInt32("min-size")
@@ -179,6 +241,24 @@ func applyNodePoolFlags(cmd *cobra.Command, spec *core.ClusterSpec) error {
 	if err != nil {
 		return fmt.Errorf("reading --disk-size: %w", err)
 	}
+	if useSpotDefault {
+		if !flags.Changed("min-size") {
+			minSize = spotDefault.minSize
+		}
+		if !flags.Changed("max-size") {
+			maxSize = spotDefault.maxSize
+		}
+		if !flags.Changed("desired-size") {
+			desired = spotDefault.desiredSize
+		}
+		if !flags.Changed("disk-size") {
+			diskSize = spotDefault.diskSizeGB
+		}
+	}
+	capacityType := core.CapacityTypeOnDemand
+	if spot {
+		capacityType = core.CapacityTypeSpot
+	}
 
 	spec.NodePools = []core.NodePool{{
 		Name:         defaultPoolName,
@@ -187,6 +267,7 @@ func applyNodePoolFlags(cmd *cobra.Command, spec *core.ClusterSpec) error {
 		MaxSize:      maxSize,
 		DesiredSize:  desired,
 		DiskSizeGB:   diskSize,
+		CapacityType: capacityType,
 	}}
 	return nil
 }

@@ -114,6 +114,118 @@ func TestLoadSpec_FromFlags(t *testing.T) {
 	}
 }
 
+func TestLoadSpec_Spot_PicksCheapDefaultsPerProvider(t *testing.T) {
+	for _, tc := range []struct {
+		provider     string
+		region       string
+		instanceType string
+		disk         int32
+	}{
+		{"aws", "us-east-1", "t3.medium", 20},
+		{"gcp", "us-central1", "e2-medium", 30},
+		{"azure", "eastus", "Standard_B2s", 30},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			args := []string{
+				"--cluster-id", "team-alpha",
+				"--provider", tc.provider,
+				"--region", tc.region,
+				"--profile", "tier-small@1.0.0",
+				"--spot",
+			}
+			if tc.provider == "gcp" {
+				args = append(args, "--subnets", "projects/p/regions/us-central1/subnetworks/default")
+			}
+			spec, err := loadSpec(applyCmd(t, args...))
+			if err != nil {
+				t.Fatalf("loadSpec: %v", err)
+			}
+
+			pool := spec.NodePools[0]
+			if pool.InstanceType != tc.instanceType {
+				t.Errorf("InstanceType = %q, want %q", pool.InstanceType, tc.instanceType)
+			}
+			if pool.MinSize != 1 || pool.MaxSize != 2 || pool.DesiredSize != 1 {
+				t.Errorf("sizing = %d/%d/%d, want 1/2/1", pool.MinSize, pool.MaxSize, pool.DesiredSize)
+			}
+			if pool.DiskSizeGB != tc.disk {
+				t.Errorf("DiskSizeGB = %d, want %d", pool.DiskSizeGB, tc.disk)
+			}
+		})
+	}
+}
+
+func TestLoadSpec_Spot_ExplicitFlagsOverrideTheCheapDefault(t *testing.T) {
+	spec, err := loadSpec(applyCmd(t,
+		"--cluster-id", "team-alpha",
+		"--provider", "aws",
+		"--region", "us-east-1",
+		"--profile", "tier-small@1.0.0",
+		"--spot",
+		"--instance-type", "t3.large",
+		"--max-size", "4",
+	))
+	if err != nil {
+		t.Fatalf("loadSpec: %v", err)
+	}
+
+	pool := spec.NodePools[0]
+	if pool.InstanceType != "t3.large" {
+		t.Errorf("InstanceType = %q, want the explicitly-passed t3.large", pool.InstanceType)
+	}
+	if pool.MaxSize != 4 {
+		t.Errorf("MaxSize = %d, want the explicitly-passed 4", pool.MaxSize)
+	}
+	// min-size and desired-size were not overridden, so the spot default still
+	// applies to them.
+	if pool.MinSize != 1 || pool.DesiredSize != 1 {
+		t.Errorf("min/desired = %d/%d, want the spot default 1/1 for flags not overridden", pool.MinSize, pool.DesiredSize)
+	}
+}
+
+func TestLoadSpec_Spot_GCPImpliesZonalAndPublicNodes(t *testing.T) {
+	spec, err := loadSpec(applyCmd(t,
+		"--cluster-id", "team-alpha",
+		"--provider", "gcp",
+		"--region", "us-central1",
+		"--profile", "tier-small@1.0.0",
+		"--subnets", "projects/p/regions/us-central1/subnetworks/default",
+		"--spot",
+	))
+	if err != nil {
+		t.Fatalf("loadSpec: %v", err)
+	}
+
+	if spec.Zone != "us-central1-a" {
+		t.Errorf("Zone = %q, want us-central1-a implied by --spot", spec.Zone)
+	}
+	if !spec.PublicNodes {
+		t.Error("PublicNodes = false, want true implied by --spot")
+	}
+}
+
+func TestLoadSpec_Spot_GCPOverridesRespected(t *testing.T) {
+	spec, err := loadSpec(applyCmd(t,
+		"--cluster-id", "team-alpha",
+		"--provider", "gcp",
+		"--region", "us-central1",
+		"--profile", "tier-small@1.0.0",
+		"--subnets", "projects/p/regions/us-central1/subnetworks/default",
+		"--spot",
+		"--gcp-public-nodes=false",
+	))
+	if err != nil {
+		t.Fatalf("loadSpec: %v", err)
+	}
+
+	if spec.Zone != "us-central1-a" {
+		t.Errorf("Zone = %q, want us-central1-a still implied by --spot", spec.Zone)
+	}
+	if spec.PublicNodes {
+		t.Error("PublicNodes = true, want the explicit --gcp-public-nodes=false to be respected")
+	}
+}
+
 // A file supplies the base; an explicitly-set flag overrides it. A flag left at
 // its default must not quietly replace what the file said.
 func TestLoadSpec_FlagsOverrideFileOnlyWhenSet(t *testing.T) {

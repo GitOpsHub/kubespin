@@ -72,6 +72,14 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 
 	cluster := armcontainerservice.ManagedCluster{
 		Location: &location,
+		// Explicitly requesting the Free tier avoids relying on whatever the
+		// API version's implicit default happens to be (it has changed
+		// across AKS API versions) — this guarantees no control-plane charge
+		// rather than trusting an undocumented default.
+		SKU: &armcontainerservice.ManagedClusterSKU{
+			Name: ptr(armcontainerservice.ManagedClusterSKUNameBase),
+			Tier: ptr(armcontainerservice.ManagedClusterSKUTierFree),
+		},
 		Identity: &armcontainerservice.ManagedClusterIdentity{
 			Type: ptr(armcontainerservice.ResourceIdentityTypeSystemAssigned),
 		},
@@ -109,6 +117,12 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 	return nil
 }
 
+// agentPoolProfile always builds a System-mode, on-demand pool. AKS requires
+// the cluster's initial/default agent pool to be System mode, and System
+// pools cannot use Spot priority (they may need to host system pods at any
+// time, which a pool subject to eviction can't guarantee) — so pool.
+// CapacityType is intentionally not read here. Cost-sensitive Azure dev
+// clusters get their savings from a small VMSize instead of spot pricing.
 func agentPoolProfile(pool core.NodePool, subnetID string) *armcontainerservice.ManagedClusterAgentPoolProfile {
 	name := pool.Name
 	profile := &armcontainerservice.ManagedClusterAgentPoolProfile{

@@ -101,11 +101,14 @@ addons that silently never sync.`,
 	fs.String("github-upload-url", "", "GitHub Enterprise upload URL (leave empty for github.com)")
 	fs.String("profiles-repo", "", "platform-profiles repository name to resolve profiles from (uses the builtin catalog if empty)")
 
-	fs.String("instance-type", "m6i.large", "instance type for the default node pool (defaults to a cloud-appropriate value per --provider when unset: m6i.large on aws, e2-standard-4 on gcp, Standard_D4s_v7 on azure)")
-	fs.Int32("min-size", 1, "minimum size of the default node pool")
-	fs.Int32("max-size", 5, "maximum size of the default node pool")
-	fs.Int32("desired-size", 2, "desired size of the default node pool")
-	fs.Int32("disk-size", 0, "boot disk size in GB for the default node pool's nodes (0 = cloud default; GKE regional clusters multiply this by the number of zones, so it is worth setting explicitly on quota-constrained projects)")
+	fs.String("instance-type", "m6i.large", "instance type for the default node pool (defaults to a cloud-appropriate value per --provider when unset: m6i.large on aws, e2-standard-4 on gcp, Standard_D4s_v7 on azure; --spot picks a smaller cloud-appropriate default instead, see --spot)")
+	fs.Int32("min-size", 1, "minimum size of the default node pool (--spot defaults this lower, see --spot)")
+	fs.Int32("max-size", 5, "maximum size of the default node pool (--spot defaults this lower, see --spot)")
+	fs.Int32("desired-size", 2, "desired size of the default node pool (--spot defaults this lower, see --spot)")
+	fs.Int32("disk-size", 0, "boot disk size in GB for the default node pool's nodes (0 = cloud default; GKE regional clusters multiply this by the number of zones, so it is worth setting explicitly on quota-constrained projects; --spot picks a smaller default, see --spot)")
+	fs.Bool("spot", false, "one flag for the cheapest dev/learning cluster on any cloud: spot/preemptible instances (AWS/GCP; AKS's default pool must stay on-demand, so this part is a no-op on --provider azure), plus a smaller default --instance-type/--min-size/--max-size/--desired-size/--disk-size sized to still run the tier-small addon set (t3.medium/e2-medium/Standard_B2s, 1/2/1 nodes) — pass any of those flags explicitly to override just that piece. On GCP this also switches to a zonal cluster (eligible for GCP's free zonal-cluster tier) and gives nodes public IPs instead of provisioning Cloud NAT, unless --zone/--gcp-public-nodes override it.")
+	fs.String("zone", "", "GCP zone (e.g. us-central1-a) requesting a zonal GKE cluster instead of the default regional one (GCP only). --spot already sets this; only needed to pick a specific zone, or to go zonal without spot.")
+	fs.Bool("gcp-public-nodes", false, "give GKE nodes public IPs instead of provisioning a Cloud Router + Cloud NAT for them (GCP only). --spot already enables this; only needed to use it without spot.")
 
 	return cmd
 }
@@ -438,6 +441,9 @@ you mean it.`,
 	fs.Int32("max-size", 5, "maximum size of the default node pool (unused by delete, kept for spec compatibility)")
 	fs.Int32("desired-size", 2, "desired size of the default node pool (unused by delete, kept for spec compatibility)")
 	fs.Int32("disk-size", 0, "boot disk size in GB for the default node pool's nodes (unused by delete, kept for spec compatibility)")
+	fs.Bool("spot", false, "unused by delete, kept for spec compatibility")
+	fs.String("zone", "", "unused by delete, kept for spec compatibility")
+	fs.Bool("gcp-public-nodes", false, "unused by delete, kept for spec compatibility")
 	fs.Bool("yes", false, "skip the interactive confirmation prompt")
 
 	return cmd

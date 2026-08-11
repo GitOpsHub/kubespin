@@ -360,6 +360,12 @@ func (p *ClusterProvisioner) createNodeGroup(
 	if pool.DiskSizeGB > 0 {
 		input.DiskSize = aws.Int32(pool.DiskSizeGB)
 	}
+	if pool.CapacityType == core.CapacityTypeSpot {
+		// EKS spot node groups draw from the Spot pools of every listed
+		// instance type; a single type (as kubespin passes today) still
+		// works, it just has less allocation flexibility than a list would.
+		input.CapacityType = ekstypes.CapacityTypesSpot
+	}
 	_, err := p.c.eks.CreateNodegroup(ctx, input)
 	if err != nil {
 		var exists *ekstypes.ResourceInUseException

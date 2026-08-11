@@ -69,13 +69,18 @@ func (p *NetworkProvisioner) EnsureNetwork(
 		return provisioner.NetworkResult{}, err
 	}
 
-	// GKE nodes are always created with EnablePrivateNodes (see
-	// privateClusterConfig in cluster.go), so a Cloud Router + Cloud NAT is
-	// what actually gives them a path to the public internet — without one
-	// they can reach nothing outside the VPC, including the public registry
-	// an addon's image is pulled from.
-	if err := p.ensureCloudNAT(ctx, n, &change); err != nil {
-		return provisioner.NetworkResult{}, err
+	// GKE nodes are created with EnablePrivateNodes unless spec.PublicNodes
+	// opts out (see privateClusterConfig in cluster.go), so a Cloud Router +
+	// Cloud NAT is normally what gives them a path to the public internet —
+	// without one they can reach nothing outside the VPC, including the
+	// public registry an addon's image is pulled from. PublicNodes gives
+	// nodes public IPs directly instead, so Cloud NAT's always-on hourly and
+	// data processing charges can be skipped entirely — a cost-sensitive dev
+	// cluster tradeoff, not appropriate for production.
+	if !spec.PublicNodes {
+		if err := p.ensureCloudNAT(ctx, n, &change); err != nil {
+			return provisioner.NetworkResult{}, err
+		}
 	}
 
 	return provisioner.NetworkResult{SubnetIDs: []string{n.subnetworkResource()}, Change: change}, nil

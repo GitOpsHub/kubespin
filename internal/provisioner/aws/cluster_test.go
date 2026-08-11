@@ -102,6 +102,43 @@ func TestCreate_IsIdempotent(t *testing.T) {
 	}
 }
 
+func TestCreate_RequestsSpotCapacityWhenAsked(t *testing.T) {
+	f := newFakeAWS()
+	spec := testSpec()
+	spec.NodePools[0].CapacityType = core.CapacityTypeSpot
+	f.activeCluster(spec)
+
+	if err := NewClusterProvisioner(f.clients()).Create(t.Context(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	ng, ok := f.nodeGroups[names{spec}.nodeGroup(spec.NodePools[0].Name)]
+	if !ok {
+		t.Fatalf("node group %s was not created", spec.NodePools[0].Name)
+	}
+	if ng.CapacityType != ekstypes.CapacityTypesSpot {
+		t.Errorf("CapacityType = %s, want %s", ng.CapacityType, ekstypes.CapacityTypesSpot)
+	}
+}
+
+func TestCreate_DefaultsToOnDemandCapacity(t *testing.T) {
+	f := newFakeAWS()
+	spec := testSpec()
+	f.activeCluster(spec)
+
+	if err := NewClusterProvisioner(f.clients()).Create(t.Context(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	ng, ok := f.nodeGroups[names{spec}.nodeGroup(spec.NodePools[0].Name)]
+	if !ok {
+		t.Fatalf("node group %s was not created", spec.NodePools[0].Name)
+	}
+	if ng.CapacityType == ekstypes.CapacityTypesSpot {
+		t.Error("CapacityType = spot, want on-demand (the zero value) when --spot is not requested")
+	}
+}
+
 func TestCreate_RejectsASingleSubnet(t *testing.T) {
 	f := newFakeAWS()
 	spec := testSpec()

@@ -355,10 +355,24 @@ type names struct {
 	spec    core.ClusterSpec
 }
 
+// location is the region every regional resource (subnetwork, Cloud Router,
+// Cloud NAT) is created in. It is always spec.Region, regardless of Zone —
+// those resources have no zonal variant.
 func (n names) location() string { return n.spec.Region }
 
+// controlPlaneLocation is the GKE location segment used for the cluster
+// itself: a zone when spec.Zone is set (a zonal, single-zone cluster,
+// eligible for GCP's free-tier zonal cluster), otherwise the region (the
+// default regional, multi-zone control plane).
+func (n names) controlPlaneLocation() string {
+	if n.spec.Zone != "" {
+		return n.spec.Zone
+	}
+	return n.spec.Region
+}
+
 func (n names) parent() string {
-	return fmt.Sprintf("projects/%s/locations/%s", n.project, n.location())
+	return fmt.Sprintf("projects/%s/locations/%s", n.project, n.controlPlaneLocation())
 }
 
 func (n names) cluster() string { return n.spec.ID.String() }
