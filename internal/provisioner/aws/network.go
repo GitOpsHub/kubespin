@@ -189,11 +189,23 @@ func (p *NetworkProvisioner) ensureSubnet(
 	if err != nil {
 		return "", fmt.Errorf("creating subnet %s: %w", name, err)
 	}
+	subnetID := aws.ToString(created.Subnet.SubnetId)
+
+	// There is no NAT gateway on this network (see CLAUDE.md's AWS network
+	// invariant: IGW + route table only), so without an auto-assigned public
+	// IP, nodes launched into this subnet have no route out to the internet
+	// at all and can never join the cluster.
+	if _, err := p.c.ec2.ModifySubnetAttribute(ctx, &ec2.ModifySubnetAttributeInput{
+		SubnetId:            aws.String(subnetID),
+		MapPublicIpOnLaunch: &ec2types.AttributeBooleanValue{Value: aws.Bool(true)},
+	}); err != nil {
+		return "", fmt.Errorf("enabling auto-assign public IP for subnet %s: %w", name, err)
+	}
 
 	p.c.logger.Info("created subnet", "subnet", name, "cidr", cidr)
 	change.Changed = true
 	change.Details = append(change.Details, fmt.Sprintf("created subnet %s (%s)", name, cidr))
-	return aws.ToString(created.Subnet.SubnetId), nil
+	return subnetID, nil
 }
 
 func (p *NetworkProvisioner) ensureInternetGateway(

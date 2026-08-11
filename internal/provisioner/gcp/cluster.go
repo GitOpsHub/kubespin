@@ -114,6 +114,7 @@ func placeholderNodePool(spec core.ClusterSpec) *containerpb.NodePool {
 	return &containerpb.NodePool{
 		Name:             pool.Name,
 		InitialNodeCount: pool.DesiredSize,
+		Locations:        []string{defaultZone(spec)},
 		Config:           &containerpb.NodeConfig{MachineType: pool.InstanceType, Labels: pool.Labels, DiskSizeGb: pool.DiskSizeGB},
 		Autoscaling: &containerpb.NodePoolAutoscaling{
 			Enabled:      true,
@@ -121,6 +122,19 @@ func placeholderNodePool(spec core.ClusterSpec) *containerpb.NodePool {
 			MaxNodeCount: pool.MaxSize,
 		},
 	}
+}
+
+// defaultZone pins a node pool to a single zone within spec.Region.
+//
+// A regional GKE control plane otherwise defaults an unzoned node pool's
+// Locations to every zone in the region, which silently multiplies
+// InitialNodeCount/DesiredSize per zone instead of treating it as the pool's
+// total node count — a tier-small pool asking for 2 nodes in a 3-zone region
+// gets 6, blowing through regional disk/CPU quota for no operator-visible
+// reason. Pinning to one zone keeps DesiredSize meaning what it says; the
+// control plane itself stays regional (multi-zone) regardless.
+func defaultZone(spec core.ClusterSpec) string {
+	return spec.Region + "-a"
 }
 
 func subnetwork(spec core.ClusterSpec) string {
@@ -382,6 +396,7 @@ func (p *ClusterProvisioner) createNodePool(ctx context.Context, spec core.Clust
 		NodePool: &containerpb.NodePool{
 			Name:             pool.Name,
 			InitialNodeCount: pool.DesiredSize,
+			Locations:        []string{defaultZone(spec)},
 			Config:           &containerpb.NodeConfig{MachineType: pool.InstanceType, Labels: pool.Labels, DiskSizeGb: pool.DiskSizeGB},
 			Autoscaling: &containerpb.NodePoolAutoscaling{
 				Enabled:      true,

@@ -84,7 +84,7 @@ var mutatingCalls = []string{
 	"CreateRole", "DeleteRole", "AttachRolePolicy", "DetachRolePolicy",
 	"UpdateAssumeRolePolicy", "CreateOpenIDConnectProvider",
 	"AuthorizeSecurityGroupEgress",
-	"CreateVpc", "ModifyVpcAttribute", "CreateSubnet",
+	"CreateVpc", "ModifyVpcAttribute", "CreateSubnet", "ModifySubnetAttribute",
 	"CreateInternetGateway", "AttachInternetGateway",
 	"CreateRouteTable", "CreateRoute", "AssociateRouteTable",
 }
@@ -434,6 +434,14 @@ func (f *fakeAWS) CreateSubnet(_ context.Context, in *ec2.CreateSubnetInput, _ .
 	}
 	f.subnets[id] = s
 	return &ec2.CreateSubnetOutput{Subnet: s}, nil
+}
+
+func (f *fakeAWS) ModifySubnetAttribute(_ context.Context, in *ec2.ModifySubnetAttributeInput, _ ...func(*ec2.Options)) (*ec2.ModifySubnetAttributeOutput, error) {
+	f.record("ModifySubnetAttribute")
+	if s, ok := f.subnets[aws.ToString(in.SubnetId)]; ok && in.MapPublicIpOnLaunch != nil {
+		s.MapPublicIpOnLaunch = in.MapPublicIpOnLaunch.Value
+	}
+	return &ec2.ModifySubnetAttributeOutput{}, nil
 }
 
 func (f *fakeAWS) DescribeInternetGateways(_ context.Context, in *ec2.DescribeInternetGatewaysInput, _ ...func(*ec2.Options)) (*ec2.DescribeInternetGatewaysOutput, error) {

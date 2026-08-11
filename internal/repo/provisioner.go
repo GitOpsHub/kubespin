@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/go-github/v75/github"
 
@@ -214,6 +215,25 @@ func planLacksBranchProtection(err error) bool {
 	return strings.Contains(errResp.Message, "Upgrade to GitHub")
 }
 
+// pushRetryBackoff is the base delay between Push's retry attempts on a
+// non-fast-forward ref update; see pushRetries.
+const pushRetryBackoff = 300 * time.Millisecond
+
+// notFastForward reports whether err is GitHub's 422 for a ref update whose
+// parent no longer matches the branch tip — the signature of the read-after-
+// write race pushRetries exists to absorb, as distinct from any other 422
+// (a genuinely malformed request, which retrying would just repeat).
+func notFastForward(err error) bool {
+	var errResp *github.ErrorResponse
+	if !errors.As(err, &errResp) {
+		return false
+	}
+	if errResp.Response == nil || errResp.Response.StatusCode != http.StatusUnprocessableEntity {
+		return false
+	}
+	return strings.Contains(errResp.Message, "not a fast forward")
+}
+
 // seedCodeowners writes CODEOWNERS directly through the Contents-backed
 // Checkout/Push path rather than a special-cased call, so it goes through the
 // same atomic-commit machinery as every other file this package writes.
@@ -343,6 +363,17 @@ func (p *githubProvisioner) listAppsDir(ctx context.Context, n names, branch str
 	return paths, nil
 }
 
+// pushRetries bounds how many times Push retries a non-fast-forward ref
+// update before giving up. GitHub's Contents/Git Data APIs are eventually
+// consistent: a ref read immediately after a write can still return the
+// pre-write SHA, so a Push that follows hot on another Push's heels (e.g.
+// seeding CODEOWNERS then cluster.yaml/addons.yaml in the same apply run)
+// can compute a commit against an already-stale parent. Re-reading the ref
+// and rebuilding the commit on top of it is the fix; a fixed cap keeps a
+// genuinely concurrent writer (a human pushing to the same branch) from
+// retrying forever.
+const pushRetries = 4
+
 // Push commits every file in files that differs from checkout, as one atomic
 // commit, and advances the default branch to point at it.
 //
@@ -359,36 +390,53 @@ func (p *githubProvisioner) Push(
 		return false, nil
 	}
 
-	baseCommit, _, err := p.c.git.GetCommit(ctx, p.c.org, n.repoName(), checkout.baseCommitSHA)
-	if err != nil {
-		return false, fmt.Errorf("reading base commit for %s: %w", n.repoName(), err)
-	}
+	var commitSHA string
+	for attempt := 1; ; attempt++ {
+		baseCommit, _, err := p.c.git.GetCommit(ctx, p.c.org, n.repoName(), checkout.baseCommitSHA)
+		if err != nil {
+			return false, fmt.Errorf("reading base commit for %s: %w", n.repoName(), err)
+		}
 
-	tree, _, err := p.c.git.CreateTree(ctx, p.c.org, n.repoName(), baseCommit.GetTree().GetSHA(), entries)
-	if err != nil {
-		return false, fmt.Errorf("building tree for %s: %w", n.repoName(), err)
-	}
+		tree, _, err := p.c.git.CreateTree(ctx, p.c.org, n.repoName(), baseCommit.GetTree().GetSHA(), entries)
+		if err != nil {
+			return false, fmt.Errorf("building tree for %s: %w", n.repoName(), err)
+		}
 
-	commit, _, err := p.c.git.CreateCommit(ctx, p.c.org, n.repoName(), github.Commit{
-		Message: github.Ptr(message),
-		Tree:    tree,
-		Parents: []*github.Commit{{SHA: github.Ptr(checkout.baseCommitSHA)}},
-	}, nil)
-	if err != nil {
-		return false, fmt.Errorf("committing to %s: %w", n.repoName(), err)
-	}
+		commit, _, err := p.c.git.CreateCommit(ctx, p.c.org, n.repoName(), github.Commit{
+			Message: github.Ptr(message),
+			Tree:    tree,
+			Parents: []*github.Commit{{SHA: github.Ptr(checkout.baseCommitSHA)}},
+		}, nil)
+		if err != nil {
+			return false, fmt.Errorf("committing to %s: %w", n.repoName(), err)
+		}
 
-	_, _, err = p.c.git.UpdateRef(ctx, p.c.org, n.repoName(), "heads/"+checkout.branch,
-		github.UpdateRef{SHA: commit.GetSHA()})
-	if err != nil {
-		return false, fmt.Errorf("advancing %s branch %s: %w", n.repoName(), checkout.branch, err)
+		_, _, err = p.c.git.UpdateRef(ctx, p.c.org, n.repoName(), "heads/"+checkout.branch,
+			github.UpdateRef{SHA: commit.GetSHA()})
+		if err == nil {
+			commitSHA = commit.GetSHA()
+			break
+		}
+		if !notFastForward(err) || attempt >= pushRetries {
+			return false, fmt.Errorf("advancing %s branch %s: %w", n.repoName(), checkout.branch, err)
+		}
+
+		p.logger.Warn("branch advanced since it was read; re-reading and retrying",
+			"repo", n.repoName(), "branch", checkout.branch, "attempt", attempt)
+		time.Sleep(pushRetryBackoff * time.Duration(attempt))
+
+		ref, _, err := p.c.git.GetRef(ctx, p.c.org, n.repoName(), "heads/"+checkout.branch)
+		if err != nil {
+			return false, fmt.Errorf("re-reading %s branch %s: %w", n.repoName(), checkout.branch, err)
+		}
+		checkout.baseCommitSHA = ref.GetObject().GetSHA()
 	}
 
 	p.logger.Info("pushed commit to cluster repository",
 		"cluster", checkout.spec.ID, "repo", n.repoName(), "branch", checkout.branch,
-		"commit", commit.GetSHA(), "files", len(entries), "message", message)
+		"commit", commitSHA, "files", len(entries), "message", message)
 
-	checkout.baseCommitSHA = commit.GetSHA()
+	checkout.baseCommitSHA = commitSHA
 	for path, content := range files {
 		checkout.files[path] = content
 	}
