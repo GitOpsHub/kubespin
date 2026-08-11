@@ -14,6 +14,8 @@ is no central Argo CD hub, and nothing ever reaches inbound into a cluster.
 | [Runbook](runbook.md) | Something in the fleet is broken and you're on call |
 | [Development](development.md) | You are writing code in this repository |
 | [CLI reference](cli/kubespin.md) | You want the exact flags for a command |
+| [Code organization](code-organization.md) | You want to know which package owns something, or where new code belongs |
+| [Code reference](reference/index.md) | You want the exported types and methods of a specific `internal/*` package |
 
 The CLI reference is generated from the command tree by `make docs`. Do not edit
 it by hand — CI regenerates it and fails on any difference.

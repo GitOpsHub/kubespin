@@ -98,4 +98,23 @@ nav:
       - login: cli/kubespin_login.md
       - logout: cli/kubespin_logout.md
       - status: cli/kubespin_status.md
+  - Code reference:
+      - Overview: reference/index.md
+      - Code organization: code-organization.md
+      - internal/core: reference/core.md
+      - internal/auth: reference/auth.md
+      - internal/fleetinfra: reference/fleetinfra.md
+      - internal/provisioner + aws: reference/provisioner-aws.md
+      - internal/provisioner/gcp: reference/provisioner-gcp.md
+      - internal/provisioner/azure: reference/provisioner-azure.md
+      - internal/repo: reference/repo.md
+      - internal/registry: reference/registry.md
+      - internal/catalog: reference/catalog.md
+      - internal/argocd: reference/argocd.md
+      - internal/orchestrator: reference/orchestrator.md
+      - internal/fleet: reference/fleet.md
+      - internal/ingestion: reference/ingestion.md
+      - internal/reporter: reference/reporter.md
+      - internal/cli: reference/cli.md
+      - Entrypoints and tooling: reference/entrypoints.md
   - Development: development.md
