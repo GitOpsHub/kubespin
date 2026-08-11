@@ -163,9 +163,9 @@ Backs both `apply` (`newApplyCommand`/`runApply`) and `delete`
     ```
 
     - **Behavior — steps in order:**
-        1. Load config and spec (`loadSpec`); require `cfg.Registry.Region`.
-        2. Pick which cloud auth providers to preflight via `cloudAuthProviders`: a **dry run** only reads the (AWS-hosted) Fleet Registry and never touches the cluster's own cloud, so it preflights `aws` alone regardless of `spec.Provider`; a real run preflights `aws` plus the cluster's own provider (skipped if the cluster's own provider is already `aws`, to avoid checking it twice).
-        3. Connect to the Fleet Registry (`registry.NewDynamoDB`).
+        1. Load spec (`loadSpec`).
+        2. Resolve config and connect to the Fleet Registry (`registryPrereqs`, shared with `runDelete` and every `fleet` subcommand — errors if `cfg.Registry.Region` is empty).
+        3. Pick which cloud auth providers to preflight via `cloudAuthProviders`: a **dry run** only reads the (AWS-hosted) Fleet Registry and never touches the cluster's own cloud, so it preflights `aws` alone regardless of `spec.Provider`; a real run preflights `aws` plus the cluster's own provider (skipped if the cluster's own provider is already `aws`, to avoid checking it twice).
         4. Dry-run branch: call `reportPlan` and return.
         5. Otherwise: `buildCloud` (provisioner set), `buildRepoClients` + `repo.NewProvisioner`, `buildResolver` (profile catalog), then construct an `orchestrator.Orchestrator` with `orchestrator.ProvisioningSteps` and `orchestrator.ReadyReconcile`, and call `o.Apply(ctx, spec)`.
         6. On error, print the phase the run stopped at (so the operator knows where a retry resumes from) before wrapping and returning the error.
@@ -178,9 +178,9 @@ Backs both `apply` (`newApplyCommand`/`runApply`) and `delete`
     func runDelete(cmd *cobra.Command, _ []string) error
     ```
 
-    - **Behavior:** Same shape through spec loading, registry region check, and auth preflight (`cloudAuthProviders`, same as apply). Then: read `--yes`; if not set, prompt via `confirmDelete` and abort (printing `"aborted"`, exit 0) unless the operator types the exact cluster ID. Connect to the registry, `buildCloud`, `buildRepoClients`/`repo.NewProvisioner`, then build a bare `orchestrator.New(reg, ...)` (no provisioning steps) and call `o.Delete(ctx, spec, orchestrator.Teardown(cloud, repoProv, logger))`.
+    - **Behavior:** Same shape through spec loading, `registryPrereqs`, and auth preflight (`cloudAuthProviders`, same as apply). Then: read `--yes`; if not set, prompt via `confirmDelete` and abort (printing `"aborted"`, exit 0) unless the operator types the exact cluster ID. Then `buildCloud`, `buildRepoClients`/`repo.NewProvisioner`, and build a bare `orchestrator.New(reg, ...)` (no provisioning steps) and call `o.Delete(ctx, spec, orchestrator.Teardown(cloud, repoProv, logger))`.
     - **Calls into:** `internal/registry`, `internal/orchestrator`, `internal/provisioner/{aws,gcp,azure}`, `internal/repo`.
-    - **Non-obvious control flow:** `delete` does **not** honor `--dry-run` — passing it does not turn `delete` into a preview; only `--yes` skips the confirmation prompt.
+    - **Non-obvious control flow:** `delete` does **not** honor `--dry-run` — passing it does not turn `delete` into a preview; only `--yes` skips the confirmation prompt. `registryPrereqs` connects to the registry before the deletion confirmation prompt, not after — only the actual `Delete` call is gated on confirming.
 
 ### Shared helpers
 
@@ -259,7 +259,7 @@ help when called with no subcommand) and attaches
     func reportUpdateResults(cmd *cobra.Command, results []fleet.UpdateResult, _ *Config) error
     ```
 
-    - **Behavior:** `runFleetUpdate` resolves prereqs (`fleetPrereqs`), requires `--component` and `--version`, builds a `registry.Filter` (`fleetFilter`, `--provider` only — `--profile` is accepted but not yet applied, since the registry's query filter has no profile dimension), builds repo clients/provisioner and a catalog resolver, then calls `fleet.Update(...)` with `--concurrency` and `--canary-count`. `reportUpdateResults` prints per-cluster outcomes (`updated` / `already up to date` / `FAILED: ...` / `skipped (canary wave failed)`).
+    - **Behavior:** `runFleetUpdate` resolves prereqs (`registryPrereqs`), requires `--component` and `--version`, builds a `registry.Filter` (`fleetFilter`, `--provider` only — there is no `--profile` filter; the registry's query filter has no profile dimension to select on), builds repo clients/provisioner and a catalog resolver, then calls `fleet.Update(...)` with `--concurrency` and `--canary-count`. `reportUpdateResults` prints per-cluster outcomes (`updated` / `already up to date` / `FAILED: ...` / `skipped (canary wave failed)`).
     - **Calls into:** `internal/fleet` (`Update`), `internal/registry`, `internal/repo`, `internal/catalog`.
     - **Non-obvious control flow:** `reportUpdateResults` returns a non-nil error if any cluster failed, so the process exit code reflects a partial failure. `fleet update` does not honor global `--dry-run` — it always commits.
 
@@ -297,12 +297,12 @@ help when called with no subcommand) and attaches
 ??? note "Signature"
 
     ```go
-    func fleetPrereqs(cmd *cobra.Command) (*Config, registry.Registry, error)
+    func registryPrereqs(cmd *cobra.Command) (*Config, registry.Registry, error)
     func fleetFilter(cmd *cobra.Command, flagName string) (registry.Filter, error)
     ```
 
     - **Behavior:**
-        - `fleetPrereqs` — resolves `Config` from context and connects to the Fleet Registry; the two things every `fleet` subcommand needs before doing anything else. Errors if `cfg.Registry.Region` is empty.
+        - `registryPrereqs` — resolves `Config` from context and connects to the Fleet Registry; the two things every command that talks to the registry needs before doing anything else. Errors if `cfg.Registry.Region` is empty. Despite living in `fleet.go`, it is shared beyond the `fleet` subcommands: `runApply` and `runDelete` (`apply.go`) call it too, replacing what used to be their own copy of the same region-check-and-connect sequence.
         - `fleetFilter` — builds a `registry.Filter{Provider: ...}` from a named flag (defaulting the flag name to `"provider"` when called with `""`).
     - **Calls into:** `internal/registry`.
     - **Non-obvious control flow:** if the calling command doesn't define the named flag at all (`cmd.Flags().Lookup(flagName) == nil`), `fleetFilter` returns a zero-value filter matching every provider rather than erroring — this is why `dashboard.go` and `fleet status`, which do declare `--provider`, get filtering while a hypothetical command without the flag wouldn't panic.

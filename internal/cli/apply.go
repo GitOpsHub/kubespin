@@ -117,17 +117,14 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 	logger := LoggerFrom(ctx)
 
-	cfg, ok := ConfigFrom(ctx)
-	if !ok {
-		return errors.New("configuration was not resolved")
-	}
-
 	spec, err := loadSpec(cmd)
 	if err != nil {
 		return err
 	}
-	if cfg.Registry.Region == "" {
-		return fmt.Errorf("%w: --registry-region is required", ErrConfig)
+
+	cfg, reg, err := registryPrereqs(cmd)
+	if err != nil {
+		return err
 	}
 
 	// A dry run only reads the AWS-hosted Fleet Registry — it never touches the
@@ -139,11 +136,6 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	}
 	if err := ensureAuthenticated(cmd, authProviders...); err != nil {
 		return err
-	}
-
-	reg, err := registry.NewDynamoDB(ctx, cfg.Registry.Region, cfg.Registry.Table, registry.WithLogger(logger))
-	if err != nil {
-		return fmt.Errorf("connecting to the Fleet Registry: %w", err)
 	}
 
 	if cfg.DryRun {
@@ -453,17 +445,14 @@ func runDelete(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 	logger := LoggerFrom(ctx)
 
-	cfg, ok := ConfigFrom(ctx)
-	if !ok {
-		return errors.New("configuration was not resolved")
-	}
-
 	spec, err := loadSpec(cmd)
 	if err != nil {
 		return err
 	}
-	if cfg.Registry.Region == "" {
-		return fmt.Errorf("%w: --registry-region is required", ErrConfig)
+
+	_, reg, err := registryPrereqs(cmd)
+	if err != nil {
+		return err
 	}
 
 	if err := ensureAuthenticated(cmd, cloudAuthProviders(spec)...); err != nil {
@@ -483,11 +472,6 @@ func runDelete(cmd *cobra.Command, _ []string) error {
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "aborted")
 			return nil
 		}
-	}
-
-	reg, err := registry.NewDynamoDB(ctx, cfg.Registry.Region, cfg.Registry.Table, registry.WithLogger(logger))
-	if err != nil {
-		return fmt.Errorf("connecting to the Fleet Registry: %w", err)
 	}
 
 	cloud, err := buildCloud(ctx, cmd, spec)

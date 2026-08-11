@@ -219,7 +219,7 @@
 
     - **Params**: `resolver` — resolves `spec.Profile` to a `catalog.Profile`; `repoProv` — repository access for committing `addons.yaml`; `spec` — the cluster's spec, including its existing `Overrides`; `component`, `version` — the addon and version to pin.
     - **Returns**: `committed` — true if a commit was pushed; `false` means the cluster was already at that version; error on resolve/merge/commit failure.
-    - **Behavior**: resolves the profile, narrows it with `profile.ForProvider(spec.Provider)`, pins `component`'s version into `spec.Overrides` via `setComponentVersion`, merges with `catalog.Merge`, and commits via `repo.ReconcileAddons`. Reuses `catalog.Merge` and `repo.ReconcileAddons` rather than duplicating their logic — an update wave is just many clusters each getting the same one-addon override applied, on top of whatever override patch they already carry.
+    - **Behavior**: pins `component`'s version into `spec.Overrides` via `setComponentVersion`, then resolves the profile through `catalog.ResolveForCluster(ctx, resolver, spec)` — the same resolve → `ForProvider` → argocd-stand-in → `Merge` → ingress-template sequence `apply` uses — and commits via `repo.ReconcileAddons`. Reuses `catalog.ResolveForCluster` and `repo.ReconcileAddons` rather than duplicating their logic — an update wave is just many clusters each getting the same one-addon override applied, on top of whatever override patch they already carry, resolved identically to how `apply` would resolve it.
 
 #### `setComponentVersion`
 

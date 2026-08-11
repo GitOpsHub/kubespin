@@ -1,21 +1,36 @@
 # internal/catalog
 
-Profile resolution turns a `core.ProfileRef` (e.g. `tier-small@1.0.0`) into the addon set a cluster's `addons.yaml` renders. "Resolution" here means: look up the named tier's base `core.Profile`, drop addons the cluster's cloud doesn't support (`core.Profile.ForProvider`), then apply the cluster's per-cluster override patch on top — `Merge` patches addons *in place* (version bump, one-level value overlay, or drop) rather than adding or duplicating entries, so the resolved profile never diverges structurally from the catalog it came from. `internal/orchestrator.resolveProfile` (`internal/orchestrator/steps.go`) drives this sequence — `Resolve` → `ForProvider` → `Merge` — and hands the result to `argocd.ApplyProfileIngressDefaults` for access-mode templating before `internal/repo.ReconcileAppOfApps` commits it as the cluster repo's `addons.yaml`.
+Profile resolution turns a `core.ProfileRef` (e.g. `tier-small@1.0.0`) into the addon set a cluster's `addons.yaml` renders. "Resolution" here means: look up the named tier's base `core.Profile`, drop addons the cluster's cloud doesn't support (`core.Profile.ForProvider`), then apply the cluster's per-cluster override patch on top — `Merge` patches addons *in place* (version bump, one-level value overlay, or drop) rather than adding or duplicating entries, so the resolved profile never diverges structurally from the catalog it came from. `ResolveForCluster` (`resolve.go`) drives this whole sequence — `Resolve` → `ForProvider` → inject a stand-in `argocd` addon → `Merge` → `argocd.ApplyProfileIngressDefaults` for access-mode templating — and is the single seam both `internal/orchestrator` (apply) and `internal/fleet` (`fleet update`) call, so the two can never resolve the same cluster's profile differently.
 
 ## Quick reference
 
 | Name | Kind | File | Summary |
 |---|---|---|---|
+| [`ResolveForCluster`](#resolveforcluster) | function | `resolve.go` | Full resolve → provider-filter → argocd-stand-in → merge → ingress-template sequence for one cluster |
 | [`Resolver`](#resolver) | interface | `catalog.go` | Seam profile resolution happens behind |
 | [`BuiltinResolver`](#builtinresolver) | type | `catalog.go` | Fixed, in-memory resolver over the three builtin tiers |
 | [`RepoResolver`](#reporesolver) | type | `repo_resolver.go` | Milestone 4 resolver reading profiles from a `platform-profiles`-style repo |
 | [`FileReader`](#filereader) | interface | `repo_resolver.go` | Read seam `RepoResolver` depends on |
 | [`Merge`](#merge) | function | `merge.go` | Applies a cluster's override patch onto a resolved profile |
-| [`MergeValues`](#mergevalues) | function | `merge.go` | One-level-deep overlay of override values onto base values |
+| [`mergeValues`](#mergevalues) | function | `merge.go` | One-level-deep overlay of override values onto base values (unexported) |
 | [`withAddons`](#withaddons) | function | `tiers.go` | Returns a copy of a base addon list plus extras, without aliasing |
 | [`replaceAddon`](#replaceaddon) | function | `tiers.go` | Returns a copy of an addon list with one entry swapped out |
 | [`ErrProfileNotFound`](#errprofilenotfound) | sentinel error | `catalog.go` | No profile matches the requested `ProfileRef` |
 | [`ErrUnknownOverride`](#errunknownoverride) | sentinel error | `merge.go` | An override names an addon the profile does not carry |
+
+## `resolve.go`
+
+#### `ResolveForCluster`
+
+??? note "`ResolveForCluster` — function"
+
+    ```go
+    func ResolveForCluster(ctx context.Context, resolver Resolver, spec core.ClusterSpec) (core.Profile, error)
+    ```
+
+    - **Behavior:** `resolver.Resolve(ctx, spec.Profile)`, then `Profile.ForProvider(spec.Provider)` to drop unsupported addons, then `withArgoCDAddon` (unexported: injects `argocd.DefaultAddon` as a stand-in `"argocd"` catalog entry when the profile doesn't carry one of its own — true below tier-standard), then `Merge(profile, spec.Overrides)`, then `argocd.ApplyProfileIngressDefaults(spec.Access, merged)`.
+    - **Invariant:** because `withArgoCDAddon` runs before `Merge`, every resolved profile always has an `"argocd"` entry, so a `cluster.yaml` override naming `"argocd"` is always legal — the caller no longer has to special-case tiers that don't catalog Argo CD themselves.
+    - **Behavior:** the single seam both `internal/orchestrator` (`installArgoCDStep`, `seedRepoStep`, `ReadyReconcile`) and `internal/fleet.UpdateOne` call, so `apply` and `fleet update` resolve the same cluster's profile identically.
 
 ## `catalog.go`
 
@@ -111,20 +126,20 @@ Profile resolution turns a `core.ProfileRef` (e.g. `tier-small@1.0.0`) into the 
     - **Behavior:** no-op (returns `profile` unchanged) when `overrides` is empty.
     - **Behavior:** for each override, looks up the addon by `Name`. An override naming an addon the profile does not carry returns `ErrUnknownOverride` wrapped with the addon name and profile ref — a typo in a per-cluster patch must surface at apply time, not be silently dropped.
     - **Behavior:** `Version`, if set, replaces the addon's version.
-    - **Behavior:** `Values`, if set, is overlaid onto the addon's existing values via `MergeValues`.
+    - **Behavior:** `Values`, if set, is overlaid onto the addon's existing values via `mergeValues`.
     - **Behavior:** `Disable: true` removes the addon from the merged set entirely, after all patches are applied.
     - **Invariant:** never adds a new addon and never duplicates one — every name in the override list must already exist in `profile.Addons`. The profile's backing `Addons` slice is copied before mutation, so the source profile passed in is never aliased/mutated.
 
-#### `MergeValues`
+#### `mergeValues`
 
-??? note "`MergeValues` — function"
+??? note "`mergeValues` — function"
 
     ```go
-    func MergeValues(base, override map[string]any) map[string]any
+    func mergeValues(base, override map[string]any) map[string]any
     ```
 
     - **Behavior:** one-level-deep overlay of `override` onto `base`: every key in `override` replaces the same key in `base`; keys only in `base` are kept as-is. Nested maps are replaced wholesale, not deep-merged — going deeper would mean guessing at merge semantics (replace vs. deep-merge a slice, for instance) that only the addon's own chart can judge.
-    - **Behavior:** exported specifically so `internal/orchestrator`'s `argoCDAddon` can apply the same one-level overlay to `argocd.DefaultAddon`, which never appears in a profile's own `Addons` list for `Merge` to patch in place (Argo CD is installed directly via the Helm SDK, not through app-of-apps).
+    - **Behavior:** unexported — `Merge` (this file) is now its only caller since `ResolveForCluster`'s argocd stand-in patches the profile's `Addons` before `Merge` runs, rather than applying an overlay directly to `argocd.DefaultAddon` from outside the package.
 
 #### `ErrUnknownOverride`
 

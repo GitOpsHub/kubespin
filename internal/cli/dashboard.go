@@ -53,7 +53,7 @@ into the registry.`,
 func runFleetDashboard(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 
-	_, reg, err := fleetPrereqs(cmd)
+	_, reg, err := registryPrereqs(cmd)
 	if err != nil {
 		return err
 	}

@@ -59,42 +59,6 @@ func ProvisioningSteps(
 	return steps
 }
 
-// argoCDAddon returns the addon reference Install should converge on:
-// profile's own "argocd" catalog entry if it has one (tier-standard and
-// above, so `fleet update` can pin its version like any other addon), or
-// argocd.DefaultAddon otherwise — Argo CD has to be installed on every tier
-// regardless of whether the catalog tracks it yet.
-//
-// Below tier-standard, "argocd" never appears in profile.Addons, so
-// catalog.Merge has nothing to patch and a cluster.yaml override naming it
-// would fail with ErrUnknownOverride even though Argo CD is always
-// installed. Applying a matching override directly onto DefaultAddon here —
-// version and values only, the same fields Merge itself patches — is what
-// lets an operator override Argo CD's own install (e.g. exposing
-// server.service.type) from cluster.yaml on every tier, not just the ones
-// that happen to catalog it.
-func argoCDAddon(profile core.Profile, overrides []core.AddonOverride) core.AddonRef {
-	for _, a := range profile.Addons {
-		if a.Name == argocd.ReleaseName {
-			return a
-		}
-	}
-
-	addon := argocd.DefaultAddon
-	for _, o := range overrides {
-		if o.Name != argocd.ReleaseName {
-			continue
-		}
-		if o.Version != "" {
-			addon.Version = o.Version
-		}
-		if o.Values != nil {
-			addon.Values = catalog.MergeValues(addon.Values, o.Values)
-		}
-	}
-	return addon
-}
-
 // installArgoCDStep installs Argo CD into the cluster, applies the
 // self-referential root Application directly (never committed to the repo it
 // manages), and commits the per-addon Applications app-of-apps discovers.
@@ -118,12 +82,16 @@ func installArgoCDStep(
 			return fmt.Errorf("building REST config for %s: %w", spec.ID, err)
 		}
 
-		profile, err := resolveProfile(ctx, resolver, spec)
+		profile, err := catalog.ResolveForCluster(ctx, resolver, spec)
 		if err != nil {
-			return err
+			return fmt.Errorf("resolving profile for %s: %w", spec.ID, err)
 		}
 
-		if err := installer.Install(ctx, restConfig, argoCDAddon(profile, spec.Overrides)); err != nil {
+		addon, ok := profile.Addon(argocd.ReleaseName)
+		if !ok {
+			return fmt.Errorf("resolved profile for %s carries no argocd addon", spec.ID)
+		}
+		if err := installer.Install(ctx, restConfig, addon); err != nil {
 			return fmt.Errorf("installing argocd for %s: %w", spec.ID, err)
 		}
 		logger.Info("installed argocd", "cluster", spec.ID)
@@ -168,65 +136,15 @@ func installArgoCDStep(
 	}
 }
 
-// resolveProfile resolves spec's profile, applies its per-cluster override
-// patch, and templates ingress/Gateway addons for spec's access mode, so
-// every caller in this file renders the same resolved addon set rather than
-// each reimplementing the resolve-merge-template sequence.
-func resolveProfile(ctx context.Context, resolver catalog.Resolver, spec core.ClusterSpec) (core.Profile, error) {
-	profile, err := resolver.Resolve(ctx, spec.Profile)
-	if err != nil {
-		return core.Profile{}, fmt.Errorf("resolving profile %s for %s: %w", spec.Profile, spec.ID, err)
-	}
-	profile = profile.ForProvider(spec.Provider)
-
-	// Below tier-standard, "argocd" is never in profile.Addons (see
-	// argoCDAddon), so catalog.Merge would reject an override naming it as
-	// ErrUnknownOverride even though argoCDAddon applies that same override
-	// directly to argocd.DefaultAddon. Filtering it out here only when the
-	// profile doesn't carry the addon preserves the existing tier-standard+
-	// behavior (Merge still patches its "argocd" catalog entry, so the
-	// self-managed Application app-of-apps renders for it stays in sync too).
-	overrides := spec.Overrides
-	if !profileHasAddon(profile, argocd.ReleaseName) {
-		overrides = withoutOverride(overrides, argocd.ReleaseName)
-	}
-
-	merged, err := catalog.Merge(profile, overrides)
-	if err != nil {
-		return core.Profile{}, fmt.Errorf("applying overrides for %s: %w", spec.ID, err)
-	}
-
-	return argocd.ApplyProfileIngressDefaults(spec.Access, merged), nil
-}
-
-func profileHasAddon(profile core.Profile, name string) bool {
-	for _, a := range profile.Addons {
-		if a.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
-func withoutOverride(overrides []core.AddonOverride, name string) []core.AddonOverride {
-	out := make([]core.AddonOverride, 0, len(overrides))
-	for _, o := range overrides {
-		if o.Name != name {
-			out = append(out, o)
-		}
-	}
-	return out
-}
-
 // seedRepoStep creates the cluster's repository (idempotent) and commits its
 // initial cluster.yaml, addons.yaml, and .state.yaml.
 func seedRepoStep(
 	repoProv repo.Provisioner, resolver catalog.Resolver, logger *slog.Logger,
 ) func(context.Context, core.ClusterSpec, registry.Record) error {
 	return func(ctx context.Context, spec core.ClusterSpec, _ registry.Record) error {
-		profile, err := resolveProfile(ctx, resolver, spec)
+		profile, err := catalog.ResolveForCluster(ctx, resolver, spec)
 		if err != nil {
-			return err
+			return fmt.Errorf("resolving profile for %s: %w", spec.ID, err)
 		}
 
 		if err := repo.Seed(ctx, repoProv, spec, profile); err != nil {
@@ -256,9 +174,9 @@ func ReadyReconcile(cloud Cloud, repoProv repo.Provisioner, resolver catalog.Res
 			logger.Info("reconciled cluster infra", "cluster", spec.ID, "changes", change.Details)
 		}
 
-		profile, err := resolveProfile(ctx, resolver, spec)
+		profile, err := catalog.ResolveForCluster(ctx, resolver, spec)
 		if err != nil {
-			return err
+			return fmt.Errorf("resolving profile for %s: %w", spec.ID, err)
 		}
 
 		committed, err := repo.ReconcileAddons(ctx, repoProv, spec, profile)

@@ -143,6 +143,16 @@ func (p Profile) ForProvider(provider Provider) Profile {
 	return out
 }
 
+// Addon returns the addon named name from p's addon set, if present.
+func (p Profile) Addon(name string) (AddonRef, bool) {
+	for _, a := range p.Addons {
+		if a.Name == name {
+			return a, true
+		}
+	}
+	return AddonRef{}, false
+}
+
 // Validate checks the profile and every addon it carries, rejecting duplicate
 // addon names — two Argo CD Applications cannot share a name.
 func (p Profile) Validate() error {

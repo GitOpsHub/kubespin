@@ -251,14 +251,15 @@ Not exported, but load-bearing for the wire format.
 
     - `UpdateItem` setting `LastReportedAt` with only `attribute_exists(#id)` as its condition.
     - **Invariant:** deliberately no version check, so frequent heartbeats never contend with a phase transition in progress.
+    - **Implementation:** delegates to the shared `updateNoVersionCheck` helper (`dynamo.go`), which builds the `UpdateItem` call and maps a condition failure to `ErrNotFound` once for all three no-version-check writes below.
 
 ??? note "`RecordOIDCIssuer`"
 
-    - Same no-version-check pattern as `Touch`, sets `OIDCIssuer` once.
+    - Same no-version-check pattern as `Touch` (via `updateNoVersionCheck`), sets `OIDCIssuer` once.
 
 ??? note "`RecordFindings`"
 
-    - Same no-version-check pattern, sets `Findings` and `FindingsAt` together, replacing whatever was recorded before.
+    - Same no-version-check pattern (via `updateNoVersionCheck`), sets `Findings` and `FindingsAt` together, replacing whatever was recorded before.
 
 ??? note "`List`"
 

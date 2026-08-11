@@ -16,9 +16,7 @@ must stop the rollout rather than continue past it. Only a clean canary wave
 rolls to the rest, in a second wave. --canary-count 0 (the default) skips
 canarying and updates every matching cluster in one wave.
 
---provider is the only filter that currently narrows a wave; --profile is
-accepted but not yet applied, because the Fleet Registry's query filter has
-no profile dimension to select on.
+--provider is the only filter that currently narrows a wave.
 
 update does not honour the global --dry-run flag: a run commits to every
 matching cluster's repository. A cluster already at the target version
@@ -40,10 +38,9 @@ kubespin fleet update [flags]
   kubespin fleet update --component cert-manager --version 1.15.1 \
     --canary-count 3 --github-org GitOpsHub --registry-region us-east-1
 
-  # Scope the wave to one tier and one cloud
+  # Scope the wave to one cloud
   kubespin fleet update --component cert-manager --version 1.15.1 \
-    --profile tier-standard@1.0.0 --provider aws \
-    --github-org GitOpsHub --registry-region us-east-1
+    --provider aws --github-org GitOpsHub --registry-region us-east-1
 ```
 
 ## Options
@@ -56,7 +53,6 @@ kubespin fleet update [flags]
       --github-org string          GitHub organization cluster repositories live in
       --github-upload-url string   GitHub Enterprise upload URL (leave empty for github.com)
   -h, --help                       help for update
-      --profile string             restrict to clusters on this profile (accepted but not yet applied)
       --profiles-repo string       platform-profiles repository name to resolve profiles from (uses the builtin catalog if empty)
       --provider string            restrict to one cloud provider
       --version string             target version

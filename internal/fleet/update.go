@@ -28,23 +28,17 @@ type UpdateResult struct {
 // UpdateOne patches a single cluster's repository so its override for
 // component pins version, then re-renders and commits addons.yaml.
 //
-// It reuses catalog.Merge and repo.ReconcileAddons rather than duplicating
-// their logic: an update wave is just many clusters each getting the same
-// one-addon override applied, on top of whatever override patch they already
-// carry.
+// It reuses catalog.ResolveForCluster and repo.ReconcileAddons rather than
+// duplicating their logic: an update wave is just many clusters each getting
+// the same one-addon override applied, on top of whatever override patch
+// they already carry, resolved the same way `apply` resolves it.
 func UpdateOne(
 	ctx context.Context, resolver catalog.Resolver, repoProv repo.Provisioner,
 	spec core.ClusterSpec, component, version string,
 ) (bool, error) {
-	profile, err := resolver.Resolve(ctx, spec.Profile)
-	if err != nil {
-		return false, fmt.Errorf("resolving profile %s for %s: %w", spec.Profile, spec.ID, err)
-	}
-	profile = profile.ForProvider(spec.Provider)
+	spec.Overrides = setComponentVersion(spec.Overrides, component, version)
 
-	overrides := setComponentVersion(spec.Overrides, component, version)
-
-	merged, err := catalog.Merge(profile, overrides)
+	merged, err := catalog.ResolveForCluster(ctx, resolver, spec)
 	if err != nil {
 		return false, fmt.Errorf("applying update to %s: %w", spec.ID, err)
 	}

@@ -177,26 +177,12 @@ func (d *DynamoDB) UpdatePhase(ctx context.Context, rec Record, to core.Phase) (
 
 // Touch records a status report.
 func (d *DynamoDB) Touch(ctx context.Context, id core.ClusterID, at time.Time) error {
-	_, err := d.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName:        aws.String(d.table),
-		Key:              key(id),
-		UpdateExpression: aws.String("SET #reported = :at"),
-		// No version assertion: reports arrive every couple of minutes from
-		// every cluster and must not contend with provisioning writes.
-		ConditionExpression: aws.String("attribute_exists(#id)"),
-		ExpressionAttributeNames: map[string]string{
-			"#id":       attrClusterID,
-			"#reported": attrLastReportedAt,
-		},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":at": &types.AttributeValueMemberS{Value: at.UTC().Format(time.RFC3339Nano)},
-		},
-	})
+	err := d.updateNoVersionCheck(ctx, id, "SET #reported = :at",
+		map[string]string{"#reported": attrLastReportedAt},
+		map[string]types.AttributeValue{":at": &types.AttributeValueMemberS{Value: at.UTC().Format(time.RFC3339Nano)}},
+		"recording status")
 	if err != nil {
-		if conditionFailed(err) {
-			return fmt.Errorf("%w: %s", ErrNotFound, id)
-		}
-		return fmt.Errorf("recording status for %s: %w", id, err)
+		return err
 	}
 	d.log().Debug("recorded status report", "cluster", id, "at", at)
 	return nil
@@ -204,26 +190,12 @@ func (d *DynamoDB) Touch(ctx context.Context, id core.ClusterID, at time.Time) e
 
 // RecordOIDCIssuer sets the cluster's workload identity issuer.
 func (d *DynamoDB) RecordOIDCIssuer(ctx context.Context, id core.ClusterID, issuer string) error {
-	_, err := d.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName:        aws.String(d.table),
-		Key:              key(id),
-		UpdateExpression: aws.String("SET #issuer = :issuer"),
-		// No version assertion: this is metadata about the cluster, not a
-		// phase transition, the same reasoning Touch above uses.
-		ConditionExpression: aws.String("attribute_exists(#id)"),
-		ExpressionAttributeNames: map[string]string{
-			"#id":     attrClusterID,
-			"#issuer": attrOIDCIssuer,
-		},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":issuer": &types.AttributeValueMemberS{Value: issuer},
-		},
-	})
+	err := d.updateNoVersionCheck(ctx, id, "SET #issuer = :issuer",
+		map[string]string{"#issuer": attrOIDCIssuer},
+		map[string]types.AttributeValue{":issuer": &types.AttributeValueMemberS{Value: issuer}},
+		"recording OIDC issuer")
 	if err != nil {
-		if conditionFailed(err) {
-			return fmt.Errorf("%w: %s", ErrNotFound, id)
-		}
-		return fmt.Errorf("recording OIDC issuer for %s: %w", id, err)
+		return err
 	}
 	d.log().Debug("recorded OIDC issuer", "cluster", id, "issuer", issuer)
 	return nil
@@ -236,30 +208,49 @@ func (d *DynamoDB) RecordFindings(ctx context.Context, id core.ClusterID, findin
 		values[i] = &types.AttributeValueMemberS{Value: f}
 	}
 
-	_, err := d.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName:        aws.String(d.table),
-		Key:              key(id),
-		UpdateExpression: aws.String("SET #findings = :findings, #findingsAt = :at"),
-		// No version assertion: audit findings are observational metadata, the
-		// same reasoning Touch and RecordOIDCIssuer above use.
-		ConditionExpression: aws.String("attribute_exists(#id)"),
-		ExpressionAttributeNames: map[string]string{
-			"#id":         attrClusterID,
-			"#findings":   attrFindings,
-			"#findingsAt": attrFindingsAt,
-		},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
+	err := d.updateNoVersionCheck(ctx, id, "SET #findings = :findings, #findingsAt = :at",
+		map[string]string{"#findings": attrFindings, "#findingsAt": attrFindingsAt},
+		map[string]types.AttributeValue{
 			":findings": &types.AttributeValueMemberL{Value: values},
 			":at":       &types.AttributeValueMemberS{Value: at.UTC().Format(time.RFC3339Nano)},
 		},
+		"recording audit findings")
+	if err != nil {
+		return err
+	}
+	d.log().Debug("recorded audit findings", "cluster", id, "findings", len(findings), "at", at)
+	return nil
+}
+
+// updateNoVersionCheck runs an UpdateItem against id, conditioned only on the
+// item existing — not on Version, the way UpdatePhase is. Touch,
+// RecordOIDCIssuer, and RecordFindings all write observational metadata that
+// arrives independently of phase transitions and must not contend with
+// them, so none of them assert a version.
+//
+// names/values need only the attributes updateExpr itself references — #id
+// and its existence condition are added here, once, rather than by every
+// caller.
+func (d *DynamoDB) updateNoVersionCheck(
+	ctx context.Context, id core.ClusterID, updateExpr string,
+	names map[string]string, values map[string]types.AttributeValue, action string,
+) error {
+	names["#id"] = attrClusterID
+
+	_, err := d.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(d.table),
+		Key:                       key(id),
+		UpdateExpression:          aws.String(updateExpr),
+		ConditionExpression:       aws.String("attribute_exists(#id)"),
+		ExpressionAttributeNames:  names,
+		ExpressionAttributeValues: values,
 	})
 	if err != nil {
 		if conditionFailed(err) {
 			return fmt.Errorf("%w: %s", ErrNotFound, id)
 		}
-		return fmt.Errorf("recording audit findings for %s: %w", id, err)
+		return fmt.Errorf("%s for %s: %w", action, id, err)
 	}
-	d.log().Debug("recorded audit findings", "cluster", id, "findings", len(findings), "at", at)
 	return nil
 }
 

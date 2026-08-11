@@ -41,8 +41,8 @@ last completed phase instead of restarting from scratch.
 |---|---|---|
 | `createClusterStep` | `pending` | `internal/provisioner` — resolves the network (`cloud.Network.EnsureNetwork`, skipped if `cloud.Network` is nil), requests the cluster (`cloud.Cluster.Create`), waits for the control plane (`provisioner.WaitUntilActive`), reconciles node pools (`cloud.Cluster.Reconcile` — this is what actually attaches them on a first run), then opens egress to the ingestion endpoint (`openEgress` → `cloud.Network.AllowEgress`). |
 | `bindIdentityStep` | `cluster-created` | `internal/provisioner`, `internal/registry` — provisions the status reporter's workload identity (`cloud.Identity.ProvisionForComponent`), then describes the cluster (`cloud.Cluster.Describe`) to capture its OIDC issuer and records it via `reg.RecordOIDCIssuer` — the issuer the Central Ingestion API later verifies the reporter's signature against. |
-| `seedRepoStep` | `identity-bound` | `internal/catalog`, `internal/repo` — resolves the cluster's profile (`resolveProfile`: catalog resolve → provider template → override merge → ingress/access-mode templating) and creates/seeds the cluster's repository with its initial `cluster.yaml`, `addons.yaml`, `.state.yaml` (`repo.Seed`). |
-| `installArgoCDStep` | `repo-pushed` | `internal/argocd`, `internal/catalog`, `internal/repo`, `internal/provisioner` — builds a `*rest.Config` for the cluster via `provisioner.RESTConfigProvisioner`, resolves the profile, installs Argo CD (`installer.Install`), applies a repo-credentials Secret and the self-referential root Application directly to the cluster (`applier.Apply` — never committed to the repo it manages), then commits the app-of-apps addon Applications (`repo.ReconcileAppOfApps`). |
+| `seedRepoStep` | `identity-bound` | `internal/catalog`, `internal/repo` — resolves the cluster's profile (`catalog.ResolveForCluster`: catalog resolve → provider template → argocd stand-in → override merge → ingress/access-mode templating) and creates/seeds the cluster's repository with its initial `cluster.yaml`, `addons.yaml`, `.state.yaml` (`repo.Seed`). |
+| `installArgoCDStep` | `repo-pushed` | `internal/argocd`, `internal/catalog`, `internal/repo`, `internal/provisioner` — builds a `*rest.Config` for the cluster via `provisioner.RESTConfigProvisioner`, resolves the profile (`catalog.ResolveForCluster`), looks up its `"argocd"` addon (`Profile.Addon`, always present) and installs it (`installer.Install`), applies a repo-credentials Secret and the self-referential root Application directly to the cluster (`applier.Apply` — never committed to the repo it manages), then commits the app-of-apps addon Applications (`repo.ReconcileAppOfApps`). |
 | (default no-op: `DefaultSteps()["argocd-installed"] = "verify addons healthy"`) | `argocd-installed` | — Placeholder; `ProvisioningSteps` does not override this phase. |
 
 Once the walk lands the cluster at `ready`, `Orchestrator.Apply` invokes the
@@ -322,8 +322,8 @@ against `.state.yaml`) — so a no-change `apply` makes neither call.
 
     - **Behavior**: builds the `ReconcileFunc` that keeps a `ready` cluster
       converged on every subsequent `apply`: `cloud.Cluster.Reconcile` for
-      infra drift, `repo.ReconcileAddons` (after `resolveProfile`) for addon
-      drift.
+      infra drift, `repo.ReconcileAddons` (after `catalog.ResolveForCluster`)
+      for addon drift.
     - **Invariant**: a no-change run makes neither call — this is where
       `apply`'s split-diff idempotence for already-provisioned clusters
       lives.
@@ -342,14 +342,17 @@ against `.state.yaml`) — so a no-change `apply` makes neither call.
       identity deprovision → cluster delete (blocking on
       `provisioner.WaitUntilGone`) → repository archive.
 
-??? note "Step functions — `createClusterStep`, `bindIdentityStep`, `seedRepoStep`, `installArgoCDStep`, `openEgress`, `resolveProfile`, `profileHasAddon`, `withoutOverride`, `argoCDAddon` — internal funcs"
+??? note "Step functions — `createClusterStep`, `bindIdentityStep`, `seedRepoStep`, `installArgoCDStep`, `openEgress` — internal funcs"
 
     - **Behavior**: unexported implementations backing the phase steps
       described in the [Apply step order table](#apply-provisioningsteps-stepsgo)
-      above. `resolveProfile` (catalog resolve → provider template →
-      override merge → ingress/access-mode templating), `profileHasAddon`,
-      `withoutOverride`, and `argoCDAddon` are helpers used while assembling
-      and installing the Argo CD app-of-apps addon set.
+      above. Profile resolution itself — catalog resolve → provider template
+      → argocd stand-in → override merge → ingress/access-mode templating —
+      no longer lives here: `seedRepoStep`, `installArgoCDStep`, and
+      `ReadyReconcile` all call `catalog.ResolveForCluster`
+      (`internal/catalog/resolve.go`), the same seam `internal/fleet.UpdateOne`
+      uses for `fleet update`, so the two commands can never resolve a given
+      cluster's profile differently.
 
 ## delete.go
 

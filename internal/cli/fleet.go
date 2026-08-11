@@ -57,9 +57,7 @@ must stop the rollout rather than continue past it. Only a clean canary wave
 rolls to the rest, in a second wave. --canary-count 0 (the default) skips
 canarying and updates every matching cluster in one wave.
 
---provider is the only filter that currently narrows a wave; --profile is
-accepted but not yet applied, because the Fleet Registry's query filter has
-no profile dimension to select on.
+--provider is the only filter that currently narrows a wave.
 
 update does not honour the global --dry-run flag: a run commits to every
 matching cluster's repository. A cluster already at the target version
@@ -73,16 +71,14 @@ failed wave is safe.`,
   kubespin fleet update --component cert-manager --version 1.15.1 \
     --canary-count 3 --github-org GitOpsHub --registry-region us-east-1
 
-  # Scope the wave to one tier and one cloud
+  # Scope the wave to one cloud
   kubespin fleet update --component cert-manager --version 1.15.1 \
-    --profile tier-standard@1.0.0 --provider aws \
-    --github-org GitOpsHub --registry-region us-east-1`,
+    --provider aws --github-org GitOpsHub --registry-region us-east-1`,
 		Args: cobra.NoArgs,
 		RunE: runFleetUpdate,
 	}
 
 	fs := cmd.Flags()
-	fs.String("profile", "", "restrict to clusters on this profile (accepted but not yet applied)")
 	fs.String("component", "", "addon to update")
 	fs.String("version", "", "target version")
 	fs.Int("concurrency", 4, "maximum concurrent repository updates")
@@ -99,7 +95,7 @@ failed wave is safe.`,
 func runFleetUpdate(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 
-	cfg, reg, err := fleetPrereqs(cmd)
+	cfg, reg, err := registryPrereqs(cmd)
 	if err != nil {
 		return err
 	}
@@ -219,7 +215,7 @@ re-running one.`,
 func runFleetAudit(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 
-	_, reg, err := fleetPrereqs(cmd)
+	_, reg, err := registryPrereqs(cmd)
 	if err != nil {
 		return err
 	}
@@ -325,7 +321,7 @@ cluster that is unreachable shows as stale rather than blocking the command.`,
 func runFleetStatus(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 
-	_, reg, err := fleetPrereqs(cmd)
+	_, reg, err := registryPrereqs(cmd)
 	if err != nil {
 		return err
 	}
@@ -395,9 +391,10 @@ func reportStatuses(cmd *cobra.Command, statuses []fleet.ClusterStatus, output s
 	}
 }
 
-// fleetPrereqs resolves the config and connects to the Fleet Registry, the
-// two things every fleet-wide command needs before it can do anything else.
-func fleetPrereqs(cmd *cobra.Command) (*Config, registry.Registry, error) {
+// registryPrereqs resolves the config and connects to the Fleet Registry —
+// the two things every command that talks to the registry needs before it
+// can do anything else, shared by the fleet subcommands and by apply/delete.
+func registryPrereqs(cmd *cobra.Command) (*Config, registry.Registry, error) {
 	ctx := cmd.Context()
 
 	cfg, ok := ConfigFrom(ctx)

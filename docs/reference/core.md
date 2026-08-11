@@ -352,16 +352,18 @@ A cluster's position in the provisioning state machine. The orchestrator resumes
 
     - **Behavior:** a resolved tier from the platform-profiles catalog — the addon set a cluster gets before any per-cluster override patch is applied.
 
-??? note "Signature: `(Profile) Ref`, `(Profile) ForProvider`, `(Profile) Validate`"
+??? note "Signature: `(Profile) Ref`, `(Profile) ForProvider`, `(Profile) Addon`, `(Profile) Validate`"
 
     ```go
     func (p Profile) Ref() ProfileRef
     func (p Profile) ForProvider(provider Provider) Profile
+    func (p Profile) Addon(name string) (AddonRef, bool)
     func (p Profile) Validate() error
     ```
 
-    - **Behavior:** `Ref` returns `ProfileRef{Name, Version}`; `ForProvider` returns a copy of `p` with every addon that does not support `provider` dropped (via `AddonRef.SupportsProvider`); `Validate` validates `Ref()`, requires at least one addon, validates each `AddonRef`, and rejects duplicate addon names (two Argo CD Applications cannot share a name).
+    - **Behavior:** `Ref` returns `ProfileRef{Name, Version}`; `ForProvider` returns a copy of `p` with every addon that does not support `provider` dropped (via `AddonRef.SupportsProvider`); `Addon` looks up an addon by name, reporting whether it was found; `Validate` validates `Ref()`, requires at least one addon, validates each `AddonRef`, and rejects duplicate addon names (two Argo CD Applications cannot share a name).
     - **Invariants:** callers resolve a profile for a specific cluster's provider through `ForProvider` before applying override patches, so e.g. Karpenter never renders into a GCP or Azure cluster's `addons.yaml`, and an override naming it on those clouds correctly fails as unknown rather than silently applying.
+    - **Behavior:** `Addon` is what `internal/orchestrator.installArgoCDStep` uses to pull the `"argocd"` entry `catalog.ResolveForCluster` guarantees is always present, instead of a caller-side loop.
 
 !!! note
     `namePattern` (`^[a-z][a-z0-9-]{1,61}[a-z0-9]$`) is shared by `ProfileRef`, `AddonRef`, and `AddonOverride` name validation, since all three surface as Argo CD Application names.
