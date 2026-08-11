@@ -41,7 +41,7 @@ kubespin apply [flags]
 ```bash
   # AWS, private API server, default node pool
   kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
-    --access private --profile tier-small@1.0.0 \
+    --access public --profile tier-small@1.0.0 \
     --github-org GitOpsHub --registry-region us-east-1
 
   # GCP, public API server, larger node pool — authorized-cidrs is required on GCP
