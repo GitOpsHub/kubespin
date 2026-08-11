@@ -46,14 +46,14 @@ kubespin apply [flags]
 
   # GCP, public API server, larger node pool — authorized-cidrs is required on GCP
   # for the operator's own machine to reach the endpoint and install Argo CD
-  kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
+  kubespin apply --provider gcp --gcp-project kubernetes-dev --region us-central1 \
     --cluster-id demo-gcp --access public --authorized-cidrs 203.0.113.4/32 \
     --profile tier-small@1.0.0 \
     --instance-type e2-standard-4 --desired-size 3 \
     --github-org GitOpsHub --registry-region us-east-1
 
   # Azure, resolving addons from a platform-profiles repo instead of the builtin catalog
-  kubespin apply --provider azure --azure-subscription <subscription-id> --region eastus \
+  kubespin apply --provider azure --azure-subscription 3df9adbd-ea55-4c92-964c-0252031979de --region eastus \
     --cluster-id demo-azure --access private --profile tier-standard@1.0.0 \
     --instance-type Standard_D4s_v7 \
     --profiles-repo platform-profiles \
