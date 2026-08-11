@@ -1,8 +1,8 @@
-## kubespin status
+# kubespin status
 
 Show authentication state per cloud provider
 
-### Synopsis
+## Synopsis
 
 status is read-only: it reports whether each provider's session currently
 looks valid, without logging in, logging out, or otherwise changing anything.
@@ -10,30 +10,30 @@ looks valid, without logging in, logging out, or otherwise changing anything.
 Use this to debug "why is my provisioner failing" before assuming the bug is
 in kubespin rather than an expired session.
 
-```
+```text
 kubespin status [flags]
 ```
 
-### Examples
+## Examples
 
-```
+```bash
   # Every configured provider
-  ./bin/kubespin status
+  kubespin status
 
   # Just Azure
-  ./bin/kubespin status --only azure
+  kubespin status --only azure
 ```
 
-### Options
+## Options
 
-```
+```text
   -h, --help           help for status
       --only strings   comma-separated providers to check, e.g. aws,gcp (default: all)
 ```
 
-### Options inherited from parent commands
+## Options inherited from parent commands
 
-```
+```text
       --config string            path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
       --dry-run                  resolve and report intended changes without performing them
       --log-format string        log output format: text or json (default "text")
@@ -42,7 +42,7 @@ kubespin status [flags]
       --registry-table string    DynamoDB table backing the Fleet Registry (default "kubespin-fleet-registry")
 ```
 
-### SEE ALSO
+## See also
 
-* [kubespin](kubespin.md)	 - Provision and manage Kubernetes clusters across EKS, GKE, and AKS
+* [kubespin](kubespin.md) - Provision and manage Kubernetes clusters across EKS, GKE, and AKS
 

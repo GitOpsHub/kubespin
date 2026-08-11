@@ -1,8 +1,8 @@
-## kubespin delete
+# kubespin delete
 
 Decommission a cluster and its supporting resources
 
-### Synopsis
+## Synopsis
 
 delete performs the teardown in reverse order: mark the cluster
 decommissioning in the Fleet Registry, clean up identity and OIDC resources,
@@ -22,30 +22,30 @@ delete does not honour the global --dry-run flag: passing it does not make
 this command a preview. Use --yes to skip the confirmation prompt only when
 you mean it.
 
-```
+```text
 kubespin delete [flags]
 ```
 
-### Examples
+## Examples
 
-```
+```bash
   # AWS, prompts to type the cluster ID to confirm
-  ./bin/kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
+  kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
     --profile tier-small@1.0.0 --github-org GitOpsHub --registry-region us-east-1
 
   # GCP, scripted (no interactive confirmation)
-  ./bin/kubespin delete --provider gcp --gcp-project my-gcp-project --region us-central1 \
+  kubespin delete --provider gcp --gcp-project my-gcp-project --region us-central1 \
     --cluster-id demo-gcp --profile tier-small@1.0.0 \
     --github-org GitOpsHub --registry-region us-east-1 --yes
 
   # Using the same cluster.yaml apply was run with
-  ./bin/kubespin delete --spec ./cluster.yaml \
+  kubespin delete --spec ./cluster.yaml \
     --github-org GitOpsHub --registry-region us-east-1 --yes
 ```
 
-### Options
+## Options
 
-```
+```text
       --access string               API server exposure: private or public (must match the cluster's spec) (default "private")
       --authorized-cidrs strings    unused by delete, kept for spec compatibility
       --azure-subscription string   Azure subscription hosting the cluster (required for --provider azure)
@@ -72,9 +72,9 @@ kubespin delete [flags]
       --yes                         skip the interactive confirmation prompt
 ```
 
-### Options inherited from parent commands
+## Options inherited from parent commands
 
-```
+```text
       --config string            path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
       --dry-run                  resolve and report intended changes without performing them
       --log-format string        log output format: text or json (default "text")
@@ -83,7 +83,7 @@ kubespin delete [flags]
       --registry-table string    DynamoDB table backing the Fleet Registry (default "kubespin-fleet-registry")
 ```
 
-### SEE ALSO
+## See also
 
-* [kubespin](kubespin.md)	 - Provision and manage Kubernetes clusters across EKS, GKE, and AKS
+* [kubespin](kubespin.md) - Provision and manage Kubernetes clusters across EKS, GKE, and AKS
 

@@ -9,14 +9,38 @@ LDFLAGS     := -X $(PKG)/internal/version.Version=$(VERSION) \
 
 GOLANGCI_VERSION := v2.6.2
 
+## Where `install` puts the binary. ~/.local/bin is already on PATH on macOS
+## and writable without sudo, unlike /usr/local/bin. Override for elsewhere:
+##   make install INSTALL_DIR=/usr/local/bin
+INSTALL_DIR ?= $(HOME)/.local/bin
+
 .DEFAULT_GOAL := all
 
 .PHONY: all
 all: lint test build
 
+## Also installs onto PATH, so `kubespin ...` works from any directory
+## without a ./bin/ prefix.
+##
+## Skipped when CI is set: a runner has no use for it, and writing outside the
+## repo tree is a surprising side effect for a build to have. Use `make build
+## INSTALL_DIR=...` to redirect it, or `make lambda` plus a bare `go build` to
+## avoid it entirely.
 .PHONY: build
 build: lambda
 	go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/$(BINARY)
+ifndef CI
+	@$(MAKE) --no-print-directory install
+endif
+
+## Copies the built binary onto PATH. Kept separate from build so it can be
+## re-run (or pointed somewhere else) without a rebuild.
+.PHONY: install
+install:
+	@test -x bin/$(BINARY) || { echo "bin/$(BINARY) is not built; run 'make build'" >&2; exit 1; }
+	@mkdir -p '$(INSTALL_DIR)'
+	@install -m 0755 bin/$(BINARY) '$(INSTALL_DIR)/$(BINARY)'
+	@printf '==> installed %s %s to %s\n' '$(BINARY)' '$(VERSION)' '$(INSTALL_DIR)/$(BINARY)'
 
 ## The ingestion Lambda runs on provided.al2023, where the handler must be a
 ## Linux binary named `bootstrap`. GOOS/GOARCH are set inline so a cross-compile

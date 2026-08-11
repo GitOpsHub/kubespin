@@ -1,8 +1,8 @@
-## kubespin fleet update
+# kubespin fleet update
 
 Roll a component version across every matching cluster
 
-### Synopsis
+## Synopsis
 
 update patches the repository of every cluster matching the given profile,
 staged through a rate-limited worker pool.
@@ -25,30 +25,30 @@ matching cluster's repository. A cluster already at the target version
 reports "already up to date" and commits nothing, so re-running a partially
 failed wave is safe.
 
-```
+```text
 kubespin fleet update [flags]
 ```
 
-### Examples
+## Examples
 
-```
+```bash
   # Roll a new Argo CD version across every cluster, 8 at a time
-  ./bin/kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8 \
+  kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8 \
     --github-org GitOpsHub --registry-region us-east-1
 
   # Canary the first 3 clusters before rolling to the rest of the fleet
-  ./bin/kubespin fleet update --component cert-manager --version 1.15.1 \
+  kubespin fleet update --component cert-manager --version 1.15.1 \
     --canary-count 3 --github-org GitOpsHub --registry-region us-east-1
 
   # Scope the wave to one tier and one cloud
-  ./bin/kubespin fleet update --component cert-manager --version 1.15.1 \
+  kubespin fleet update --component cert-manager --version 1.15.1 \
     --profile tier-standard@1.0.0 --provider aws \
     --github-org GitOpsHub --registry-region us-east-1
 ```
 
-### Options
+## Options
 
-```
+```text
       --canary-count int           update this many clusters first and abort before the rest of the fleet if any fail (0 disables canarying)
       --component string           addon to update
       --concurrency int            maximum concurrent repository updates (default 4)
@@ -62,9 +62,9 @@ kubespin fleet update [flags]
       --version string             target version
 ```
 
-### Options inherited from parent commands
+## Options inherited from parent commands
 
-```
+```text
       --config string            path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
       --dry-run                  resolve and report intended changes without performing them
       --log-format string        log output format: text or json (default "text")
@@ -73,7 +73,7 @@ kubespin fleet update [flags]
       --registry-table string    DynamoDB table backing the Fleet Registry (default "kubespin-fleet-registry")
 ```
 
-### SEE ALSO
+## See also
 
-* [kubespin fleet](kubespin_fleet.md)	 - Operate on the whole fleet rather than a single cluster
+* [kubespin fleet](kubespin_fleet.md) - Operate on the whole fleet rather than a single cluster
 

@@ -11,11 +11,11 @@ stuck, or the Central Ingestion API itself is down.
 ## A cluster is stale
 
 ```bash
-./bin/kubespin fleet status --stale-only --registry-region us-east-1
+kubespin fleet status --stale-only --registry-region us-east-1
 ```
 
 That lists every cluster that has missed its reporting window
-([`Record.Stale`](../internal/registry/registry.go), threshold set by
+([`Record.Stale`](https://github.com/GitOpsHub/kubespin/blob/main/internal/registry/registry.go), threshold set by
 `--stale-threshold`, default 10 minutes — long enough to tolerate a couple of
 missed 2-3 minute pushes without paging on noise).
 
@@ -31,28 +31,28 @@ an unreachable one look the same from here. Work outward from that:
      plane itself is down).
    - Pods failing before they can push — check `ARGOCD_SERVER`,
      `ARGOCD_TOKEN`, `INGESTION_URL`, and `IDENTITY_TOKEN_PATH` are all set
-     and the token file exists (see [cmd/fleet-status-reporter](../cmd/fleet-status-reporter)).
+     and the token file exists (see [cmd/fleet-status-reporter](https://github.com/GitOpsHub/kubespin/tree/main/cmd/fleet-status-reporter)).
    - Pods pushing but getting rejected — see "the ingestion API is
      rejecting pushes" below.
 
 2. **Check whether the cluster's OIDC issuer is even recorded.** `fleet
    status` reads the Fleet Registry directly; if `apply` never completed
    identity binding (`PhaseClusterCreated` -> `PhaseIdentityBound`), no
-   issuer was ever recorded ([`RecordOIDCIssuer`](../internal/registry/registry.go)),
+   issuer was ever recorded ([`RecordOIDCIssuer`](https://github.com/GitOpsHub/kubespin/blob/main/internal/registry/registry.go)),
    and every push from that cluster will be rejected as `invalid_token` —
    indistinguishable from staleness until you check the ingestion API's
    logs (below).
 
 3. **If the cluster is confirmed down or decommissioned outside kubespin**,
    don't just ignore the staleness — either restore it or run
-   `./bin/kubespin delete` so the registry reflects reality. A stale entry
+   `kubespin delete` so the registry reflects reality. A stale entry
    that stays stale forever erodes trust in the whole `fleet status` view.
 
 ## `apply` is stuck or keeps failing
 
 `apply` is idempotent and resumable: a retried `apply` re-enters at
 whatever phase the Fleet Registry last recorded
-([`Orchestrator.Apply`](../internal/orchestrator/orchestrator.go)), so the
+([`Orchestrator.Apply`](https://github.com/GitOpsHub/kubespin/blob/main/internal/orchestrator/orchestrator.go)), so the
 first response to a failed `apply` is almost always **run it again**. It is
 not a special "retry" mode — it is the same command.
 
@@ -64,7 +64,7 @@ If a retry doesn't help:
    same phase without touching anything:
 
    ```bash
-   ./bin/kubespin apply --spec ./cluster.yaml --registry-region us-east-1 --dry-run
+   kubespin apply --spec ./cluster.yaml --registry-region us-east-1 --dry-run
    ```
 
 2. **Check whether another run holds the lease.** `ErrBusy` means someone
@@ -86,7 +86,7 @@ If a retry doesn't help:
 4. **Repo-side failures** (GitHub rate limits, a missing `GITHUB_TOKEN`,
    branch protection conflicts) fail at `PhaseIdentityBound` (initial seed)
    or during the ready-cluster reconcile
-   ([`ReadyReconcile`](../internal/orchestrator/steps.go)). GitHub API rate
+   ([`ReadyReconcile`](https://github.com/GitOpsHub/kubespin/blob/main/internal/orchestrator/steps.go)). GitHub API rate
    limits are the sharp edge here at fleet scale — see "fleet-wide
    operations are rate-limited" below before assuming it's a one-off.
 
@@ -97,7 +97,7 @@ If a retry doesn't help:
    credential) just wastes lease cycles.
 
    ```bash
-   ./bin/kubespin fleet audit --provider aws \
+   kubespin fleet audit --provider aws \
      --github-org "$GITHUB_ORG" --registry-region us-east-1
    ```
 
@@ -105,8 +105,8 @@ If a retry doesn't help:
 
 ## The Central Ingestion API is down or rejecting pushes
 
-The ingestion API ([cmd/ingestion](../cmd/ingestion),
-[internal/ingestion](../internal/ingestion)) is the *only* inbound surface
+The ingestion API ([cmd/ingestion](https://github.com/GitOpsHub/kubespin/tree/main/cmd/ingestion),
+[internal/ingestion](https://github.com/GitOpsHub/kubespin/tree/main/internal/ingestion)) is the *only* inbound surface
 in the whole system. If it's down, every cluster's status reporting is
 blind simultaneously — that will look like a mass staleness event in `fleet
 status`, not scattered individual cluster problems, which is the fastest way
@@ -121,7 +121,7 @@ converge automatically once the API is back. There's no backlog to drain.
 
 If clusters are reporting but getting rejected (a spike in 4xx rather than a
 full outage), the response body names why
-([`Response.Error`](../internal/ingestion/handler.go)):
+([`Response.Error`](https://github.com/GitOpsHub/kubespin/blob/main/internal/ingestion/handler.go)):
 
 | `error` | Meaning | Action |
 |---|---|---|
@@ -154,8 +154,8 @@ repositories; `fleet audit` additionally needs `--gcp-project` /
 clusters report `FAILED` rather than being skipped.
 
 Both commands report every cluster's outcome independently
-([`AuditResult`](../internal/fleet/fleet.go),
-[`UpdateResult`](../internal/fleet/update.go)) — one cluster's failure never
+([`AuditResult`](https://github.com/GitOpsHub/kubespin/blob/main/internal/fleet/fleet.go),
+[`UpdateResult`](https://github.com/GitOpsHub/kubespin/blob/main/internal/fleet/update.go)) — one cluster's failure never
 aborts the run. A failed wave is safe to simply re-run: `fleet update` is
 idempotent (a cluster already at the target version reports "already up to
 date" and commits nothing), and `fleet audit` is read-only.

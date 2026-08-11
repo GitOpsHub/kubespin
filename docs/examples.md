@@ -6,7 +6,7 @@ Working commands to copy, paste, and adjust. For flag-by-flag detail see the
 (permissions, what it creates, troubleshooting) see
 [Fleet bootstrap](fleet-bootstrap.md).
 
-Every command below is written as `./bin/kubespin`, run from the root of a
+Every command below is written as `kubespin`, run from the root of a
 repository checkout after `make build`. Nothing here is a sketch: each
 example carries every flag the command actually requires, so it runs as
 written once the prerequisites below are in place.
@@ -21,7 +21,7 @@ make build
 
 kubespin authenticates to clouds through your existing CLI sessions, not
 environment variables — run the provider's own login first, or let
-`./bin/kubespin login` do it for you (see [Auth workflows](#auth-workflows)):
+`kubespin login` do it for you (see [Auth workflows](#auth-workflows)):
 
 ```bash
 aws sso login
@@ -60,7 +60,7 @@ block is filled in. The builtin catalog ships `tier-small@1.0.0`,
 
 Real (non-dry-run) `apply`, and every `delete`, `fleet update`, and
 `fleet audit`, create or read cluster repositories. Each needs both of these,
-from [`.env.example`](../.env.example):
+from [`.env.example`](https://github.com/GitOpsHub/kubespin/blob/main/.env.example):
 
 - **`GITHUB_TOKEN`** — a token with repo-create/push scope, read from the
   environment (never a flag, so it never lands in shell history).
@@ -83,28 +83,28 @@ and returns before any repository client is built, so it needs neither.
 
 ```bash
 # Log in to every configured provider (AWS, GCP, Azure)
-./bin/kubespin login
+kubespin login
 ```
 
 ```bash
 # Only the providers you need right now
-./bin/kubespin login --only aws,gcp
+kubespin login --only aws,gcp
 ```
 
 ```bash
 # Force re-authentication even if the cached session still looks valid
-./bin/kubespin login --force
+kubespin login --force
 ```
 
 ```bash
 # Check session state without changing anything — useful when a provisioner
 # fails and you're not sure if it's a bug or an expired session
-./bin/kubespin status
+kubespin status
 ```
 
 ```bash
 # Clear a cached session
-./bin/kubespin logout --only azure
+kubespin logout --only azure
 ```
 
 `status` never fails the command on an unauthenticated provider: reporting
@@ -120,9 +120,9 @@ kubespin creates the VPC, two subnets across two AZs, an Internet Gateway,
 and a route table, because `--subnets` is omitted.
 
 ```bash
-./bin/kubespin login --only aws
+kubespin login --only aws
 
-./bin/kubespin apply \
+kubespin apply \
   --provider aws \
   --region us-east-1 \
   --cluster-id demo-aws \
@@ -131,15 +131,15 @@ and a route table, because `--subnets` is omitted.
   --github-org "$GITHUB_ORG" \
   --registry-region us-east-1
 
-./bin/kubespin fleet status --phase ready --registry-region us-east-1
+kubespin fleet status --phase ready --registry-region us-east-1
 ```
 
 ### GCP, public cluster with a larger node pool
 
 ```bash
-./bin/kubespin login --only gcp
+kubespin login --only gcp
 
-./bin/kubespin apply \
+kubespin apply \
   --provider gcp \
   --gcp-project my-gcp-project \
   --region us-central1 \
@@ -151,7 +151,7 @@ and a route table, because `--subnets` is omitted.
   --github-org "$GITHUB_ORG" \
   --registry-region us-east-1
 
-./bin/kubespin fleet status --phase ready --registry-region us-east-1
+kubespin fleet status --phase ready --registry-region us-east-1
 ```
 
 `--min-size`, `--max-size`, and `--desired-size` describe the single
@@ -176,7 +176,7 @@ Use `--disk-size` (added alongside `--instance-type`/`--min-size`/
 `--max-size`/`--desired-size`) to bring the disk footprint down explicitly:
 
 ```bash
-./bin/kubespin apply \
+kubespin apply \
   --provider gcp \
   --gcp-project my-gcp-project \
   --region us-central1 \
@@ -201,9 +201,9 @@ Passing `--subnets` tells kubespin the network is yours: it is used unchanged
 and nothing about it is created or modified.
 
 ```bash
-./bin/kubespin login --only azure
+kubespin login --only azure
 
-./bin/kubespin apply \
+kubespin apply \
   --provider azure \
   --azure-subscription "$AZURE_SUBSCRIPTION_ID" \
   --region eastus \
@@ -216,7 +216,7 @@ and nothing about it is created or modified.
   --github-org "$GITHUB_ORG" \
   --registry-region us-east-1
 
-./bin/kubespin fleet status --phase ready --registry-region us-east-1
+kubespin fleet status --phase ready --registry-region us-east-1
 ```
 
 `--profile` with no `--profiles-repo` resolves against the builtin catalog —
@@ -238,7 +238,7 @@ allowlist rule is provisioned during cluster creation. Pass the host that
 `fleet bootstrap` printed:
 
 ```bash
-./bin/kubespin apply \
+kubespin apply \
   --provider aws \
   --region us-east-1 \
   --cluster-id demo-aws \
@@ -275,7 +275,7 @@ subnets: []
 ```
 
 ```bash
-./bin/kubespin apply --spec ./cluster.yaml \
+kubespin apply --spec ./cluster.yaml \
   --github-org "$GITHUB_ORG" --registry-region us-east-1
 ```
 
@@ -283,7 +283,7 @@ An explicitly-set flag overrides the file, so a checked-out spec can be
 reused with one field changed:
 
 ```bash
-./bin/kubespin apply --spec ./cluster.yaml --cluster-id demo-aws-2 \
+kubespin apply --spec ./cluster.yaml --cluster-id demo-aws-2 \
   --github-org "$GITHUB_ORG" --registry-region us-east-1
 ```
 
@@ -303,7 +303,7 @@ builds a GitHub client — so it needs neither `GITHUB_TOKEN` nor
 `--github-org`:
 
 ```bash
-./bin/kubespin apply \
+kubespin apply \
   --provider aws \
   --region us-east-1 \
   --cluster-id demo-aws \
@@ -330,46 +330,46 @@ including required IAM permissions, in [Fleet bootstrap](fleet-bootstrap.md).
 make lambda
 
 # 2. Preview
-./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
+kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
 
 # 3. Apply
-./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
 
 # 4. Re-run the preview: everything must now report in sync
-./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
+kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
 ```
 
 ```bash
 # 5. Spin up clusters (repeat per cluster; see "Spin up a single cluster")
-./bin/kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
+kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
   --access private --profile tier-small@1.0.0 \
   --github-org "$GITHUB_ORG" --registry-region us-east-1
 ```
 
 ```bash
 # 6. Watch the fleet — read-only, never connects to a cluster
-./bin/kubespin fleet status --registry-region us-east-1
-./bin/kubespin fleet status --stale-only --stale-threshold 30m --registry-region us-east-1
-./bin/kubespin fleet status --output json --registry-region us-east-1
-./bin/kubespin fleet status --provider aws --phase ready --registry-region us-east-1
+kubespin fleet status --registry-region us-east-1
+kubespin fleet status --stale-only --stale-threshold 30m --registry-region us-east-1
+kubespin fleet status --output json --registry-region us-east-1
+kubespin fleet status --provider aws --phase ready --registry-region us-east-1
 ```
 
 ```bash
 # 7. Roll a component version across every matching cluster
-./bin/kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8 \
+kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8 \
   --github-org "$GITHUB_ORG" --registry-region us-east-1
 
 # Scope a wave to one cloud
-./bin/kubespin fleet update --component cert-manager --version 1.15.1 --provider aws \
+kubespin fleet update --component cert-manager --version 1.15.1 --provider aws \
   --github-org "$GITHUB_ORG" --registry-region us-east-1
 ```
 
 ```bash
 # 8. Check live infra against each cluster's cluster.yaml
-./bin/kubespin fleet audit \
+kubespin fleet audit \
   --github-org "$GITHUB_ORG" --registry-region us-east-1
 
-./bin/kubespin fleet audit --provider gcp --concurrency 8 \
+kubespin fleet audit --provider gcp --concurrency 8 \
   --gcp-project my-gcp-project \
   --github-org "$GITHUB_ORG" --registry-region us-east-1
 ```
@@ -387,7 +387,7 @@ than the inverse of a Terraform destroy.
 
 ```bash
 # Interactive: prompts to type the cluster ID to confirm
-./bin/kubespin delete \
+kubespin delete \
   --provider aws \
   --region us-east-1 \
   --cluster-id demo-aws \
@@ -398,7 +398,7 @@ than the inverse of a Terraform destroy.
 
 ```bash
 # Scripted: skip the confirmation prompt
-./bin/kubespin delete \
+kubespin delete \
   --provider gcp \
   --gcp-project my-gcp-project \
   --region us-central1 \
@@ -411,7 +411,7 @@ than the inverse of a Terraform destroy.
 
 ```bash
 # Using the same cluster.yaml apply was run with
-./bin/kubespin delete --spec ./cluster.yaml \
+kubespin delete --spec ./cluster.yaml \
   --github-org "$GITHUB_ORG" --registry-region us-east-1 --yes
 ```
 
@@ -448,14 +448,14 @@ Precedence is **flags > `KUBESPIN_*` environment variables > config file >
 defaults**.
 
 ```bash
-./bin/kubespin fleet status --registry-region us-east-1 \
+kubespin fleet status --registry-region us-east-1 \
   --log-level debug --log-format json
 ```
 
 Logs go to stderr and command output to stdout, so the two can be separated:
 
 ```bash
-./bin/kubespin fleet status --registry-region us-east-1 --output json 2>/dev/null
+kubespin fleet status --registry-region us-east-1 --output json 2>/dev/null
 ```
 
 A config file at `$XDG_CONFIG_HOME/kubespin/config.yaml` or `./config.yaml`

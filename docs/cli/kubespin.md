@@ -1,8 +1,8 @@
-## kubespin
+# kubespin
 
 Provision and manage Kubernetes clusters across EKS, GKE, and AKS
 
-### Synopsis
+## Synopsis
 
 kubespin provisions Kubernetes clusters across AWS, GCP, and Azure, each with
 its own repository and its own local Argo CD instance syncing from it.
@@ -10,24 +10,24 @@ its own repository and its own local Argo CD instance syncing from it.
 Clusters are never reached inbound: status flows outward from an in-cluster
 reporter to the Fleet Registry.
 
-### Examples
+## Examples
 
-```
+```bash
   # Spin up the shared fleet infrastructure once, then a cluster
-  ./bin/kubespin login
+  kubespin login
   make lambda
-  ./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
-  ./bin/kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
+  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+  kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
     --access private --profile tier-small@1.0.0 \
     --github-org GitOpsHub --registry-region us-east-1
-  ./bin/kubespin fleet status --registry-region us-east-1
+  kubespin fleet status --registry-region us-east-1
 
-See "./bin/kubespin <command> --help" for flags and more examples on any command.
+See "kubespin <command> --help" for flags and more examples on any command.
 ```
 
-### Options
+## Options
 
-```
+```text
       --config string            path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
       --dry-run                  resolve and report intended changes without performing them
   -h, --help                     help for kubespin
@@ -37,12 +37,12 @@ See "./bin/kubespin <command> --help" for flags and more examples on any command
       --registry-table string    DynamoDB table backing the Fleet Registry (default "kubespin-fleet-registry")
 ```
 
-### SEE ALSO
+## See also
 
-* [kubespin apply](kubespin_apply.md)	 - Create or reconcile a cluster to match its desired state
-* [kubespin delete](kubespin_delete.md)	 - Decommission a cluster and its supporting resources
-* [kubespin fleet](kubespin_fleet.md)	 - Operate on the whole fleet rather than a single cluster
-* [kubespin login](kubespin_login.md)	 - Authenticate to every configured cloud provider
-* [kubespin logout](kubespin_logout.md)	 - Clear cached sessions for one or more cloud providers
-* [kubespin status](kubespin_status.md)	 - Show authentication state per cloud provider
+* [kubespin apply](kubespin_apply.md) - Create or reconcile a cluster to match its desired state
+* [kubespin delete](kubespin_delete.md) - Decommission a cluster and its supporting resources
+* [kubespin fleet](kubespin_fleet.md) - Operate on the whole fleet rather than a single cluster
+* [kubespin login](kubespin_login.md) - Authenticate to every configured cloud provider
+* [kubespin logout](kubespin_logout.md) - Clear cached sessions for one or more cloud providers
+* [kubespin status](kubespin_status.md) - Show authentication state per cloud provider
 

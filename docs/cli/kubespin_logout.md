@@ -1,31 +1,31 @@
-## kubespin logout
+# kubespin logout
 
 Clear cached sessions for one or more cloud providers
 
-```
+```text
 kubespin logout [flags]
 ```
 
-### Examples
+## Examples
 
-```
+```bash
   # Log out of every provider
-  ./bin/kubespin logout
+  kubespin logout
 
   # Just GCP
-  ./bin/kubespin logout --only gcp
+  kubespin logout --only gcp
 ```
 
-### Options
+## Options
 
-```
+```text
   -h, --help           help for logout
       --only strings   comma-separated providers to log out of, e.g. aws,gcp (default: all)
 ```
 
-### Options inherited from parent commands
+## Options inherited from parent commands
 
-```
+```text
       --config string            path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
       --dry-run                  resolve and report intended changes without performing them
       --log-format string        log output format: text or json (default "text")
@@ -34,7 +34,7 @@ kubespin logout [flags]
       --registry-table string    DynamoDB table backing the Fleet Registry (default "kubespin-fleet-registry")
 ```
 
-### SEE ALSO
+## See also
 
-* [kubespin](kubespin.md)	 - Provision and manage Kubernetes clusters across EKS, GKE, and AKS
+* [kubespin](kubespin.md) - Provision and manage Kubernetes clusters across EKS, GKE, and AKS
 

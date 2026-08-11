@@ -2,7 +2,7 @@
 
 This document covers the decisions that are hard to recover by reading any
 single file. For flag-level detail see the [CLI reference](cli/kubespin.md); for
-the milestone sequence see [EXECUTION-PLAN.md](../EXECUTION-PLAN.md).
+the milestone sequence see [EXECUTION-PLAN.md](https://github.com/GitOpsHub/kubespin/blob/main/EXECUTION-PLAN.md).
 
 ## The shape of the system
 
@@ -72,7 +72,7 @@ phase, and adding a GSI to a populated table is a slow online backfill.
 
 ### The phase state machine
 
-Defined in [internal/core/phase.go](../internal/core/phase.go). Transitions are
+Defined in [internal/core/phase.go](https://github.com/GitOpsHub/kubespin/blob/main/internal/core/phase.go). Transitions are
 validated on every write, so an illegal move fails at the storage boundary
 instead of being silently persisted.
 
@@ -110,7 +110,7 @@ a perfectly valid phase to be in despite having no forward successor.
 ### The lease
 
 Provisioning is serialised by a lease on the cluster's registry item
-([internal/registry](../internal/registry)): a conditional write that succeeds
+([internal/registry](https://github.com/GitOpsHub/kubespin/tree/main/internal/registry)): a conditional write that succeeds
 only when the lease is free, expired, or already the caller's. Two `apply` runs
 against the same cluster cannot both proceed — the second is refused.
 
@@ -125,7 +125,7 @@ TTL passes. Two consequences follow:
 
 ## Sequencing a run
 
-[internal/orchestrator](../internal/orchestrator) turns the state machine into
+[internal/orchestrator](https://github.com/GitOpsHub/kubespin/tree/main/internal/orchestrator) turns the state machine into
 an actual run: acquire the lease, then walk the phases, recording each in the
 registry only *after* its step succeeds.
 
@@ -161,7 +161,7 @@ noise will read as drift.
 
 Addons are delivered app-of-apps: one root Argo CD Application discovers one
 Application per addon, so addons sync and fail independently — the manifests
-are rendered by [internal/argocd](../internal/argocd) and committed with the
+are rendered by [internal/argocd](https://github.com/GitOpsHub/kubespin/tree/main/internal/argocd) and committed with the
 rest of the repository seed.
 
 Installing Argo CD itself into the cluster is the one step of this that is
@@ -176,7 +176,7 @@ cluster, which needs a per-cloud token scheme (see
 ## Access mode is a first-class field
 
 `Access: private | public` lives on `ClusterSpec`
-([internal/core/cluster.go](../internal/core/cluster.go)), not in a per-cloud
+([internal/core/cluster.go](https://github.com/GitOpsHub/kubespin/blob/main/internal/core/cluster.go)), not in a per-cloud
 options bag, because it branches behaviour in two places that must agree:
 
 - **At creation**, it selects endpoint and authorized-network configuration,
@@ -224,7 +224,7 @@ minted for another audience would be accepted.
 ## Convergence without a state file
 
 Fleet infrastructure — the registry table and ingestion API — is provisioned by
-[internal/fleetinfra](../internal/fleetinfra) through `aws-sdk-go-v2`, not
+[internal/fleetinfra](https://github.com/GitOpsHub/kubespin/tree/main/internal/fleetinfra) through `aws-sdk-go-v2`, not
 Terraform or CloudFormation. One language, one toolchain, and the stack is
 unit-testable with `go test` like everything else.
 
@@ -245,7 +245,7 @@ actually asserted:
   must match the configured fleet account before any step runs.
 
 Each AWS service is reached through a narrow interface declared in
-[internal/fleetinfra/clients.go](../internal/fleetinfra/clients.go) listing only
+[internal/fleetinfra/clients.go](https://github.com/GitOpsHub/kubespin/blob/main/internal/fleetinfra/clients.go) listing only
 the calls this package makes. That is what makes the engine testable without
 credentials, and it doubles as the exact permission set an operator needs — see
 the [bootstrap runbook](fleet-bootstrap.md#permissions-the-operator-needs).

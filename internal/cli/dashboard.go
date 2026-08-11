@@ -32,10 +32,10 @@ Like 'fleet status', this never connects to a cluster — everything shown
 comes from what fleet-status-reporter and 'fleet audit' have already pushed
 into the registry.`,
 		Example: `  # Snapshot the whole fleet to fleet-dashboard.html
-  ./bin/kubespin fleet dashboard --registry-region us-east-1
+  kubespin fleet dashboard --registry-region us-east-1
 
   # Only AWS clusters, written somewhere else
-  ./bin/kubespin fleet dashboard --provider aws --output /tmp/fleet.html \
+  kubespin fleet dashboard --provider aws --output /tmp/fleet.html \
     --registry-region us-east-1`,
 		Args: cobra.NoArgs,
 		RunE: runFleetDashboard,

@@ -1,8 +1,8 @@
-## kubespin fleet dashboard
+# kubespin fleet dashboard
 
 Render a static HTML snapshot of fleet sync status, drift, and staleness
 
-### Synopsis
+## Synopsis
 
 dashboard reads the Fleet Registry — the same data 'fleet status' reads — and
 renders it as a single self-contained HTML file: no server, no external
@@ -19,24 +19,24 @@ Like 'fleet status', this never connects to a cluster — everything shown
 comes from what fleet-status-reporter and 'fleet audit' have already pushed
 into the registry.
 
-```
+```text
 kubespin fleet dashboard [flags]
 ```
 
-### Examples
+## Examples
 
-```
+```bash
   # Snapshot the whole fleet to fleet-dashboard.html
-  ./bin/kubespin fleet dashboard --registry-region us-east-1
+  kubespin fleet dashboard --registry-region us-east-1
 
   # Only AWS clusters, written somewhere else
-  ./bin/kubespin fleet dashboard --provider aws --output /tmp/fleet.html \
+  kubespin fleet dashboard --provider aws --output /tmp/fleet.html \
     --registry-region us-east-1
 ```
 
-### Options
+## Options
 
-```
+```text
   -h, --help                       help for dashboard
       --output string              path to write the rendered HTML snapshot to (default "fleet-dashboard.html")
       --phase string               restrict to clusters in one phase
@@ -44,9 +44,9 @@ kubespin fleet dashboard [flags]
       --stale-threshold duration   how long a cluster may go without reporting before it is stale (default 10m0s)
 ```
 
-### Options inherited from parent commands
+## Options inherited from parent commands
 
-```
+```text
       --config string            path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
       --dry-run                  resolve and report intended changes without performing them
       --log-format string        log output format: text or json (default "text")
@@ -55,7 +55,7 @@ kubespin fleet dashboard [flags]
       --registry-table string    DynamoDB table backing the Fleet Registry (default "kubespin-fleet-registry")
 ```
 
-### SEE ALSO
+## See also
 
-* [kubespin fleet](kubespin_fleet.md)	 - Operate on the whole fleet rather than a single cluster
+* [kubespin fleet](kubespin_fleet.md) - Operate on the whole fleet rather than a single cluster
 

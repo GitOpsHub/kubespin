@@ -24,19 +24,21 @@ make bootstrap
 make
 ```
 
-That runs lint, tests, and builds `bin/kubespin`.
+That runs lint, tests, and builds `bin/kubespin` — then installs it to
+`~/.local/bin` so every command below works as plain `kubespin`, from any
+directory. Override the destination with `make build INSTALL_DIR=...`.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `./bin/kubespin login` / `status` / `logout` | Authenticate to (or check, or clear) cloud provider sessions. |
-| `./bin/kubespin fleet bootstrap` | Provision the shared fleet infrastructure. Converges, never deletes. |
-| `./bin/kubespin apply` | Create or reconcile a cluster to match its desired state. Idempotent and resumable. |
-| `./bin/kubespin delete` | Decommission a cluster; archives its repository rather than deleting it. |
-| `./bin/kubespin fleet update` | Roll a component version across every matching cluster, in waves. |
-| `./bin/kubespin fleet audit` | Diff live cloud infrastructure against each cluster's `cluster.yaml`. |
-| `./bin/kubespin fleet status` | Report sync, drift, and staleness across the fleet. |
+| `kubespin login` / `status` / `logout` | Authenticate to (or check, or clear) cloud provider sessions. |
+| `kubespin fleet bootstrap` | Provision the shared fleet infrastructure. Converges, never deletes. |
+| `kubespin apply` | Create or reconcile a cluster to match its desired state. Idempotent and resumable. |
+| `kubespin delete` | Decommission a cluster; archives its repository rather than deleting it. |
+| `kubespin fleet update` | Roll a component version across every matching cluster, in waves. |
+| `kubespin fleet audit` | Diff live cloud infrastructure against each cluster's `cluster.yaml`. |
+| `kubespin fleet status` | Report sync, drift, and staleness across the fleet. |
 
 See [Example workflows](#example-workflows) below for real invocations of
 each, or [docs/examples.md](docs/examples.md) for the full walkthrough.
@@ -55,16 +57,16 @@ one). Export `KUBESPIN_REGISTRY_REGION` to drop the first.
 
 ```bash
 # AWS, private cluster
-./bin/kubespin login --only aws
-./bin/kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
+kubespin login --only aws
+kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
   --access private --profile tier-small@1.0.0 \
   --github-org "$GITHUB_ORG" --registry-region us-east-1
-./bin/kubespin fleet status --phase ready --registry-region us-east-1
+kubespin fleet status --phase ready --registry-region us-east-1
 ```
 
 ```bash
 # GCP, public cluster, custom node pool
-./bin/kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
+kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
   --cluster-id demo-gcp --access public --profile tier-small@1.0.0 \
   --instance-type e2-standard-4 --desired-size 3 \
   --github-org "$GITHUB_ORG" --registry-region us-east-1
@@ -82,7 +84,7 @@ one). Export `KUBESPIN_REGISTRY_REGION` to drop the first.
 
 ```bash
 # Azure, resolving addons from a platform-profiles repo
-./bin/kubespin apply --provider azure --azure-subscription "$AZURE_SUBSCRIPTION_ID" \
+kubespin apply --provider azure --azure-subscription "$AZURE_SUBSCRIPTION_ID" \
   --region eastus --cluster-id demo-azure --access private \
   --profile tier-standard@1.0.0 --profiles-repo platform-profiles \
   --github-org "$GITHUB_ORG" --registry-region us-east-1
@@ -91,17 +93,17 @@ one). Export `KUBESPIN_REGISTRY_REGION` to drop the first.
 ```bash
 # Fleet-wide: bootstrap once, then operate across every cluster
 make lambda
-./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
-./bin/kubespin fleet status --registry-region us-east-1
-./bin/kubespin fleet update --component argo-cd --version 2.11.0 \
+kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+kubespin fleet status --registry-region us-east-1
+kubespin fleet update --component argo-cd --version 2.11.0 \
   --github-org "$GITHUB_ORG" --registry-region us-east-1
-./bin/kubespin fleet audit \
+kubespin fleet audit \
   --github-org "$GITHUB_ORG" --registry-region us-east-1
 ```
 
 ```bash
 # Tear down
-./bin/kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
+kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
   --profile tier-small@1.0.0 \
   --github-org "$GITHUB_ORG" --registry-region us-east-1 --yes
 ```
@@ -142,7 +144,7 @@ make lambda
 ```
 
 ```bash
-./bin/kubespin fleet bootstrap --account-id <id> --registry-region <region> --dry-run
+kubespin fleet bootstrap --account-id <id> --registry-region <region> --dry-run
 ```
 
 Drop `--dry-run` to apply. Re-running is safe and expected: every resource is

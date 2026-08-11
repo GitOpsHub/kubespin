@@ -34,7 +34,7 @@ disk, bootstrapping needs a repository checkout, not just the `kubespin` binary.
 
 Derived from the calls the converge engine actually makes — every one is
 declared in the narrow interfaces in
-[internal/fleetinfra/clients.go](../internal/fleetinfra/clients.go), so this list
+[internal/fleetinfra/clients.go](https://github.com/GitOpsHub/kubespin/blob/main/internal/fleetinfra/clients.go), so this list
 and the code cannot silently diverge.
 
 ```json
@@ -131,7 +131,7 @@ Six resources, converged in dependency order:
 | **Fleet Registry table** | DynamoDB, on-demand billing. Partition key `ClusterID`. `ProviderPhaseIndex` GSI on `Provider`+`Phase`, projecting all. Encryption at rest, point-in-time recovery, and deletion protection all on. |
 | **Log groups** | `/aws/lambda/<prefix>-ingestion` and `/aws/apigateway/<prefix>-ingestion`, created explicitly so retention can be set — an implicitly created group retains forever. |
 | **Ingestion role** | Lambda execution role with an inline policy scoped to `GetItem`/`UpdateItem` on the registry table and writes to its own log group. No `Scan`, no `Delete`, no other table. |
-| **Ingestion function** | `provided.al2023` on arm64, 256 MB, 10 s timeout. Runs the real handler ([cmd/ingestion](../cmd/ingestion)): it verifies the caller's workload identity token against the OIDC issuer recorded for that `{clusterId}`, then writes the push to the registry. |
+| **Ingestion function** | `provided.al2023` on arm64, 256 MB, 10 s timeout. Runs the real handler ([cmd/ingestion](https://github.com/GitOpsHub/kubespin/tree/main/cmd/ingestion)): it verifies the caller's workload identity token against the OIDC issuer recorded for that `{clusterId}`, then writes the push to the registry. |
 | **Ingestion API** | HTTP API with one route: `POST /v1/clusters/{clusterId}/status`, Lambda proxy integration, auto-deploying `$default` stage with throttling and access logs. |
 | **Invoke permission** | Allows `apigateway.amazonaws.com` to invoke the function, scoped to this one API. |
 
@@ -150,19 +150,19 @@ Always start with a dry run. It performs no mutating calls at all — the test
 suite asserts this, not just the documentation.
 
 ```bash
-./bin/kubespin fleet bootstrap --account-id <id> --registry-region <region> --dry-run
+kubespin fleet bootstrap --account-id <id> --registry-region <region> --dry-run
 ```
 
 On a clean account, every resource reports `create`. Apply it:
 
 ```bash
-./bin/kubespin fleet bootstrap --account-id <id> --registry-region <region>
+kubespin fleet bootstrap --account-id <id> --registry-region <region>
 ```
 
 Then **run the dry run again**. This is the acceptance check, not a formality:
 
 ```bash
-./bin/kubespin fleet bootstrap --account-id <id> --registry-region <region> --dry-run
+kubespin fleet bootstrap --account-id <id> --registry-region <region> --dry-run
 ```
 
 Every resource must report `in sync`. Since there is no state file, a clean

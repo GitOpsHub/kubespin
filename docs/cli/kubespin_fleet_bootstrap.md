@@ -1,8 +1,8 @@
-## kubespin fleet bootstrap
+# kubespin fleet bootstrap
 
 Provision the shared fleet infrastructure in the fleet account
 
-### Synopsis
+## Synopsis
 
 bootstrap creates the Fleet Registry table and the Central Ingestion API,
 converging live infrastructure toward the desired state.
@@ -14,29 +14,29 @@ This provisions shared platform infrastructure and must be run against a
 dedicated fleet account that hosts no clusters. The caller's real account is
 checked against --account-id before anything is created.
 
-```
+```text
 kubespin fleet bootstrap [flags]
 ```
 
-### Examples
+## Examples
 
-```
+```bash
   # Build the ingestion handler first: it is read from disk, not embedded
   make lambda
 
   # Preview what bootstrap would create
-  ./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
+  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
 
   # Provision it for real
-  ./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
 
   # Re-running is safe; a converged fleet reports no changes
-  ./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
+  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
 ```
 
-### Options
+## Options
 
-```
+```text
       --account-id string          AWS account ID hosting fleet infrastructure (required)
   -h, --help                       help for bootstrap
       --lambda-binary string       compiled ingestion handler to deploy (default "bin/ingestion/bootstrap")
@@ -46,9 +46,9 @@ kubespin fleet bootstrap [flags]
       --throttle-rate float        ingestion API steady-state request rate (default 50)
 ```
 
-### Options inherited from parent commands
+## Options inherited from parent commands
 
-```
+```text
       --config string            path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
       --dry-run                  resolve and report intended changes without performing them
       --log-format string        log output format: text or json (default "text")
@@ -57,7 +57,7 @@ kubespin fleet bootstrap [flags]
       --registry-table string    DynamoDB table backing the Fleet Registry (default "kubespin-fleet-registry")
 ```
 
-### SEE ALSO
+## See also
 
-* [kubespin fleet](kubespin_fleet.md)	 - Operate on the whole fleet rather than a single cluster
+* [kubespin fleet](kubespin_fleet.md) - Operate on the whole fleet rather than a single cluster
 

@@ -21,11 +21,11 @@ func newFleetCommand() *cobra.Command {
 		Use:   "fleet",
 		Short: "Operate on the whole fleet rather than a single cluster",
 		Example: `  # The typical fleet lifecycle, in order
-  ./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
-  ./bin/kubespin fleet status --registry-region us-east-1
-  ./bin/kubespin fleet update --component argo-cd --version 2.11.0 \
+  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+  kubespin fleet status --registry-region us-east-1
+  kubespin fleet update --component argo-cd --version 2.11.0 \
     --github-org GitOpsHub --registry-region us-east-1
-  ./bin/kubespin fleet audit --github-org GitOpsHub --registry-region us-east-1`,
+  kubespin fleet audit --github-org GitOpsHub --registry-region us-east-1`,
 		Args: cobra.NoArgs,
 		// With no subcommand, print help rather than failing.
 		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
@@ -66,15 +66,15 @@ matching cluster's repository. A cluster already at the target version
 reports "already up to date" and commits nothing, so re-running a partially
 failed wave is safe.`,
 		Example: `  # Roll a new Argo CD version across every cluster, 8 at a time
-  ./bin/kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8 \
+  kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8 \
     --github-org GitOpsHub --registry-region us-east-1
 
   # Canary the first 3 clusters before rolling to the rest of the fleet
-  ./bin/kubespin fleet update --component cert-manager --version 1.15.1 \
+  kubespin fleet update --component cert-manager --version 1.15.1 \
     --canary-count 3 --github-org GitOpsHub --registry-region us-east-1
 
   # Scope the wave to one tier and one cloud
-  ./bin/kubespin fleet update --component cert-manager --version 1.15.1 \
+  kubespin fleet update --component cert-manager --version 1.15.1 \
     --profile tier-standard@1.0.0 --provider aws \
     --github-org GitOpsHub --registry-region us-east-1`,
 		Args: cobra.NoArgs,
@@ -190,14 +190,14 @@ clean result) are persisted to the Fleet Registry, so 'fleet status' and
 other fleet-wide tooling can read the most recent audit result without
 re-running one.`,
 		Example: `  # Audit every cluster in the fleet
-  ./bin/kubespin fleet audit --github-org GitOpsHub --registry-region us-east-1
+  kubespin fleet audit --github-org GitOpsHub --registry-region us-east-1
 
   # Audit only AWS clusters, with more concurrency
-  ./bin/kubespin fleet audit --provider aws --concurrency 8 \
+  kubespin fleet audit --provider aws --concurrency 8 \
     --github-org GitOpsHub --registry-region us-east-1
 
   # A fleet with GCP or Azure clusters needs their project/subscription too
-  ./bin/kubespin fleet audit --gcp-project my-gcp-project \
+  kubespin fleet audit --gcp-project my-gcp-project \
     --azure-subscription <subscription-id> \
     --github-org GitOpsHub --registry-region us-east-1`,
 		Args: cobra.NoArgs,
@@ -299,14 +299,14 @@ func newFleetStatusCommand() *cobra.Command {
 fleet-status-reporter pushing outward. It never connects to a cluster, so a
 cluster that is unreachable shows as stale rather than blocking the command.`,
 		Example: `  # Every cluster, as a table
-  ./bin/kubespin fleet status --registry-region us-east-1
+  kubespin fleet status --registry-region us-east-1
 
   # Only clusters that have missed their reporting window
-  ./bin/kubespin fleet status --stale-only --stale-threshold 30m \
+  kubespin fleet status --stale-only --stale-threshold 30m \
     --registry-region us-east-1
 
   # Machine-readable output, restricted to one phase
-  ./bin/kubespin fleet status --phase ready --output json \
+  kubespin fleet status --phase ready --output json \
     --registry-region us-east-1`,
 		Args: cobra.NoArgs,
 		RunE: runFleetStatus,

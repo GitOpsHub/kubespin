@@ -1,8 +1,8 @@
-## kubespin fleet audit
+# kubespin fleet audit
 
 Diff live cloud infrastructure against each cluster's desired state
 
-### Synopsis
+## Synopsis
 
 audit describes live infrastructure through each cloud's SDK, diffs it against
 the cluster.yaml in that cluster's repository, and reports findings. It
@@ -14,29 +14,29 @@ clean result) are persisted to the Fleet Registry, so 'fleet status' and
 other fleet-wide tooling can read the most recent audit result without
 re-running one.
 
-```
+```text
 kubespin fleet audit [flags]
 ```
 
-### Examples
+## Examples
 
-```
+```bash
   # Audit every cluster in the fleet
-  ./bin/kubespin fleet audit --github-org GitOpsHub --registry-region us-east-1
+  kubespin fleet audit --github-org GitOpsHub --registry-region us-east-1
 
   # Audit only AWS clusters, with more concurrency
-  ./bin/kubespin fleet audit --provider aws --concurrency 8 \
+  kubespin fleet audit --provider aws --concurrency 8 \
     --github-org GitOpsHub --registry-region us-east-1
 
   # A fleet with GCP or Azure clusters needs their project/subscription too
-  ./bin/kubespin fleet audit --gcp-project my-gcp-project \
+  kubespin fleet audit --gcp-project my-gcp-project \
     --azure-subscription <subscription-id> \
     --github-org GitOpsHub --registry-region us-east-1
 ```
 
-### Options
+## Options
 
-```
+```text
       --azure-subscription string   Azure subscription hosting any Azure clusters in the fleet
       --concurrency int             maximum concurrent cluster audits (default 4)
       --gcp-project string          GCP project hosting any GCP clusters in the fleet
@@ -47,9 +47,9 @@ kubespin fleet audit [flags]
       --provider string             restrict to one cloud provider
 ```
 
-### Options inherited from parent commands
+## Options inherited from parent commands
 
-```
+```text
       --config string            path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
       --dry-run                  resolve and report intended changes without performing them
       --log-format string        log output format: text or json (default "text")
@@ -58,7 +58,7 @@ kubespin fleet audit [flags]
       --registry-table string    DynamoDB table backing the Fleet Registry (default "kubespin-fleet-registry")
 ```
 
-### SEE ALSO
+## See also
 
-* [kubespin fleet](kubespin_fleet.md)	 - Operate on the whole fleet rather than a single cluster
+* [kubespin fleet](kubespin_fleet.md) - Operate on the whole fleet rather than a single cluster
 

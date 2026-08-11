@@ -1,8 +1,10 @@
 site_name: kubespin
 site_description: Provision and manage Kubernetes clusters across EKS, GKE, and AKS
+site_url: https://gitopshub.github.io/kubespin/
 repo_url: https://github.com/GitOpsHub/kubespin
 repo_name: GitOpsHub/kubespin
 edit_uri: edit/main/docs/
+copyright: Outbound-only by design — nothing ever reaches inbound into a cluster.
 docs_dir: docs
 site_dir: site
 exclude_docs: |
@@ -10,16 +12,21 @@ exclude_docs: |
 
 theme:
   name: material
+  icon:
+    logo: material/kubernetes
+    repo: fontawesome/brands/github
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
       primary: indigo
+      accent: indigo
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
       primary: indigo
+      accent: indigo
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
@@ -27,33 +34,57 @@ theme:
     - navigation.instant
     - navigation.tracking
     - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
     - navigation.top
     - navigation.indexes
+    - navigation.footer
     - content.code.copy
     - content.action.edit
     - toc.follow
     - search.suggest
+    - search.highlight
+    - search.share
 
 markdown_extensions:
   - admonition
+  - attr_list
+  - def_list
+  - md_in_html
   - tables
   - toc:
       permalink: true
-  - pymdownx.highlight
-  - pymdownx.superfences
+      title: On this page
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      pygments_lang_class: true
   - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
 
 plugins:
   - search
 
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/GitOpsHub/kubespin
+      name: kubespin on GitHub
+
+# Grouped rather than flat: as one tab per page this had eight top-level
+# entries with no relationship between them. The split is by what the reader
+# is doing — understanding the system, operating it, looking up a flag, or
+# working on the code itself.
 nav:
   - Home: README.md
   - Architecture: architecture.md
-  - Examples: examples.md
-  - Fleet bootstrap: fleet-bootstrap.md
-  - Runbook: runbook.md
-  - Development: development.md
-  - CI/CD Azure OIDC: cicd-azure-oidc.md
+  - Guides:
+      - Examples: examples.md
+      - Fleet bootstrap: fleet-bootstrap.md
+      - On-call runbook: runbook.md
+      - CI/CD with Azure OIDC: cicd-azure-oidc.md
   - CLI reference:
       - Overview: cli/kubespin.md
       - apply: cli/kubespin_apply.md
@@ -67,3 +98,4 @@ nav:
       - login: cli/kubespin_login.md
       - logout: cli/kubespin_logout.md
       - status: cli/kubespin_status.md
+  - Development: development.md

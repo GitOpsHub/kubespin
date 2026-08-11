@@ -1,8 +1,8 @@
 # CI/CD: deploying AKS via GitHub Actions OIDC
 
-[.github/workflows/deploy-aks.yml](../.github/workflows/deploy-aks.yml) builds
+[.github/workflows/deploy-aks.yml](https://github.com/GitOpsHub/kubespin/blob/main/.github/workflows/deploy-aks.yml) builds
 the binary with `make build` and runs
-`./bin/kubespin apply --provider azure` from a manually dispatched GitHub
+`kubespin apply --provider azure` from a manually dispatched GitHub
 Actions run, authenticating to both clouds it touches with short-lived OIDC
 tokens — no long-lived cloud secrets stored in GitHub at all:
 
@@ -135,8 +135,8 @@ Actions → **Deploy AKS cluster** → Run workflow, fill in `cluster-id`,
 `region`, `access`, `profile`, `kubernetes-version`. Leave `dry-run` checked
 for the first run against any new `cluster-id` — it reports the phase apply
 would resume from without touching either cloud, same as
-`./bin/kubespin apply --dry-run` locally (see
-[reportPlan](../internal/cli/apply.go)).
+`kubespin apply --dry-run` locally (see
+[reportPlan](https://github.com/GitOpsHub/kubespin/blob/main/internal/cli/apply.go)).
 
 Uncheck `dry-run` once the plan looks right. The `deploy-aks-<cluster-id>`
 concurrency group serializes runs per cluster so two dispatches against the

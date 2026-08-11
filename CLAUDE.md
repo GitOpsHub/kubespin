@@ -17,6 +17,8 @@ make docs                     # regenerates docs/cli/*.md from the command tree;
 
 `make bootstrap` installs `golangci-lint` if it isn't already on PATH. `make lambda` cross-compiles the ingestion handler alone (`GOOS=linux GOARCH=arm64`, required before `kubespin fleet bootstrap` — see [docs/fleet-bootstrap.md](docs/fleet-bootstrap.md)).
 
+`make build` also copies the binary onto PATH (`make install`, `INSTALL_DIR` defaulting to `~/.local/bin`), so examples below that call `kubespin` directly work without a `./bin/` prefix. It is skipped when `CI` is set, so runners still build without writing outside the repo tree.
+
 ## What is being built
 
 A Go CLI (cobra + viper) that provisions and manages Kubernetes clusters across EKS, GKE, and AKS, in both private and public access modes. Each cluster gets its own GitHub repo and its own **local** Argo CD instance that syncs from that repo — there is no central Argo CD hub and **no inbound network access to any cluster**. State flows the other direction: an in-cluster `fleet-status-reporter` CronJob pushes signed status to a central ingestion API.

@@ -30,13 +30,13 @@ checked against --account-id before anything is created.`,
   make lambda
 
   # Preview what bootstrap would create
-  ./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
+  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run
 
   # Provision it for real
-  ./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
+  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1
 
   # Re-running is safe; a converged fleet reports no changes
-  ./bin/kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run`,
+  kubespin fleet bootstrap --account-id 111122223333 --registry-region us-east-1 --dry-run`,
 		Args: cobra.NoArgs,
 		RunE: runFleetBootstrap,
 	}

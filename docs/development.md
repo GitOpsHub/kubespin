@@ -17,13 +17,19 @@ make
 
 | Target | What it does |
 |---|---|
-| `make build` | Builds `bin/kubespin`, and `bin/ingestion/bootstrap` as a dependency |
+| `make build` | Builds `bin/kubespin` (plus `bin/ingestion/bootstrap`), then installs it onto `PATH` |
+| `make install` | Copies an already-built `bin/kubespin` to `INSTALL_DIR` |
 | `make lambda` | Builds only the ingestion handler: Linux arm64, static |
 | `make test` | Unit tests with `-race -cover` |
 | `make integration` | Adds `-tags=integration`; needs credentials or DynamoDB Local |
 | `make lint` | `golangci-lint run` |
 | `make docs` | Regenerates `docs/cli` from the command tree |
 | `make fmt` | `go fmt` plus `go mod tidy` |
+
+`INSTALL_DIR` defaults to `~/.local/bin`, which is on `PATH` on macOS and
+writable without `sudo`. Point it elsewhere with
+`make build INSTALL_DIR=/usr/local/bin`. The install step is skipped when `CI`
+is set, so a build on a runner never writes outside the repository.
 
 ## Layout
 
@@ -68,7 +74,7 @@ wrapped with context.
 
 Validation functions return **all** problems at once via `errors.Join`. Fixing a
 spec one error per run is miserable; see `ClusterSpec.Validate` in
-[internal/core/cluster.go](../internal/core/cluster.go).
+[internal/core/cluster.go](https://github.com/GitOpsHub/kubespin/blob/main/internal/core/cluster.go).
 
 ## Testing
 
@@ -114,7 +120,7 @@ under test. A sequential simulation of this would pass against a broken lock.
 
 ### Testing against AWS
 
-[internal/fleetinfra/fake_test.go](../internal/fleetinfra/fake_test.go) holds
+[internal/fleetinfra/fake_test.go](https://github.com/GitOpsHub/kubespin/blob/main/internal/fleetinfra/fake_test.go) holds
 `fakeAWS`, an in-memory stand-in implementing all six service interfaces. It
 records every call by name, which lets tests assert *which calls were made*, not
 just the resulting state. Two helpers matter:
@@ -148,7 +154,7 @@ type step interface {
 ```
 
 1. **Add only the calls you need** to the relevant narrow interface in
-   [clients.go](../internal/fleetinfra/clients.go). These interfaces double as
+   [clients.go](https://github.com/GitOpsHub/kubespin/blob/main/internal/fleetinfra/clients.go). These interfaces double as
    the documented permission set for operators, so an unused method there is a
    permission someone will grant for no reason.
 2. **Keep `Plan` strictly read-only.** It is what `--dry-run` executes. Store
@@ -187,8 +193,8 @@ requires, spelled out. `apply` and `delete` validate a whole `ClusterSpec`,
 which means an example missing `--profile` fails before doing anything; every
 registry-touching command needs `--registry-region`, which has no default;
 and every repository-touching command needs `--github-org`. Examples are
-written as `./bin/kubespin` — the path `make build` produces — so they can be
-pasted straight into a checkout.
+written as plain `kubespin`, which `make build` puts on your `PATH`, so they
+can be pasted straight into a terminal from any directory.
 
 `cmd/kubespin/main.go` exits `1` on any error from `Execute` and `0`
 otherwise; there are no other exit codes.

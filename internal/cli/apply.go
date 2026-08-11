@@ -55,27 +55,27 @@ images are pulled. An Argo CD that never becomes ready — pods that cannot be
 scheduled or cannot pull — fails the step there rather than looking like
 addons that silently never sync.`,
 		Example: `  # AWS, private API server, default node pool
-  ./bin/kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
+  kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
     --access private --profile tier-small@1.0.0 \
     --github-org GitOpsHub --registry-region us-east-1
 
   # GCP, public API server, larger node pool — authorized-cidrs is required on GCP
   # for the operator's own machine to reach the endpoint and install Argo CD
-  ./bin/kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
+  kubespin apply --provider gcp --gcp-project my-gcp-project --region us-central1 \
     --cluster-id demo-gcp --access public --authorized-cidrs 203.0.113.4/32 \
     --profile tier-small@1.0.0 \
     --instance-type e2-standard-4 --desired-size 3 \
     --github-org GitOpsHub --registry-region us-east-1
 
   # Azure, resolving addons from a platform-profiles repo instead of the builtin catalog
-  ./bin/kubespin apply --provider azure --azure-subscription <subscription-id> --region eastus \
+  kubespin apply --provider azure --azure-subscription <subscription-id> --region eastus \
     --cluster-id demo-azure --access private --profile tier-standard@1.0.0 \
     --instance-type Standard_D4s_v7 \
     --profiles-repo platform-profiles \
     --github-org GitOpsHub --registry-region us-east-1
 
   # Preview what apply would do without touching any cloud
-  ./bin/kubespin apply --spec ./cluster.yaml --registry-region us-east-1 --dry-run`,
+  kubespin apply --spec ./cluster.yaml --registry-region us-east-1 --dry-run`,
 		Args: cobra.NoArgs,
 		RunE: runApply,
 	}
@@ -400,16 +400,16 @@ delete does not honour the global --dry-run flag: passing it does not make
 this command a preview. Use --yes to skip the confirmation prompt only when
 you mean it.`,
 		Example: `  # AWS, prompts to type the cluster ID to confirm
-  ./bin/kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
+  kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
     --profile tier-small@1.0.0 --github-org GitOpsHub --registry-region us-east-1
 
   # GCP, scripted (no interactive confirmation)
-  ./bin/kubespin delete --provider gcp --gcp-project my-gcp-project --region us-central1 \
+  kubespin delete --provider gcp --gcp-project my-gcp-project --region us-central1 \
     --cluster-id demo-gcp --profile tier-small@1.0.0 \
     --github-org GitOpsHub --registry-region us-east-1 --yes
 
   # Using the same cluster.yaml apply was run with
-  ./bin/kubespin delete --spec ./cluster.yaml \
+  kubespin delete --spec ./cluster.yaml \
     --github-org GitOpsHub --registry-region us-east-1 --yes`,
 		Args: cobra.NoArgs,
 		RunE: runDelete,

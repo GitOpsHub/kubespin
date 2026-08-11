@@ -18,18 +18,19 @@ is no central Argo CD hub, and nothing ever reaches inbound into a cluster.
 The CLI reference is generated from the command tree by `make docs`. Do not edit
 it by hand — CI regenerates it and fails on any difference.
 
-Commands throughout these docs are written as `./bin/kubespin`, the path
-`make build` produces, and every example carries the flags that command
-actually requires — they are meant to run as written from a checkout. The
-`kubespin <command> [flags]` line in the generated reference is cobra's usage
-synopsis, not a runnable command.
+Commands throughout these docs are written as plain `kubespin`, which is what
+`make build` installs onto your `PATH` (see [Development](development.md)).
+Every example carries the flags that command actually requires, and a test
+parses each one against the real command tree — they are meant to run as
+written. The `kubespin <command> [flags]` line at the top of each reference
+page is cobra's usage synopsis, not a runnable command.
 
 ## Where the project is
 
 **Every command is implemented: `apply`, `delete`, and every `fleet`
 subcommand (`bootstrap`, `update`, `audit`, `status`).** Nothing left in the
 CLI is a stub. What that means, and does not mean, varies by milestone —
-see [IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md](../IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md)
+see [IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md](https://github.com/GitOpsHub/kubespin/blob/main/IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md)
 for the acceptance criteria each milestone is actually gated on, milestone by
 milestone. In short:
 
@@ -41,7 +42,7 @@ milestone. In short:
   explicitly wherever it applies.
 - **M5 (Argo CD bootstrap) is partial.** App-of-apps manifest rendering and
   ingress access-mode templating are done and wired in
-  ([internal/argocd](../internal/argocd)). The actual Helm-as-library
+  ([internal/argocd](https://github.com/GitOpsHub/kubespin/tree/main/internal/argocd)). The actual Helm-as-library
   install is not: an early attempt pulled in Helm's full transitive
   dependency tree (~450 lines of new `go.sum` — OCI registry, Prometheus,
   Redis, SQL drivers) for code with no caller yet, since minting a
@@ -53,15 +54,15 @@ milestone. In short:
   denies what it's supposed to, whether Velero actually restores a PVC —
   those need a live cluster with those addons running, same as M5.
 - **M10's load test and runbook are done**
-  ([internal/fleet/loadtest_test.go](../internal/fleet/loadtest_test.go),
+  ([internal/fleet/loadtest_test.go](https://github.com/GitOpsHub/kubespin/blob/main/internal/fleet/loadtest_test.go),
   [runbook.md](runbook.md)); pilot team onboarding is an organizational
   rollout step, not something to build.
 
-See [internal/core](../internal/core) for the shared domain types,
-[internal/registry](../internal/registry) for the Fleet Registry client and
-lease, [internal/orchestrator](../internal/orchestrator) for the per-cluster
+See [internal/core](https://github.com/GitOpsHub/kubespin/tree/main/internal/core) for the shared domain types,
+[internal/registry](https://github.com/GitOpsHub/kubespin/tree/main/internal/registry) for the Fleet Registry client and
+lease, [internal/orchestrator](https://github.com/GitOpsHub/kubespin/tree/main/internal/orchestrator) for the per-cluster
 phase state machine `apply` walks and the reverse teardown `delete` walks,
-and [internal/fleet](../internal/fleet) for the fleet-wide operations
+and [internal/fleet](https://github.com/GitOpsHub/kubespin/tree/main/internal/fleet) for the fleet-wide operations
 (`audit`/`update`/`status`) that fan out across it.
 
 ## Open questions

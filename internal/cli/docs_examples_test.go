@@ -14,17 +14,19 @@ import (
 // before making a single cloud call.
 //
 // This walks every prose document and every generated reference page,
-// extracts each ./bin/kubespin invocation, and asserts it gets far enough to
-// be a real attempt: the subcommand resolves, every flag exists, and — for
-// apply and delete, which validate a whole ClusterSpec up front — the spec
-// the flags describe is valid.
+// extracts each kubespin invocation, and asserts it gets far enough to be a
+// real attempt: the subcommand resolves, every flag exists, and — for apply
+// and delete, which validate a whole ClusterSpec up front — the spec the
+// flags describe is valid.
 //
 // It deliberately stops short of running anything. What it cannot catch is a
 // missing credential or a wrong region; what it does catch is the whole class
 // of "this example was never valid" errors.
 
-// docPrompt is the prefix every documented invocation carries.
-const docPrompt = "./bin/kubespin"
+// docPrompt is the prefix every documented invocation carries. It is the bare
+// binary name because that is how the docs present commands — kubespin is
+// installed onto PATH by `make build`.
+const docPrompt = "kubespin"
 
 func TestDocumentedExamplesAreRunnable(t *testing.T) {
 	root := repoRoot(t)
@@ -65,9 +67,10 @@ func TestDocumentedExamplesAreRunnable(t *testing.T) {
 type invocation struct {
 	args []string
 
-	// flagsOnly marks an example carrying a placeholder the reader has to
-	// substitute ("$GITHUB_ORG", "<subscription-id>"). Flag names are still
-	// worth checking; the values are not ours to validate.
+	// flagsOnly marks a line carrying a placeholder the reader has to
+	// substitute ("$GITHUB_ORG", "<subscription-id>", or cobra's "[flags]").
+	// Flag names are still worth checking; the values are not ours to
+	// validate, and a synopsis describes no values at all.
 	flagsOnly bool
 }
 
@@ -82,7 +85,7 @@ func assertInvocationParses(t *testing.T, inv invocation) {
 		t.Fatalf("resolving subcommand: %v", err)
 	}
 	if cmd == root {
-		return // bare `./bin/kubespin`, or a global-flag-only line
+		return // bare `kubespin`, or a global-flag-only line
 	}
 
 	if err := cmd.ParseFlags(remaining); err != nil {
@@ -110,24 +113,62 @@ func assertInvocationParses(t *testing.T, inv invocation) {
 	}
 }
 
-// commandLine matches a documented invocation and everything after it,
-// including backslash-continued lines.
-var commandLine = regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(docPrompt) + `((?:[^\n\\]|\\\n)*)`)
+// fence matches the start or end of a fenced code block.
+var fence = regexp.MustCompile("^\\s*```")
 
-// extractInvocations pulls every ./bin/kubespin invocation out of a document,
+// extractInvocations pulls every kubespin invocation out of a document,
 // joining continuation lines and substituting reader-supplied placeholders so
 // the flag names around them can still be checked.
+//
+// Only fenced code blocks are searched. Now that commands are written as the
+// bare binary name, prose is full of sentences that begin with it ("kubespin
+// apply is idempotent and resumable"), and treating those as command lines
+// would fail on the following word as a stray positional argument. A code
+// fence is the thing that actually distinguishes "this is a command" from
+// "this is a sentence about a command".
 func extractInvocations(doc string) []invocation {
 	var out []invocation
 
-	for _, match := range commandLine.FindAllStringSubmatch(doc, -1) {
-		line := strings.ReplaceAll(match[1], "\\\n", " ")
+	lines := strings.Split(doc, "\n")
+	inFence := false
 
-		fields := strings.Fields(line)
+	for i := 0; i < len(lines); i++ {
+		if fence.MatchString(lines[i]) {
+			inFence = !inFence
+			continue
+		}
+		if !inFence {
+			continue
+		}
+
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed != docPrompt && !strings.HasPrefix(trimmed, docPrompt+" ") {
+			continue
+		}
+
+		// Join backslash-continued lines, which is how every multi-flag
+		// example in these documents is wrapped.
+		line := trimmed
+		for strings.HasSuffix(line, `\`) && i+1 < len(lines) {
+			i++
+			line = strings.TrimSuffix(line, `\`) + " " + strings.TrimSpace(lines[i])
+		}
+
+		fields := strings.Fields(strings.TrimPrefix(line, docPrompt))
 		inv := invocation{args: make([]string, 0, len(fields))}
 		for _, f := range fields {
 			// A trailing "2>/dev/null" is shell redirection, not an argument.
 			if strings.HasPrefix(f, "2>") || strings.HasPrefix(f, ">") {
+				break
+			}
+			// "[flags]" and "[command]" come from cobra's usage synopsis on
+			// each generated reference page, which is a shape rather than a
+			// runnable line. The command name in front of them is still worth
+			// resolving, so the line is truncated rather than skipped — but
+			// not held to describing a complete cluster spec, which a
+			// synopsis by definition does not.
+			if strings.HasPrefix(f, "[") {
+				inv.flagsOnly = true
 				break
 			}
 
