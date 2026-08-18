@@ -80,6 +80,7 @@ kubespin apply [flags]
   -h, --help                        help for apply
       --ingestion-endpoint string   Central Ingestion API host the cluster must be able to reach
       --instance-type string        instance type for the default node pool (defaults to a cloud-appropriate value per --provider when unset: m6i.large on aws, e2-standard-4 on gcp, Standard_D4s_v7 on azure; --spot picks a smaller cloud-appropriate default instead, see --spot) (default "m6i.large")
+      --kubeconfig string           path to the kubeconfig file to update when --update-kubeconfig is set (defaults to the cloud CLI's own default, typically ~/.kube/config or $KUBECONFIG)
       --kubernetes-version string   Kubernetes minor version, e.g. 1.34
       --max-size int32              maximum size of the default node pool (--spot defaults this lower, see --spot) (default 5)
       --min-size int32              minimum size of the default node pool (--spot defaults this lower, see --spot) (default 1)
@@ -91,6 +92,7 @@ kubespin apply [flags]
       --spot                        one flag for the cheapest dev/learning cluster on any cloud: spot/preemptible instances (AWS/GCP; AKS's default pool must stay on-demand, so this part is a no-op on --provider azure), plus a smaller default --instance-type/--min-size/--max-size/--desired-size/--disk-size sized to still run the tier-small addon set (t3.medium/e2-medium/Standard_B2s, 1/2/1 nodes) — pass any of those flags explicitly to override just that piece. On GCP this also switches to a zonal cluster (eligible for GCP's free zonal-cluster tier) and gives nodes public IPs instead of provisioning Cloud NAT, unless --zone/--gcp-public-nodes override it.
       --subnet-cidr string          address prefix for the subnet kubespin creates when --subnets is omitted (Azure default 10.0.1.0/24, GCP default 10.0.0.0/20)
       --subnets strings             existing subnets to place the cluster in
+      --update-kubeconfig           update the local kubeconfig with a context for this cluster once apply succeeds, by shelling out to aws/gcloud/az (disable with --update-kubeconfig=false) (default true)
       --vnet-cidr string            address space for the VNet kubespin creates when --subnets is omitted (Azure only, default 10.0.0.0/16)
       --vpc-cidr string             address space for the VPC kubespin creates when --subnets is omitted (AWS only, default 10.0.0.0/16)
       --zone string                 GCP zone (e.g. us-central1-a) requesting a zonal GKE cluster instead of the default regional one (GCP only). --spot already sets this; only needed to pick a specific zone, or to go zonal without spot.

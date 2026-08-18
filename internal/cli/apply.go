@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/GitOpsHub/kubespin/internal/argocd"
 	"github.com/GitOpsHub/kubespin/internal/catalog"
 	"github.com/GitOpsHub/kubespin/internal/core"
+	"github.com/GitOpsHub/kubespin/internal/kubeconfig"
 	"github.com/GitOpsHub/kubespin/internal/orchestrator"
 	"github.com/GitOpsHub/kubespin/internal/provisioner"
 	awsprov "github.com/GitOpsHub/kubespin/internal/provisioner/aws"
@@ -110,6 +112,9 @@ addons that silently never sync.`,
 	fs.String("zone", "", "GCP zone (e.g. us-central1-a) requesting a zonal GKE cluster instead of the default regional one (GCP only). --spot already sets this; only needed to pick a specific zone, or to go zonal without spot.")
 	fs.Bool("gcp-public-nodes", false, "give GKE nodes public IPs instead of provisioning a Cloud Router + Cloud NAT for them (GCP only). --spot already enables this; only needed to use it without spot.")
 
+	fs.Bool("update-kubeconfig", true, "update the local kubeconfig with a context for this cluster once apply succeeds, by shelling out to aws/gcloud/az (disable with --update-kubeconfig=false)")
+	fs.String("kubeconfig", "", "path to the kubeconfig file to update when --update-kubeconfig is set (defaults to the cloud CLI's own default, typically ~/.kube/config or $KUBECONFIG)")
+
 	return cmd
 }
 
@@ -176,7 +181,80 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	}
 
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "cluster %s is %s\n", rec.ClusterID, rec.Phase)
+
+	var kubeContext string
+	if update, err := cmd.Flags().GetBool("update-kubeconfig"); err != nil {
+		return fmt.Errorf("reading --update-kubeconfig: %w", err)
+	} else if update {
+		kubeContext = updateLocalKubeconfig(ctx, cmd, logger, spec)
+	}
+
+	printAccessSummary(cmd, spec, kubeContext)
+
 	return nil
+}
+
+// updateLocalKubeconfig adds or refreshes a kubeconfig context for spec's
+// cluster once apply has reached phase ready, returning the context name it
+// wrote (empty on failure). It is best-effort: the cluster is already fully
+// provisioned at this point, so a local kubeconfig hiccup (CLI missing,
+// stale cached auth) is logged as a warning rather than failing the overall
+// apply command — the same reasoning as the non-fatal branch protection
+// warning in internal/repo.
+func updateLocalKubeconfig(ctx context.Context, cmd *cobra.Command, logger *slog.Logger, spec core.ClusterSpec) string {
+	path, _ := cmd.Flags().GetString("kubeconfig")
+	gcpProject, _ := cmd.Flags().GetString("gcp-project")
+	azureSub, _ := cmd.Flags().GetString("azure-subscription")
+
+	contextName, err := kubeconfig.Update(ctx, spec, kubeconfig.Options{
+		Path:              path,
+		GCPProject:        gcpProject,
+		AzureSubscription: azureSub,
+	})
+	if err != nil {
+		logger.Warn("could not update local kubeconfig", "cluster", spec.ID, "error", err)
+		return ""
+	}
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "updated kubeconfig context for %s\n", spec.ID)
+	return contextName
+}
+
+// printAccessSummary prints how to reach the cluster and its local Argo CD
+// once apply succeeds: the kubectl context, and the port-forward + admin
+// credential commands for Argo CD's UI, which is deliberately never exposed
+// beyond ClusterIP by kubespin's install (see internal/argocd) — nothing
+// reaches into a cluster on this architecture, including from the operator's
+// browser, so port-forward is the only path regardless of --access.
+func printAccessSummary(cmd *cobra.Command, spec core.ClusterSpec, kubeContext string) {
+	out := cmd.OutOrStdout()
+
+	_, _ = fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out, "Connect to the cluster:")
+	if kubeContext != "" {
+		_, _ = fmt.Fprintf(out, "  kubectl config use-context %s\n", kubeContext)
+	}
+	_, _ = fmt.Fprintln(out, "  kubectl get nodes")
+
+	_, _ = fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out, "Argo CD (ClusterIP only; reach it via port-forward):")
+	_, _ = fmt.Fprintf(out, "  kubectl -n %s port-forward svc/argocd-server 8080:443\n", argocd.Namespace)
+	_, _ = fmt.Fprintln(out, "  open https://localhost:8080")
+	_, _ = fmt.Fprintln(out, "  username: admin")
+	_, _ = fmt.Fprintf(out,
+		"  password: kubectl -n %s get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo\n",
+		argocd.Namespace)
+
+	if org, _ := cmd.Flags().GetString("github-org"); org != "" {
+		repoName := "kubespin-" + spec.ID.String()
+		_, _ = fmt.Fprintln(out)
+		if baseURL, _ := cmd.Flags().GetString("github-base-url"); baseURL == "" {
+			_, _ = fmt.Fprintf(out, "Cluster repo: https://github.com/%s/%s\n", org, repoName)
+		} else {
+			// A GitHub Enterprise web UI's host is not reliably derivable from
+			// its API base URL, so this stays a slug rather than a guessed link.
+			_, _ = fmt.Fprintf(out, "Cluster repo: %s/%s\n", org, repoName)
+		}
+	}
 }
 
 // reportPlan describes what a run would do without touching any cloud.
