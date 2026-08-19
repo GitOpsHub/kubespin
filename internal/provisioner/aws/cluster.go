@@ -383,63 +383,175 @@ func (p *ClusterProvisioner) createNodeGroup(
 // Describe (provisioner.WaitUntilGone) until the cluster is really gone. A
 // cluster already tearing down is convergence rather than an error, so a
 // retried teardown resumes instead of failing on ResourceInUseException.
+// Delete tears down the cluster and everything Create provisioned around it:
+// node groups, the cluster itself, the clusterRole/nodeRole IAM roles
+// ensureRole created, and the IAM OIDC provider ensureOIDCProvider
+// registered. None of those IAM resources are cleaned up by EKS on its
+// own — DeleteCluster removes only the cluster resource — so skipping this
+// left every deleted cluster's roles and OIDC provider behind indefinitely
+// before this existed.
+//
+// The role/OIDC cleanup at the end runs unconditionally, including on the
+// early-return paths below, so a retried delete against a cluster already
+// deleting (or already gone) from an earlier, interrupted run still reaches
+// it — every call here is independently idempotent (NoSuchEntityException on
+// an already-deleted role or provider is treated as success), so nothing
+// about calling it again is unsafe. The one gap this cannot close: if a
+// cluster finishes deleting entirely between one Delete call and the next,
+// Describe can no longer report its OIDC issuer (EKS does not keep it around
+// once the cluster is gone), so a delete resumed only after that point cannot
+// find the OIDC provider by issuer host and it is left behind — narrow, since
+// deletion takes minutes, but real.
 func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) error {
 	state, err := p.Describe(ctx, spec)
 	if err != nil {
 		return err
 	}
-	if state.Status == provisioner.StatusAbsent || state.Status == provisioner.StatusDeleting {
-		return nil
-	}
 
-	listed, err := p.c.eks.ListNodegroups(ctx, &eks.ListNodegroupsInput{
-		ClusterName: aws.String(names{spec}.cluster()),
-	})
-	if err != nil {
-		var missing *ekstypes.ResourceNotFoundException
-		if errors.As(err, &missing) {
-			return nil // already gone; teardown converges
-		}
-		return fmt.Errorf("listing node groups for %s: %w", spec.ID, err)
-	}
-
-	p.c.logger.Info("deleting node groups before cluster", "cluster", spec.ID, "count", len(listed.Nodegroups))
-
-	// Node groups must go first: EKS refuses to delete a cluster that still has
-	// any attached.
-	for _, name := range listed.Nodegroups {
-		_, err := p.c.eks.DeleteNodegroup(ctx, &eks.DeleteNodegroupInput{
-			ClusterName:   aws.String(names{spec}.cluster()),
-			NodegroupName: aws.String(name),
+	if state.Status != provisioner.StatusAbsent && state.Status != provisioner.StatusDeleting {
+		listed, err := p.c.eks.ListNodegroups(ctx, &eks.ListNodegroupsInput{
+			ClusterName: aws.String(names{spec}.cluster()),
 		})
 		if err != nil {
 			var missing *ekstypes.ResourceNotFoundException
-			if errors.As(err, &missing) {
-				continue
+			if !errors.As(err, &missing) {
+				return fmt.Errorf("listing node groups for %s: %w", spec.ID, err)
 			}
-			return fmt.Errorf("deleting node group %s: %w", name, err)
+		}
+
+		if listed != nil && len(listed.Nodegroups) > 0 {
+			p.c.logger.Info("deleting node groups before cluster", "cluster", spec.ID, "count", len(listed.Nodegroups))
+
+			// Node groups must go first: EKS refuses to delete a cluster that
+			// still has any attached.
+			for _, name := range listed.Nodegroups {
+				_, err := p.c.eks.DeleteNodegroup(ctx, &eks.DeleteNodegroupInput{
+					ClusterName:   aws.String(names{spec}.cluster()),
+					NodegroupName: aws.String(name),
+				})
+				if err != nil {
+					var missing *ekstypes.ResourceNotFoundException
+					if !errors.As(err, &missing) {
+						return fmt.Errorf("deleting node group %s: %w", name, err)
+					}
+				}
+			}
+
+			// DeleteNodegroup only accepts the request — draining and
+			// terminating the nodes takes minutes, and DeleteCluster fails
+			// with ResourceInUseException the whole time. Poll until the last
+			// one is gone rather than racing it.
+			if err := p.waitForNodeGroupsGone(ctx, spec); err != nil {
+				return err
+			}
+		}
+
+		// Nodes are fully terminated by this point, so the instance role they
+		// ran under is no longer needed.
+		if err := p.deleteRole(ctx, names{spec}.nodeRole()); err != nil {
+			return err
+		}
+
+		if _, err := p.c.eks.DeleteCluster(ctx, &eks.DeleteClusterInput{
+			Name: aws.String(names{spec}.cluster()),
+		}); err != nil {
+			var missing *ekstypes.ResourceNotFoundException
+			if !errors.As(err, &missing) {
+				return fmt.Errorf("deleting EKS cluster %s: %w", spec.ID, err)
+			}
+		} else {
+			p.c.logger.Info("requested EKS cluster deletion", "cluster", spec.ID)
 		}
 	}
 
-	// DeleteNodegroup only accepts the request — draining and terminating the
-	// nodes takes minutes, and DeleteCluster fails with ResourceInUseException
-	// the whole time. Poll until the last one is gone rather than racing it.
-	if len(listed.Nodegroups) > 0 {
-		if err := p.waitForNodeGroupsGone(ctx, spec); err != nil {
+	if err := p.deleteRole(ctx, names{spec}.clusterRole()); err != nil {
+		return err
+	}
+	if state.OIDCIssuer != "" {
+		if err := p.deleteOIDCProvider(ctx, state.OIDCIssuer); err != nil {
 			return err
 		}
 	}
+	return nil
+}
 
-	if _, err := p.c.eks.DeleteCluster(ctx, &eks.DeleteClusterInput{
-		Name: aws.String(names{spec}.cluster()),
-	}); err != nil {
-		var missing *ekstypes.ResourceNotFoundException
+// deleteRole detaches every attached policy, then deletes the role. IAM
+// refuses to delete a role that still has policies attached, so an orphaned
+// role would survive teardown if the detach step were skipped — the same
+// reasoning IdentityProvisioner.Deprovision follows for the IRSA role.
+func (p *ClusterProvisioner) deleteRole(ctx context.Context, name string) error {
+	attached, err := p.c.iam.ListAttachedRolePolicies(ctx, &iam.ListAttachedRolePoliciesInput{
+		RoleName: aws.String(name),
+	})
+	if err != nil {
+		var missing *iamtypes.NoSuchEntityException
 		if errors.As(err, &missing) {
 			return nil
 		}
-		return fmt.Errorf("deleting EKS cluster %s: %w", spec.ID, err)
+		return fmt.Errorf("listing policies on %s: %w", name, err)
 	}
-	p.c.logger.Info("requested EKS cluster deletion", "cluster", spec.ID)
+
+	for _, policy := range attached.AttachedPolicies {
+		if _, err := p.c.iam.DetachRolePolicy(ctx, &iam.DetachRolePolicyInput{
+			RoleName:  aws.String(name),
+			PolicyArn: policy.PolicyArn,
+		}); err != nil {
+			return fmt.Errorf("detaching %s from %s: %w", aws.ToString(policy.PolicyArn), name, err)
+		}
+	}
+
+	if _, err := p.c.iam.DeleteRole(ctx, &iam.DeleteRoleInput{RoleName: aws.String(name)}); err != nil {
+		var missing *iamtypes.NoSuchEntityException
+		if errors.As(err, &missing) {
+			return nil
+		}
+		return fmt.Errorf("deleting role %s: %w", name, err)
+	}
+	p.c.logger.Info("deleted IAM role", "role", name)
+	return nil
+}
+
+// deleteOIDCProvider removes the cluster's IAM OIDC provider, found the same
+// way ensureOIDCProvider looked it up: by issuer host, since IAM has no
+// lookup-by-ARN-we-remember (nothing about this package persists the ARN
+// ensureOIDCProvider returned at creation time).
+func (p *ClusterProvisioner) deleteOIDCProvider(ctx context.Context, issuer string) error {
+	host := strings.TrimPrefix(issuer, "https://")
+
+	listed, err := p.c.iam.ListOpenIDConnectProviders(ctx, &iam.ListOpenIDConnectProvidersInput{})
+	if err != nil {
+		return fmt.Errorf("listing OIDC providers: %w", err)
+	}
+
+	for _, entry := range listed.OpenIDConnectProviderList {
+		arn := aws.ToString(entry.Arn)
+
+		got, err := p.c.iam.GetOpenIDConnectProvider(ctx, &iam.GetOpenIDConnectProviderInput{
+			OpenIDConnectProviderArn: aws.String(arn),
+		})
+		if err != nil {
+			var missing *iamtypes.NoSuchEntityException
+			if errors.As(err, &missing) {
+				continue
+			}
+			return fmt.Errorf("describing OIDC provider %s: %w", arn, err)
+		}
+		if aws.ToString(got.Url) != host {
+			continue
+		}
+
+		if _, err := p.c.iam.DeleteOpenIDConnectProvider(ctx, &iam.DeleteOpenIDConnectProviderInput{
+			OpenIDConnectProviderArn: aws.String(arn),
+		}); err != nil {
+			var missing *iamtypes.NoSuchEntityException
+			if errors.As(err, &missing) {
+				return nil
+			}
+			return fmt.Errorf("deleting OIDC provider %s: %w", arn, err)
+		}
+		p.c.logger.Info("deleted OIDC provider", "issuer", issuer)
+		return nil
+	}
 	return nil
 }
 

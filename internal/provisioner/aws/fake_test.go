@@ -328,6 +328,17 @@ func (f *fakeAWS) CreateOpenIDConnectProvider(_ context.Context, in *iam.CreateO
 	return &iam.CreateOpenIDConnectProviderOutput{OpenIDConnectProviderArn: aws.String(arn)}, nil
 }
 
+func (f *fakeAWS) DeleteOpenIDConnectProvider(_ context.Context, in *iam.DeleteOpenIDConnectProviderInput, _ ...func(*iam.Options)) (*iam.DeleteOpenIDConnectProviderOutput, error) {
+	f.record("DeleteOpenIDConnectProvider")
+
+	arn := aws.ToString(in.OpenIDConnectProviderArn)
+	if _, ok := f.oidc[arn]; !ok {
+		return nil, &iamtypes.NoSuchEntityException{}
+	}
+	delete(f.oidc, arn)
+	return &iam.DeleteOpenIDConnectProviderOutput{}, nil
+}
+
 // --- EC2 ---
 
 func (f *fakeAWS) DescribeSecurityGroupRules(context.Context, *ec2.DescribeSecurityGroupRulesInput, ...func(*ec2.Options)) (*ec2.DescribeSecurityGroupRulesOutput, error) {

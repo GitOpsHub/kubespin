@@ -398,12 +398,14 @@ Implements `provisioner.ClusterProvisioner` and (via `kubeauth.go`) `provisioner
 
 ??? note "`Delete(ctx, spec) error`"
 
-    - **Behavior:**
-        - `Describe`s first; a no-op if already `StatusAbsent` or `StatusDeleting`.
-        - Lists node groups and deletes each (`DeleteNodegroup`) — node groups must go first because EKS refuses to delete a cluster with any attached.
-        - Calls `waitForNodeGroupsGone` if any existed, then `eks.DeleteCluster`.
-        - `ResourceNotFoundException` at any step converges rather than erroring, so a retried teardown resumes cleanly.
+    - **Behavior:** tears down everything `Create` provisioned, not just the cluster resource itself — EKS's own `DeleteCluster` removes only the cluster, so nothing else here is cleaned up on its own:
+        - `Describe`s first. If the cluster is not already `StatusAbsent`/`StatusDeleting`: lists node groups and deletes each (`DeleteNodegroup`) — node groups must go first because EKS refuses to delete a cluster with any attached; calls `waitForNodeGroupsGone` if any existed; deletes the `nodeRole` (nodes are fully terminated by this point, so its instance-profile job is done); requests `eks.DeleteCluster`.
+        - Unconditionally, regardless of which branch above ran: deletes the `clusterRole`, then — if `Describe` reported an `OIDCIssuer` — deletes the matching IAM OIDC provider via `deleteOIDCProvider` (found by issuer host, the same lookup `ensureOIDCProvider` uses, since nothing persists the ARN from creation time).
+        - `NoSuchEntityException`/`ResourceNotFoundException` at any step converges rather than erroring, so a retried teardown resumes cleanly — including a retry against a cluster an earlier, interrupted run already left `StatusDeleting`, which still reaches the role/OIDC cleanup rather than short-circuiting past it.
+        - **Known gap:** if a cluster finishes deleting entirely between one `Delete` call and the next, `Describe` can no longer report its OIDC issuer (EKS drops it once the cluster is gone), so a delete resumed only after that point cannot find the OIDC provider by issuer host and leaves it behind. Narrow — deletion takes minutes — but real.
     - `waitForNodeGroupsGone` polls `ListNodegroups` on `p.wait.Interval`/`p.wait.Timeout` (falling back to `provisioner.DefaultWaitOptions()` values if unset) until the list is empty, because `DeleteNodegroup` only accepts the request — draining and terminating nodes takes minutes, and `DeleteCluster` fails with `ResourceInUseException` the whole time.
+    - `deleteRole(ctx, name)` — lists attached policies, detaches each (IAM refuses to delete a role with any still attached), then `DeleteRole`; `NoSuchEntityException` at either step converges.
+    - `deleteOIDCProvider(ctx, issuer)` — `ListOpenIDConnectProviders`, `GetOpenIDConnectProvider`s each to compare its `Url` against the issuer host, and `DeleteOpenIDConnectProvider`s the match; no match found is a no-op, not an error.
 
 ### Role helpers
 
@@ -419,6 +421,7 @@ Implements `provisioner.ClusterProvisioner` and (via `kubeauth.go`) `provisioner
         - `ensureRole` — `GetRole`; if `NoSuchEntityException`, marshals `trust` to JSON and `CreateRole`s it. Either way, calls `attachPolicies` to reconcile the policy set, and returns the role ARN.
         - `attachPolicies` — lists currently attached policies and attaches any from `policies` not already present (never detaches).
         - `eksServiceTrust` — builds a trust policy allowing `sts:AssumeRole` for the given AWS service principal (`eks.amazonaws.com` for the cluster role, `ec2.amazonaws.com` for the node role).
+        - `deleteRole`/`deleteOIDCProvider` (Delete's counterparts) are documented above, under `Delete`.
 
 ### Validation and misc
 

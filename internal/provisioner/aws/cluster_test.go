@@ -3,6 +3,7 @@ package aws
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -426,6 +427,57 @@ func TestDelete(t *testing.T) {
 
 		if err := NewClusterProvisioner(f.clients()).Delete(t.Context(), testSpec()); err != nil {
 			t.Fatalf("Delete on an absent cluster: %v", err)
+		}
+	})
+
+	// Neither EKS's DeleteCluster nor DeleteNodegroup clean up the IAM
+	// resources ensureRole/ensureOIDCProvider created — without this, every
+	// deleted cluster left its clusterRole, nodeRole, and OIDC provider
+	// behind indefinitely.
+	t.Run("deletes the cluster/node IAM roles and the OIDC provider", func(t *testing.T) {
+		f := newFakeAWS()
+		spec := testSpec()
+		f.activeCluster(spec)
+		f.withNodePool(spec, spec.NodePools[0])
+		n := names{spec}
+		f.roles[n.clusterRole()] = "arn:aws:iam::123456789012:role/" + n.clusterRole()
+		f.roles[n.nodeRole()] = "arn:aws:iam::123456789012:role/" + n.nodeRole()
+		f.attached[n.clusterRole()] = []string{"arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"}
+		f.attached[n.nodeRole()] = []string{"arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"}
+		oidcARN := "arn:aws:iam::123456789012:oidc-provider/" + strings.TrimPrefix(testIssuer, "https://")
+		f.oidc[oidcARN] = strings.TrimPrefix(testIssuer, "https://")
+
+		if err := NewClusterProvisioner(f.clients()).Delete(t.Context(), spec); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+
+		if _, ok := f.roles[n.clusterRole()]; ok {
+			t.Error("clusterRole was not deleted")
+		}
+		if _, ok := f.roles[n.nodeRole()]; ok {
+			t.Error("nodeRole was not deleted")
+		}
+		if _, ok := f.oidc[oidcARN]; ok {
+			t.Error("OIDC provider was not deleted")
+		}
+	})
+
+	// A retry against a cluster an earlier, interrupted run left mid-deletion
+	// must still reach the role/OIDC cleanup — it is not gated behind a fresh
+	// DeleteCluster call.
+	t.Run("cleans up roles even when resuming against a cluster already deleting", func(t *testing.T) {
+		f := newFakeAWS()
+		spec := testSpec()
+		f.activeCluster(spec)
+		f.cluster.Status = ekstypes.ClusterStatusDeleting
+		n := names{spec}
+		f.roles[n.clusterRole()] = "arn:aws:iam::123456789012:role/" + n.clusterRole()
+
+		if err := NewClusterProvisioner(f.clients()).Delete(t.Context(), spec); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+		if _, ok := f.roles[n.clusterRole()]; ok {
+			t.Error("clusterRole was not deleted on a resumed delete")
 		}
 	})
 }
