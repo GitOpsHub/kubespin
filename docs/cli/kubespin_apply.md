@@ -42,7 +42,7 @@ kubespin apply [flags]
   # AWS, private API server, default node pool
   kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
     --access private --profile tier-small@1.0.0 \
-    --github-org GitOpsHub --registry-region us-east-1
+    --github-org GitOpsHub
 
   # GCP, public API server, larger node pool — authorized-cidrs is required on GCP
   # for the operator's own machine to reach the endpoint and install Argo CD
@@ -50,17 +50,17 @@ kubespin apply [flags]
     --cluster-id demo-gcp --access public --authorized-cidrs 203.0.113.4/32 \
     --profile tier-small@1.0.0 \
     --instance-type e2-standard-4 --desired-size 3 \
-    --github-org GitOpsHub --registry-region us-east-1
+    --github-org GitOpsHub
 
   # Azure, resolving addons from a platform-profiles repo instead of the builtin catalog
   kubespin apply --provider azure --azure-subscription 3df9adbd-ea55-4c92-964c-0252031979de --region eastus \
     --cluster-id demo-azure --access private --profile tier-standard@1.0.0 \
     --instance-type Standard_D4s_v7 \
     --profiles-repo platform-profiles \
-    --github-org GitOpsHub --registry-region us-east-1
+    --github-org GitOpsHub
 
   # Preview what apply would do without touching any cloud
-  kubespin apply --spec ./cluster.yaml --registry-region us-east-1 --dry-run
+  kubespin apply --spec ./cluster.yaml --dry-run
 ```
 
 ## Options
@@ -101,12 +101,10 @@ kubespin apply [flags]
 ## Options inherited from parent commands
 
 ```text
-      --config string            path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
-      --dry-run                  resolve and report intended changes without performing them
-      --log-format string        log output format: text or json (default "text")
-      --log-level string         log verbosity: debug, info, warn, error (default "info")
-      --registry-region string   AWS region hosting the Fleet Registry
-      --registry-table string    DynamoDB table backing the Fleet Registry (default "kubespin-fleet-registry")
+      --config string       path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
+      --dry-run             resolve and report intended changes without performing them
+      --log-format string   log output format: text or json (default "text")
+      --log-level string    log verbosity: debug, info, warn, error (default "info")
 ```
 
 ## See also

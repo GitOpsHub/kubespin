@@ -1,15 +1,13 @@
 name: Deploy AKS cluster
 
 # Manual, per-cluster deploys only — apply is not something that should fire on
-# every push. Two separate OIDC federations are required because the Fleet
-# Registry is always AWS-hosted DynamoDB (see CLAUDE.md's "outbound-only" /
-# "Fleet Registry is the single source of durable fleet state" invariants),
-# even when the cluster itself is AKS:
-#   - AWS: sts:AssumeRoleWithWebIdentity against the Fleet Registry account
-#   - Azure: federated credential against the subscription that hosts the AKS
-#     cluster and its workload identity
-# Neither role/App Registration is created by this workflow — see
-# docs/cicd-azure-oidc.md for the one-time setup in each tenant.
+# every push. Azure OIDC federation is required against the subscription that
+# hosts the AKS cluster and its workload identity. The Fleet Registry is a
+# Postgres database (KUBESPIN_REGISTRY_DSN), not AWS-hosted, so reaching it
+# needs no cloud OIDC exchange of its own — just the connection string, held
+# as a stored secret like the GitHub repo token below.
+# The Azure App Registration is not created by this workflow — see
+# docs/cicd-azure-oidc.md for the one-time setup in the tenant.
 on:
   workflow_dispatch:
     inputs:
@@ -38,7 +36,7 @@ on:
         type: boolean
 
 permissions:
-  id-token: write # required for both OIDC exchanges below
+  id-token: write # required for the Azure OIDC exchange below
   contents: read
 
 concurrency:
@@ -65,14 +63,6 @@ jobs:
       - name: Build kubespin
         run: make build
 
-      # Grants the Fleet Registry access this run needs: DynamoDB read/write on
-      # the lease and phase records for this cluster-id only, nothing broader.
-      - name: Authenticate to AWS (Fleet Registry)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_FLEET_REGISTRY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_FLEET_REGISTRY_REGION }}
-
       # Grants the AKS/identity/network calls the Azure ClusterProvisioner and
       # IdentityProvisioner make against this subscription.
       - name: Authenticate to Azure (AKS)
@@ -84,7 +74,10 @@ jobs:
 
       - name: kubespin apply
         env:
-          KUBESPIN_REGISTRY_REGION: ${{ vars.AWS_FLEET_REGISTRY_REGION }}
+          # Never a flag — a flag would leak the password into the step's
+          # command line, visible in the run log. KUBESPIN_REGISTRY_DSN is
+          # read from the environment only (see internal/cli/config.go).
+          KUBESPIN_REGISTRY_DSN: ${{ secrets.KUBESPIN_REGISTRY_DSN }}
           CLUSTER_ID: ${{ inputs.cluster-id }}
           REGION: ${{ inputs.region }}
           ACCESS: ${{ inputs.access }}

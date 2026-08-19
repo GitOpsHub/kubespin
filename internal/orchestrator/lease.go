@@ -19,7 +19,7 @@ var ErrLeaseLost = errors.New("lost the cluster lease mid-run")
 
 // leaseRenewalDivisor sets the heartbeat interval as a fraction of the TTL.
 // Renewing three times per TTL leaves room for two consecutive failed
-// renewals — a throttled or briefly unreachable DynamoDB — before the lease
+// renewals — a throttled or briefly unreachable Postgres — before the lease
 // genuinely expires.
 const leaseRenewalDivisor = 3
 

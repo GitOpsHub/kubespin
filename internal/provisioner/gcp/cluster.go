@@ -211,9 +211,59 @@ func authorizedNetworksConfig(spec core.ClusterSpec) *containerpb.MasterAuthoriz
 	return &containerpb.MasterAuthorizedNetworksConfig{Enabled: true, CidrBlocks: blocks}
 }
 
+// locate resolves n to wherever the cluster actually lives, discovering it
+// via a project-wide search when spec.Zone is empty and the region-derived
+// path 404s.
+//
+// spec.Zone is what tells clusterPath() whether to address a zonal or
+// regional cluster (see names.controlPlaneLocation), and it is only ever set
+// from the --zone/--spot flags. apply's own repeat runs are expected to keep
+// passing the same ones (or a --spec file that records it), but `delete`
+// explicitly does not require them — its flag help even calls them "unused,
+// kept for spec compatibility". Without this, a zonal cluster's Describe/
+// Delete would address the wrong (regional) path, get NotFound, and treat
+// that as "already gone" — decommissioning the registry record and archiving
+// the repo while the real cluster keeps running and billing, exactly what
+// happened before this existed.
+func (p *ClusterProvisioner) locate(ctx context.Context, n names) (names, error) {
+	if n.spec.Zone != "" {
+		return n, nil
+	}
+
+	if _, err := p.c.cluster.GetCluster(ctx, &containerpb.GetClusterRequest{Name: n.clusterPath()}); err == nil {
+		return n, nil
+	} else if status.Code(err) != codes.NotFound {
+		return names{}, fmt.Errorf("describing GKE cluster %s: %w", n.spec.ID, err)
+	}
+
+	resp, err := p.c.cluster.ListClusters(ctx, &containerpb.ListClustersRequest{
+		Parent: fmt.Sprintf("projects/%s/locations/-", n.project),
+	})
+	if err != nil {
+		return names{}, fmt.Errorf("listing GKE clusters to locate %s: %w", n.spec.ID, err)
+	}
+	for _, c := range resp.GetClusters() {
+		if c.GetName() == n.cluster() {
+			// Whatever GKE reports here — a zone or a region string — is
+			// exactly what controlPlaneLocation() needs to address it; this
+			// copy is local to the call, never written back to the caller's
+			// spec.
+			found := n
+			found.spec.Zone = c.GetLocation()
+			return found, nil
+		}
+	}
+	// Genuinely absent (or already deleted): fall through to the
+	// region-derived path so callers see the ordinary NotFound behavior.
+	return n, nil
+}
+
 // Describe reports the cluster's current state.
 func (p *ClusterProvisioner) Describe(ctx context.Context, spec core.ClusterSpec) (provisioner.ClusterState, error) {
-	n := p.names(spec)
+	n, err := p.locate(ctx, p.names(spec))
+	if err != nil {
+		return provisioner.ClusterState{}, err
+	}
 
 	cluster, err := p.c.cluster.GetCluster(ctx, &containerpb.GetClusterRequest{Name: n.clusterPath()})
 	if err != nil {
@@ -243,7 +293,7 @@ func (p *ClusterProvisioner) Describe(ctx context.Context, spec core.ClusterSpec
 	}
 
 	if state.Status == provisioner.StatusActive {
-		pools, err := p.describeNodePools(ctx, spec)
+		pools, err := p.describeNodePools(ctx, n)
 		if err != nil {
 			return state, err
 		}
@@ -282,12 +332,10 @@ func accessFrom(cfg *containerpb.PrivateClusterConfig) core.Access {
 	return core.AccessPublic
 }
 
-func (p *ClusterProvisioner) describeNodePools(ctx context.Context, spec core.ClusterSpec) ([]core.NodePool, error) {
-	n := p.names(spec)
-
+func (p *ClusterProvisioner) describeNodePools(ctx context.Context, n names) ([]core.NodePool, error) {
 	listed, err := p.c.cluster.ListNodePools(ctx, &containerpb.ListNodePoolsRequest{Parent: n.clusterPath()})
 	if err != nil {
-		return nil, fmt.Errorf("listing node pools for %s: %w", spec.ID, err)
+		return nil, fmt.Errorf("listing node pools for %s: %w", n.spec.ID, err)
 	}
 
 	pools := make([]core.NodePool, 0, len(listed.GetNodePools()))
@@ -370,7 +418,7 @@ func (p *ClusterProvisioner) reconcileAccess(
 func (p *ClusterProvisioner) ensureNodePools(
 	ctx context.Context, spec core.ClusterSpec, change *provisioner.Change,
 ) error {
-	existing, err := p.describeNodePools(ctx, spec)
+	existing, err := p.describeNodePools(ctx, p.names(spec))
 	if err != nil {
 		return err
 	}
@@ -447,7 +495,10 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 		return err
 	}
 
-	n := p.names(spec)
+	n, err := p.locate(ctx, p.names(spec))
+	if err != nil {
+		return err
+	}
 	if _, err := p.c.cluster.DeleteCluster(ctx, &containerpb.DeleteClusterRequest{Name: n.clusterPath()}); err != nil {
 		if status.Code(err) == codes.NotFound {
 			return nil

@@ -9,12 +9,12 @@ kubespin fleet [flags]
 ## Examples
 
 ```bash
-  # The typical fleet lifecycle, in order
-  kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1
-  kubespin fleet status --registry-region us-east-1
-  kubespin fleet update --component argo-cd --version 2.11.0 \
-    --github-org GitOpsHub --registry-region us-east-1
-  kubespin fleet audit --github-org GitOpsHub --registry-region us-east-1
+  # The typical fleet lifecycle, in order. KUBESPIN_REGISTRY_DSN must be set
+  # (in .env or the environment) for every one of these.
+  kubespin fleet bootstrap --account-id 465532803838 --region us-east-1
+  kubespin fleet status
+  kubespin fleet update --component argo-cd --version 2.11.0 --github-org GitOpsHub
+  kubespin fleet audit --github-org GitOpsHub
 ```
 
 ## Options
@@ -26,12 +26,10 @@ kubespin fleet [flags]
 ## Options inherited from parent commands
 
 ```text
-      --config string            path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
-      --dry-run                  resolve and report intended changes without performing them
-      --log-format string        log output format: text or json (default "text")
-      --log-level string         log verbosity: debug, info, warn, error (default "info")
-      --registry-region string   AWS region hosting the Fleet Registry
-      --registry-table string    DynamoDB table backing the Fleet Registry (default "kubespin-fleet-registry")
+      --config string       path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
+      --dry-run             resolve and report intended changes without performing them
+      --log-format string   log output format: text or json (default "text")
+      --log-level string    log verbosity: debug, info, warn, error (default "info")
 ```
 
 ## See also

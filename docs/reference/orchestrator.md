@@ -54,14 +54,16 @@ below, not a phase step.
 
 `Orchestrator.Delete` marks the registry `decommissioning`, runs the supplied
 `TeardownFunc`, then marks it `decommissioned`. `Teardown` (steps.go) builds
-that function, deliberately in the reverse order of `apply` (identity, then
-cluster, then repo) so nothing is deleted while a later step might still need
-it:
+that function, deliberately in the reverse order of `apply` (identity, load
+balancers, cluster, network, then repo) so nothing is deleted while a later
+step might still need it:
 
 | Step | Registry phase | Calls into |
 |---|---|---|
 | Deprovision identity | `decommissioning` | `internal/provisioner` — `cloud.Identity.Deprovision` for the status reporter component. |
+| Drain load balancers | `decommissioning` | `drainLoadBalancers` (steps.go) — builds a `k8s.io/client-go/kubernetes` clientset from `restConfigFor` and deletes every `Service` of type `LoadBalancer` across all namespaces, waiting (bounded, `drainLoadBalancersTimeout`) for each to actually disappear before returning. A cluster that cannot be reached (already gone from an earlier interrupted teardown, or never became active) is a no-op, not a failure — there is nothing to drain. Exists because deleting the cluster does not clean up the cloud load balancer a `Service type=LoadBalancer` (e.g. Argo CD's own exposure) owns; without this it survives the cluster, billing indefinitely, and blocks the network-delete step below with a dependency violation. |
 | Delete cluster | `decommissioning` | `internal/provisioner` — `cloud.Cluster.Delete`, then blocks on `provisioner.WaitUntilGone` so the phase is only recorded once the cloud confirms the cluster is actually gone (node pools drain first; this can take several minutes). |
+| Delete network | `decommissioning` | `internal/provisioner` — `cloud.Network.DeleteNetwork`, reversing `EnsureNetwork`. Identifies what to delete by the same deterministic name `EnsureNetwork` used, not by `spec.Subnets`, so it is safe even when `delete` was not given the same `--subnets` an earlier `apply` was; an operator-supplied network (or one already gone) is a no-op. |
 | Archive repository | `decommissioning` → `decommissioned` | `internal/repo` — `repoProv.Archive`; the repo is archived, never deleted, per the cluster-repo contract. |
 
 Every sub-step is idempotent (deprovisioning/deleting/archiving something

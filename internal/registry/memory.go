@@ -14,7 +14,7 @@ import (
 //
 // It exists so that every component built on the registry — the orchestrator
 // above all — is testable without credentials or a container. It is not a
-// simplified stand-in: it enforces exactly the same conditions as the DynamoDB
+// simplified stand-in: it enforces exactly the same conditions as the Postgres
 // implementation, and both are exercised by the same contract test suite. A
 // fake with weaker semantics would let real bugs pass.
 type Memory struct {

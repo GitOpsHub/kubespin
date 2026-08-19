@@ -22,16 +22,16 @@ kubespin fleet audit [flags]
 
 ```bash
   # Audit every cluster in the fleet
-  kubespin fleet audit --github-org GitOpsHub --registry-region us-east-1
+  kubespin fleet audit --github-org GitOpsHub
 
   # Audit only AWS clusters, with more concurrency
   kubespin fleet audit --provider aws --concurrency 8 \
-    --github-org GitOpsHub --registry-region us-east-1
+    --github-org GitOpsHub
 
   # A fleet with GCP or Azure clusters needs their project/subscription too
   kubespin fleet audit --gcp-project kubernetes-dev-502710 \
     --azure-subscription 3df9adbd-ea55-4c92-964c-0252031979de \
-    --github-org GitOpsHub --registry-region us-east-1
+    --github-org GitOpsHub
 ```
 
 ## Options
@@ -50,12 +50,10 @@ kubespin fleet audit [flags]
 ## Options inherited from parent commands
 
 ```text
-      --config string            path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
-      --dry-run                  resolve and report intended changes without performing them
-      --log-format string        log output format: text or json (default "text")
-      --log-level string         log verbosity: debug, info, warn, error (default "info")
-      --registry-region string   AWS region hosting the Fleet Registry
-      --registry-table string    DynamoDB table backing the Fleet Registry (default "kubespin-fleet-registry")
+      --config string       path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
+      --dry-run             resolve and report intended changes without performing them
+      --log-format string   log output format: text or json (default "text")
+      --log-level string    log verbosity: debug, info, warn, error (default "info")
 ```
 
 ## See also

@@ -27,10 +27,9 @@ import (
 )
 
 func newHandler(ctx context.Context) (*ingestion.Handler, error) {
-	region := os.Getenv("AWS_REGION")
-	table := os.Getenv("REGISTRY_TABLE")
+	dsn := os.Getenv("REGISTRY_DSN")
 
-	reg, err := registry.NewDynamoDB(ctx, region, table)
+	reg, err := registry.NewPostgres(ctx, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to the Fleet Registry: %w", err)
 	}
@@ -91,10 +90,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger.Info("ingestion handler started",
-		"region", os.Getenv("AWS_REGION"),
-		"table", os.Getenv("REGISTRY_TABLE"),
-	)
+	// REGISTRY_DSN itself is never logged: it carries the Postgres password.
+	logger.Info("ingestion handler started")
 
 	lambda.Start(handleRequest(h))
 }

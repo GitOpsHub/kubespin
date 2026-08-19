@@ -18,6 +18,7 @@ import (
 	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	"github.com/aws/smithy-go"
 
 	"github.com/GitOpsHub/kubespin/internal/core"
 )
@@ -42,11 +43,17 @@ type fakeAWS struct {
 	nodeGroupDeletePolls int
 	deletingNodeGroups   map[string]int
 
-	vpcs         map[string]*ec2types.Vpc
-	subnets      map[string]*ec2types.Subnet
-	igws         map[string]*ec2types.InternetGateway
-	routeTables  map[string]*ec2types.RouteTable
-	nextResource int
+	vpcs           map[string]*ec2types.Vpc
+	subnets        map[string]*ec2types.Subnet
+	igws           map[string]*ec2types.InternetGateway
+	routeTables    map[string]*ec2types.RouteTable
+	securityGroups map[string]*ec2types.SecurityGroup
+	nextResource   int
+
+	// deleteVPCDependencyErrors makes the next N DeleteVpc calls fail with
+	// DependencyViolation before succeeding, modeling an ENI that has not
+	// finished detaching yet.
+	deleteVPCDependencyErrors int
 }
 
 func newFakeAWS() *fakeAWS {
@@ -61,6 +68,7 @@ func newFakeAWS() *fakeAWS {
 		subnets:            map[string]*ec2types.Subnet{},
 		igws:               map[string]*ec2types.InternetGateway{},
 		routeTables:        map[string]*ec2types.RouteTable{},
+		securityGroups:     map[string]*ec2types.SecurityGroup{},
 	}
 }
 
@@ -525,6 +533,70 @@ func (f *fakeAWS) AssociateRouteTable(_ context.Context, in *ec2.AssociateRouteT
 		SubnetId:                in.SubnetId,
 	})
 	return &ec2.AssociateRouteTableOutput{AssociationId: aws.String(assocID)}, nil
+}
+
+func (f *fakeAWS) DescribeSecurityGroups(_ context.Context, in *ec2.DescribeSecurityGroupsInput, _ ...func(*ec2.Options)) (*ec2.DescribeSecurityGroupsOutput, error) {
+	f.record("DescribeSecurityGroups")
+	var out []ec2types.SecurityGroup
+	for _, sg := range f.securityGroups {
+		if vpcFilterMatch(sg, in.Filters) {
+			out = append(out, *sg)
+		}
+	}
+	return &ec2.DescribeSecurityGroupsOutput{SecurityGroups: out}, nil
+}
+
+// vpcFilterMatch reports whether sg matches every "vpc-id" filter given —
+// the only filter DeleteNetwork's DescribeSecurityGroups call uses.
+func vpcFilterMatch(sg *ec2types.SecurityGroup, filters []ec2types.Filter) bool {
+	for _, filt := range filters {
+		if aws.ToString(filt.Name) == "vpc-id" && !slices.Contains(filt.Values, aws.ToString(sg.VpcId)) {
+			return false
+		}
+	}
+	return true
+}
+
+func (f *fakeAWS) DeleteSecurityGroup(_ context.Context, in *ec2.DeleteSecurityGroupInput, _ ...func(*ec2.Options)) (*ec2.DeleteSecurityGroupOutput, error) {
+	f.record("DeleteSecurityGroup")
+	delete(f.securityGroups, aws.ToString(in.GroupId))
+	return &ec2.DeleteSecurityGroupOutput{}, nil
+}
+
+func (f *fakeAWS) DetachInternetGateway(_ context.Context, in *ec2.DetachInternetGatewayInput, _ ...func(*ec2.Options)) (*ec2.DetachInternetGatewayOutput, error) {
+	f.record("DetachInternetGateway")
+	if igw, ok := f.igws[aws.ToString(in.InternetGatewayId)]; ok {
+		igw.Attachments = nil
+	}
+	return &ec2.DetachInternetGatewayOutput{}, nil
+}
+
+func (f *fakeAWS) DeleteInternetGateway(_ context.Context, in *ec2.DeleteInternetGatewayInput, _ ...func(*ec2.Options)) (*ec2.DeleteInternetGatewayOutput, error) {
+	f.record("DeleteInternetGateway")
+	delete(f.igws, aws.ToString(in.InternetGatewayId))
+	return &ec2.DeleteInternetGatewayOutput{}, nil
+}
+
+func (f *fakeAWS) DeleteSubnet(_ context.Context, in *ec2.DeleteSubnetInput, _ ...func(*ec2.Options)) (*ec2.DeleteSubnetOutput, error) {
+	f.record("DeleteSubnet")
+	delete(f.subnets, aws.ToString(in.SubnetId))
+	return &ec2.DeleteSubnetOutput{}, nil
+}
+
+func (f *fakeAWS) DeleteRouteTable(_ context.Context, in *ec2.DeleteRouteTableInput, _ ...func(*ec2.Options)) (*ec2.DeleteRouteTableOutput, error) {
+	f.record("DeleteRouteTable")
+	delete(f.routeTables, aws.ToString(in.RouteTableId))
+	return &ec2.DeleteRouteTableOutput{}, nil
+}
+
+func (f *fakeAWS) DeleteVpc(_ context.Context, in *ec2.DeleteVpcInput, _ ...func(*ec2.Options)) (*ec2.DeleteVpcOutput, error) {
+	f.record("DeleteVpc")
+	if f.deleteVPCDependencyErrors > 0 {
+		f.deleteVPCDependencyErrors--
+		return nil, &smithy.GenericAPIError{Code: "DependencyViolation", Message: "has dependencies and cannot be deleted"}
+	}
+	delete(f.vpcs, aws.ToString(in.VpcId))
+	return &ec2.DeleteVpcOutput{}, nil
 }
 
 // --- helpers ---

@@ -20,10 +20,15 @@ import (
 // with the target cluster name, exactly what `aws eks get-token` produces.
 // Minting this in-process means no static credential is ever written down —
 // the token is derived fresh from whatever session `kubespin login` already
-// cached. Its lifetime is bounded by the presigned URL's own X-Amz-Expires
-// (PresignGetCallerIdentity's 60s default), the same default
-// aws-iam-authenticator itself uses.
+// cached.
 const eksTokenPrefix = "k8s-aws-v1." //nolint:gosec // not a credential, just the token's format prefix
+
+// eksTokenExpirySeconds is the token's lifetime, matching the 60s
+// aws-iam-authenticator itself uses. aws-sdk-go-v2's PresignHTTP does *not*
+// set X-Amz-Expires on its own (see its doc comment) — omitting it entirely
+// produces a presigned URL the built-in authenticator rejects outright rather
+// than one that merely never expires, so this has to be added explicitly.
+const eksTokenExpirySeconds = "60"
 
 // stsPresignAPI mints that bearer token. Narrowed to this one operation so
 // the whole RESTConfig path is testable without AWS credentials, the same way
@@ -43,7 +48,10 @@ func newSTSPresigner(cfg aws.Config) *stsPresigner {
 // PresignGetCallerIdentityURL presigns a GetCallerIdentity request tagged
 // with clusterName via the x-k8s-aws-id header, which is what scopes the
 // resulting token to that one cluster: aws-iam-authenticator refuses a token
-// presigned for a different cluster name.
+// presigned for a different cluster name. It also stamps X-Amz-Expires,
+// without which the presigned URL has no expiry parameter at all rather than
+// one that merely never expires — aws-iam-authenticator rejects a token
+// missing it outright.
 func (p *stsPresigner) PresignGetCallerIdentityURL(ctx context.Context, clusterName string) (string, error) {
 	presigned, err := p.client.PresignGetCallerIdentity(ctx, &sts.GetCallerIdentityInput{},
 		func(po *sts.PresignOptions) {
@@ -55,6 +63,10 @@ func (p *stsPresigner) PresignGetCallerIdentityURL(ctx context.Context, clusterN
 						) (smithymiddleware.BuildOutput, smithymiddleware.Metadata, error) {
 							if req, ok := in.Request.(*smithyhttp.Request); ok {
 								req.Header.Set("x-k8s-aws-id", clusterName)
+
+								query := req.URL.Query()
+								query.Set("X-Amz-Expires", eksTokenExpirySeconds)
+								req.URL.RawQuery = query.Encode()
 							}
 							return next.HandleBuild(ctx, in)
 						}), smithymiddleware.Before)

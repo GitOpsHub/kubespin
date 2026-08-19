@@ -21,7 +21,7 @@ make
 | `make install` | Copies an already-built `bin/kubespin` to `INSTALL_DIR` |
 | `make lambda` | Builds only the ingestion handler: Linux arm64, static |
 | `make test` | Unit tests with `-race -cover` |
-| `make integration` | Adds `-tags=integration`; needs credentials or DynamoDB Local |
+| `make integration` | Adds `-tags=integration`; needs a reachable Postgres (`KUBESPIN_POSTGRES_TEST_DSN`) |
 | `make lint` | `golangci-lint run` |
 | `make docs` | Regenerates `docs/cli` from the command tree |
 | `make fmt` | `go fmt` plus `go mod tidy` |
@@ -40,7 +40,7 @@ cmd/fleet-status-reporter/ in-cluster CronJob; pushes signed status outward
 internal/cli/              cobra command tree and configuration resolution
 internal/core/             shared domain types
 internal/auth/             operator cloud auth behind login/status/logout
-internal/registry/         Fleet Registry client, lease primitive, in-memory implementation
+internal/registry/         Fleet Registry client (Postgres), lease primitive, in-memory implementation
 internal/orchestrator/     sequences one cluster's provisioning through the phases
 internal/provisioner/      cloud-facing interfaces; one subpackage per cloud
 internal/repo/             cluster repositories over GitHub
@@ -78,8 +78,8 @@ spec one error per run is miserable; see `ClusterSpec.Validate` in
 
 ## Testing
 
-Unit tests run without credentials and without network. Anything needing real
-AWS or DynamoDB Local goes behind the build tag:
+Unit tests run without credentials and without network. Anything needing a
+real Postgres goes behind the build tag:
 
 ```go
 //go:build integration
@@ -90,33 +90,35 @@ Those run via `make integration` and nightly in CI, never on a pull request.
 To run the registry integration tests locally:
 
 ```bash
-docker run -d --rm -p 8000:8000 --name kubespin-ddb-local amazon/dynamodb-local:latest
+docker run -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16
 ```
 
 ```bash
-KUBESPIN_DYNAMODB_ENDPOINT=http://localhost:8000 make integration
+KUBESPIN_POSTGRES_TEST_DSN=postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable make integration
 ```
 
 Note that `make test` alone reports low coverage for `internal/registry`: the
-DynamoDB implementation is only reachable under the integration tag. The number
-is not a measure of how well that package is tested.
+Postgres implementation (`internal/registry/postgres.go`) is only reachable
+under the integration tag. The number is not a measure of how well that
+package is tested.
 
 ### The registry contract
 
 `internal/registry/contract_test.go` is the behaviour every implementation must
-satisfy, written once and run against both the in-memory registry and DynamoDB
-Local. Add new registry behaviour there rather than in an implementation's own
-test file — a guarantee proven against only one implementation is not a
-guarantee.
+satisfy, written once and run against both the in-memory registry and a real
+Postgres (`internal/registry/postgres_integration_test.go`). Add new registry
+behaviour there rather than in an implementation's own test file — a guarantee
+proven against only one implementation is not a guarantee.
 
-The in-memory registry deliberately enforces the same conditions as DynamoDB.
-It is not a simplified stand-in: if it accepted writes DynamoDB would reject,
+The in-memory registry deliberately enforces the same conditions as Postgres.
+It is not a simplified stand-in: if it accepted writes Postgres would reject,
 the orchestrator tests built on it would pass while production failed.
 
 The load-bearing case is `concurrent acquisition elects exactly one holder`,
-which races sixteen goroutines at a single lease. It runs against real DynamoDB
-too, because that is the only place the conditional-write expression itself is
-under test. A sequential simulation of this would pass against a broken lock.
+which races sixteen goroutines at a single lease. It runs against real Postgres
+too, because that is the only place the conditional `UPDATE` expression itself
+is under test. A sequential simulation of this would pass against a broken
+lock.
 
 ### Testing against AWS
 
@@ -191,10 +193,13 @@ A command's `Example` block is the *only* place the reference gets examples
 from, so it has to be runnable as written: every flag the command actually
 requires, spelled out. `apply` and `delete` validate a whole `ClusterSpec`,
 which means an example missing `--profile` fails before doing anything; every
-registry-touching command needs `--registry-region`, which has no default;
-and every repository-touching command needs `--github-org`. Examples are
-written as plain `kubespin`, which `make build` puts on your `PATH`, so they
-can be pasted straight into a terminal from any directory.
+registry-touching command needs the Fleet Registry DSN, which has no default
+and — deliberately — no flag, so it must come from `KUBESPIN_REGISTRY_DSN` (or
+a `.env` file); `fleet bootstrap` is the one exception, needing its own
+`--region` (the AWS region hosting the ingestion Lambda/IAM/API Gateway); and
+every repository-touching command needs `--github-org`. Examples are written
+as plain `kubespin`, which `make build` puts on your `PATH`, so they can be
+pasted straight into a terminal from any directory.
 
 `cmd/kubespin/main.go` exits `1` on any error from `Execute` and `0`
 otherwise; there are no other exit codes.
@@ -215,7 +220,7 @@ viper's flag binding is easiest to get wrong on.
 - **test** — race-enabled unit tests with coverage
 - **build** — linux/amd64, linux/arm64, darwin/arm64
 
-`.github/workflows/integration.yml` runs nightly against DynamoDB Local, and
-against real AWS via OIDC once `AWS_INTEGRATION_ROLE_ARN` is configured. There
-are no long-lived cloud credentials in this repository — the same identity
-discipline the product enforces on clusters.
+`.github/workflows/integration.yml` runs nightly against a Postgres service
+container, and against real AWS via OIDC once `AWS_INTEGRATION_ROLE_ARN` is
+configured. There are no long-lived cloud credentials in this repository — the
+same identity discipline the product enforces on clusters.

@@ -8,7 +8,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/apigatewayv2"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -21,14 +20,6 @@ import (
 
 type stsAPI interface {
 	GetCallerIdentity(context.Context, *sts.GetCallerIdentityInput, ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
-}
-
-type dynamoAPI interface {
-	DescribeTable(context.Context, *dynamodb.DescribeTableInput, ...func(*dynamodb.Options)) (*dynamodb.DescribeTableOutput, error)
-	CreateTable(context.Context, *dynamodb.CreateTableInput, ...func(*dynamodb.Options)) (*dynamodb.CreateTableOutput, error)
-	UpdateTable(context.Context, *dynamodb.UpdateTableInput, ...func(*dynamodb.Options)) (*dynamodb.UpdateTableOutput, error)
-	DescribeContinuousBackups(context.Context, *dynamodb.DescribeContinuousBackupsInput, ...func(*dynamodb.Options)) (*dynamodb.DescribeContinuousBackupsOutput, error)
-	UpdateContinuousBackups(context.Context, *dynamodb.UpdateContinuousBackupsInput, ...func(*dynamodb.Options)) (*dynamodb.UpdateContinuousBackupsOutput, error)
 }
 
 type logsAPI interface {
@@ -68,7 +59,6 @@ type apiGatewayAPI interface {
 // Clients bundles the AWS clients the converge steps use.
 type Clients struct {
 	sts        stsAPI
-	dynamo     dynamoAPI
 	logs       logsAPI
 	iam        iamAPI
 	lambda     lambdaAPI
@@ -84,7 +74,6 @@ func NewClients(ctx context.Context, region string) (*Clients, error) {
 
 	return &Clients{
 		sts:        sts.NewFromConfig(cfg),
-		dynamo:     dynamodb.NewFromConfig(cfg),
 		logs:       cloudwatchlogs.NewFromConfig(cfg),
 		iam:        iam.NewFromConfig(cfg),
 		lambda:     lambda.NewFromConfig(cfg),

@@ -274,6 +274,32 @@ func TestClusterProvisioner_Delete(t *testing.T) {
 	}
 }
 
+// A cluster created zonal (spec.Zone set, as --spot does automatically) must
+// still be found and actually deleted even when the caller's spec carries no
+// Zone — exactly what happens when `delete` is invoked without re-supplying
+// --zone/--spot, which its own flag help documents as optional. Before
+// locate existed, this silently no-op'd: DeleteCluster addressed the wrong
+// (region-derived) path, got NotFound, and Delete treated that as "already
+// gone" while the real cluster kept running.
+func TestClusterProvisioner_Delete_FindsAZonalClusterWithNoZoneInSpec(t *testing.T) {
+	f := newFakeGCP()
+	spec := testSpec()
+	spec.Zone = "" // the caller does not know the cluster is zonal
+	f.activeCluster(spec)
+	f.clusterLocation = "us-central1-a" // ...but this is where it actually lives
+	p := NewClusterProvisioner(f.clients())
+
+	if err := p.Delete(context.Background(), spec); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if f.cluster != nil {
+		t.Error("expected the zonal cluster to be deleted, not silently skipped")
+	}
+	if !slices.Contains(f.calls, "ListClusters") {
+		t.Error("expected Delete to fall back to a project-wide search after the region-derived path 404s")
+	}
+}
+
 // The teardown a retried `delete` resumes runs against a cluster GKE is still
 // tearing down; a second DeleteCluster there fails with FailedPrecondition.
 func TestClusterProvisioner_Delete_ConvergesOnAClusterAlreadyDeleting(t *testing.T) {

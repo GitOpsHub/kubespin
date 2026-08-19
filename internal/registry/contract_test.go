@@ -13,11 +13,11 @@ import (
 
 // This file is the registry contract: every behaviour callers are entitled to
 // rely on, expressed once and run against every implementation. The in-memory
-// registry is not allowed weaker semantics than DynamoDB — if it were, the
+// registry is not allowed weaker semantics than Postgres — if it were, the
 // orchestrator tests built on it would pass while production failed.
 //
 // runContract is invoked by memory_test.go and, behind the integration build
-// tag, by dynamo_integration_test.go.
+// tag, by postgres_integration_test.go.
 
 // fakeClock is a controllable time source, so lease expiry is testable without
 // sleeping through a TTL.

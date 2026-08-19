@@ -61,7 +61,7 @@ func TestVersionFlag(t *testing.T) {
 // without a Fleet Registry to talk to. Reaching that specific error (rather
 // than, say, a flag-parsing failure) proves PersistentPreRunE resolved
 // config and the command's own body actually ran.
-func TestCommandsRequireRegistryRegion(t *testing.T) {
+func TestCommandsRequireRegistryDSN(t *testing.T) {
 	for _, args := range [][]string{
 		{"delete", "--cluster-id", "team-payments-prod", "--provider", "aws", "--region", "us-east-1",
 			"--profile", "tier-small@1.0.0", "--subnets", "subnet-a", "--yes"},
@@ -74,8 +74,8 @@ func TestCommandsRequireRegistryRegion(t *testing.T) {
 			if !errors.Is(err, ErrConfig) {
 				t.Errorf("error = %v, want one wrapping ErrConfig", err)
 			}
-			if !strings.Contains(err.Error(), "registry-region") {
-				t.Errorf("error = %v, want it to name --registry-region", err)
+			if !strings.Contains(err.Error(), "KUBESPIN_REGISTRY_DSN") {
+				t.Errorf("error = %v, want it to name KUBESPIN_REGISTRY_DSN", err)
 			}
 		})
 	}
@@ -92,17 +92,17 @@ func TestFleetWithNoSubcommandPrintsHelp(t *testing.T) {
 }
 
 func TestPersistentPreRunPopulatesContext(t *testing.T) {
-	// fleet status's own body fails with a registry-region error, but only
-	// after PersistentPreRunE has run — so reaching that error (rather than a
-	// panic from a nil context value) proves config resolution succeeded.
+	// fleet status's own body fails with a missing-DSN error, but only after
+	// PersistentPreRunE has run — so reaching that error (rather than a panic
+	// from a nil context value) proves config resolution succeeded.
 	root := NewRootCommand()
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
 	root.SetArgs([]string{"fleet", "status", "--log-level", "debug"})
 
 	err := root.Execute()
-	if !errors.Is(err, ErrConfig) || !strings.Contains(err.Error(), "registry-region") {
-		t.Fatalf("error = %v, want one wrapping ErrConfig naming --registry-region", err)
+	if !errors.Is(err, ErrConfig) || !strings.Contains(err.Error(), "KUBESPIN_REGISTRY_DSN") {
+		t.Fatalf("error = %v, want one wrapping ErrConfig naming KUBESPIN_REGISTRY_DSN", err)
 	}
 }
 
@@ -111,7 +111,7 @@ func TestInvalidGlobalFlagFailsBeforeCommandRuns(t *testing.T) {
 	if !errors.Is(err, ErrConfig) {
 		t.Errorf("error = %v, want one wrapping ErrConfig", err)
 	}
-	if strings.Contains(err.Error(), "registry-region") {
-		t.Error("command body ran despite invalid configuration: got the registry-region error instead of the log-level one")
+	if strings.Contains(err.Error(), "KUBESPIN_REGISTRY_DSN") {
+		t.Error("command body ran despite invalid configuration: got the missing-DSN error instead of the log-level one")
 	}
 }

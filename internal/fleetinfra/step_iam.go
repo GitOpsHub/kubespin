@@ -142,16 +142,15 @@ func assumeRolePolicy() map[string]any {
 	}
 }
 
+// desiredPolicy grants only what the Lambda needs beyond writing its own
+// logs: reaching the Fleet Registry is over the network (REGISTRY_DSN), not
+// an IAM-mediated AWS API, so there is no registry-access statement here —
+// unlike the DynamoDB-backed registry this replaced, Postgres reachability is
+// a VPC/security-group concern, not an IAM one.
 func (s *roleStep) desiredPolicy() map[string]any {
 	return map[string]any{
 		"Version": "2012-10-17",
 		"Statement": []any{
-			map[string]any{
-				"Sid":      "WriteClusterStatus",
-				"Effect":   "Allow",
-				"Action":   []any{"dynamodb:GetItem", "dynamodb:UpdateItem"},
-				"Resource": s.spec.tableARN(),
-			},
 			map[string]any{
 				"Sid":      "WriteOwnLogs",
 				"Effect":   "Allow",

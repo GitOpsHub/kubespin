@@ -11,7 +11,7 @@ stuck, or the Central Ingestion API itself is down.
 ## A cluster is stale
 
 ```bash
-kubespin fleet status --stale-only --registry-region us-east-1
+kubespin fleet status --stale-only
 ```
 
 That lists every cluster that has missed its reporting window
@@ -64,7 +64,7 @@ If a retry doesn't help:
    same phase without touching anything:
 
    ```bash
-   kubespin apply --spec ./cluster.yaml --registry-region us-east-1 --dry-run
+   kubespin apply --spec ./cluster.yaml --dry-run
    ```
 
 2. **Check whether another run holds the lease.** `ErrBusy` means someone
@@ -98,7 +98,7 @@ If a retry doesn't help:
 
    ```bash
    kubespin fleet audit --provider aws \
-     --github-org "$GITHUB_ORG" --registry-region us-east-1
+     --github-org "$GITHUB_ORG"
    ```
 
    Or read the cluster's own repository for `.state.yaml` and `addons.yaml`.

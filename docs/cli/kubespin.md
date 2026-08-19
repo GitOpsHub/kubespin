@@ -13,14 +13,15 @@ reporter to the Fleet Registry.
 ## Examples
 
 ```bash
-  # Spin up the shared fleet infrastructure once, then a cluster
+  # Spin up the shared fleet infrastructure once, then a cluster.
+  # KUBESPIN_REGISTRY_DSN must be set (in .env or the environment) throughout.
   kubespin login
   make lambda
-  kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1
+  kubespin fleet bootstrap --account-id 465532803838 --region us-east-1
   kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
     --access private --profile tier-small@1.0.0 \
-    --github-org GitOpsHub --registry-region us-east-1
-  kubespin fleet status --registry-region us-east-1
+    --github-org GitOpsHub
+  kubespin fleet status
 
 See "kubespin <command> --help" for flags and more examples on any command.
 ```
@@ -28,13 +29,11 @@ See "kubespin <command> --help" for flags and more examples on any command.
 ## Options
 
 ```text
-      --config string            path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
-      --dry-run                  resolve and report intended changes without performing them
-  -h, --help                     help for kubespin
-      --log-format string        log output format: text or json (default "text")
-      --log-level string         log verbosity: debug, info, warn, error (default "info")
-      --registry-region string   AWS region hosting the Fleet Registry
-      --registry-table string    DynamoDB table backing the Fleet Registry (default "kubespin-fleet-registry")
+      --config string       path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
+      --dry-run             resolve and report intended changes without performing them
+  -h, --help                help for kubespin
+      --log-format string   log output format: text or json (default "text")
+      --log-level string    log verbosity: debug, info, warn, error (default "info")
 ```
 
 ## See also

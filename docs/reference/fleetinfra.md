@@ -1,6 +1,6 @@
 # internal/fleetinfra
 
-`internal/fleetinfra` is the SDK converge engine behind `kubespin fleet bootstrap`. It provisions the shared, once-per-fleet-account infrastructure directly through `aws-sdk-go-v2` — no Terraform, no CloudFormation, no state file. It creates the Fleet Registry (DynamoDB), the ingestion Lambda's execution role and log groups, the ingestion Lambda function itself, and the Central Ingestion API (API Gateway v2 + Lambda proxy integration).
+`internal/fleetinfra` is the SDK converge engine behind `kubespin fleet bootstrap`. It provisions the shared, once-per-fleet-account infrastructure directly through `aws-sdk-go-v2` — no Terraform, no CloudFormation, no state file. It creates the ingestion Lambda's execution role and log groups, the ingestion Lambda function itself, and the Central Ingestion API (API Gateway v2 + Lambda proxy integration). The Fleet Registry itself is **not** provisioned here: it is a Postgres database (`internal/registry`) the operator provisions and supplies a connection string for via `KUBESPIN_REGISTRY_DSN` — it self-migrates its own schema on first connect, so there is nothing for this package to create for it.
 
 Because there is no state file, convergence is the contract: every step describes live AWS state, diffs it against `Spec`, and is create-or-update — nothing ever deletes. `Plan` is strictly read-only (what `--dry-run` runs); a run against already-provisioned infrastructure must report zero changes.
 
@@ -34,7 +34,7 @@ Because there is no state file, convergence is the contract: every step describe
         Region    string
 
         NamePrefix       string
-        RegistryTable    string
+        RegistryDSN      string
         LogRetentionDays int32
         ThrottleBurst    int32
         ThrottleRate     float64
@@ -45,10 +45,11 @@ Because there is no state file, convergence is the contract: every step describe
 
     - **Fields:**
         - `AccountID` — the fleet account; checked against the caller's real STS identity before anything is provisioned (`ErrAccountMismatch` on mismatch).
+        - `RegistryDSN` — the Fleet Registry's Postgres connection string, passed straight through as the ingestion Lambda's `REGISTRY_DSN` environment variable (`functionStep`); never used to provision anything, since the database itself is out of scope for this package.
         - `LambdaZip` — the packaged ingestion handler produced by `PackageLambda`.
         - Unset tunables (`NamePrefix`, `LogRetentionDays`, `ThrottleBurst`, `ThrottleRate`) are filled from the `Default*` constants by the unexported `withDefaults` method before use.
-    - **Behavior:** `Validate() error` reports every problem at once (via `errors.Join`): account id must be 12 digits, `Region` required, `RegistryTable` required, `LambdaZip` non-empty — all wrapping `ErrSpec`.
-    - **Invariants:** Unexported helper methods derive resource names/ARNs from the spec (`functionName`, `roleName`, `apiName`, `lambdaLogGroup`, `apiLogGroup`, `tableARN`, `roleARN`, `functionARN`, `invokeARN`, `lambdaLogGroupARN`, `apiLogGroupARN`); the partition is assumed to be `aws` — GovCloud/China would need this threaded through the spec.
+    - **Behavior:** `Validate() error` reports every problem at once (via `errors.Join`): account id must be 12 digits, `Region` required, `RegistryDSN` required, `LambdaZip` non-empty — all wrapping `ErrSpec`.
+    - **Invariants:** Unexported helper methods derive resource names/ARNs from the spec (`functionName`, `roleName`, `apiName`, `lambdaLogGroup`, `apiLogGroup`, `roleARN`, `functionARN`, `invokeARN`, `lambdaLogGroupARN`, `apiLogGroupARN` — no `tableARN`, since there is no table); the partition is assumed to be `aws` — GovCloud/China would need this threaded through the spec.
 
 ### `ActionKind`
 
@@ -146,17 +147,16 @@ Because there is no state file, convergence is the contract: every step describe
     func Converge(ctx context.Context, c *Clients, spec Spec, dryRun bool, opts ...Option) (Report, error)
     ```
 
-    - **Behavior:** Brings the fleet infrastructure to match `spec`. Applies `spec.withDefaults()`, validates it, and verifies the caller's account before touching anything. Runs six steps in dependency order — registry table, log groups, IAM role, Lambda function, ingestion API, invoke permission — stopping at the first error, so a failure leaves earlier resources created and later ones untouched; re-running resumes, since every step is create-or-update.
+    - **Behavior:** Brings the fleet infrastructure to match `spec`. Applies `spec.withDefaults()`, validates it, and verifies the caller's account before touching anything. Runs five steps in dependency order — log groups, IAM role, Lambda function, ingestion API, invoke permission — stopping at the first error, so a failure leaves earlier resources created and later ones untouched; re-running resumes, since every step is create-or-update. There is no registry-table step: the Fleet Registry is a Postgres database provisioned outside this package.
     - **Invariants:** For each step, `Plan` runs first (always, dry or real) and its `Action` is appended to `Report.Actions`. If the action is `ActionNone`, the step is logged at Debug and skipped. On a dry run, a would-be change is logged at Info and *not* applied. On a real run, `Apply` is called and any error aborts the whole `Converge` call. `Report.IngestionURL` is populated from the API step's resolved endpoint before returning.
 
 ## clients.go
 
-Each AWS service is reached through a narrow interface listing only the calls the package makes. This is what lets the whole converge engine be unit-tested without credentials, and documents the exact blast radius of the permissions a bootstrap operator needs. All six are unexported and bundled into `*Clients`, built for real use by `NewClients`.
+Each AWS service is reached through a narrow interface listing only the calls the package makes. This is what lets the whole converge engine be unit-tested without credentials, and documents the exact blast radius of the permissions a bootstrap operator needs. All five are unexported and bundled into `*Clients`, built for real use by `NewClients`. There is deliberately no registry-backing interface here (no `dynamoAPI` equivalent, e.g. a `postgresAPI`) — Postgres reachability is a network/security-group concern for the operator, not something this AWS SDK converge engine mediates.
 
 | Interface | Methods | Implementer |
 |---|---|---|
 | `stsAPI` | `GetCallerIdentity` | `sts.Client` (`github.com/aws/aws-sdk-go-v2/service/sts`) |
-| `dynamoAPI` | `DescribeTable`, `CreateTable`, `UpdateTable`, `DescribeContinuousBackups`, `UpdateContinuousBackups` | `dynamodb.Client` |
 | `logsAPI` | `DescribeLogGroups`, `CreateLogGroup`, `PutRetentionPolicy` | `cloudwatchlogs.Client` |
 | `iamAPI` | `GetRole`, `CreateRole`, `GetRolePolicy`, `PutRolePolicy` | `iam.Client` |
 | `lambdaAPI` | `GetFunction`, `CreateFunction`, `UpdateFunctionCode`, `UpdateFunctionConfiguration`, `GetPolicy`, `AddPermission` | `lambda.Client` |
@@ -168,11 +168,11 @@ Each AWS service is reached through a narrow interface listing only the calls th
 
     ```go
     type Clients struct {
-        // unexported: sts, dynamo, logs, iam, lambda, apiGateway
+        // unexported: sts, logs, iam, lambda, apiGateway
     }
     ```
 
-    - **Behavior:** Bundles the six AWS service interfaces that converge steps use. All fields are unexported; construct via `NewClients`.
+    - **Behavior:** Bundles the five AWS service interfaces that converge steps use. All fields are unexported; construct via `NewClients`.
     - **Invariants:** `(*Clients).verifyAccount(ctx, want string) error` is the guard that replaces Terraform's `allowed_account_ids` — it calls `GetCallerIdentity` and refuses to provision if the caller's account doesn't match `want`, which is what keeps fleet infrastructure out of a cluster account.
 
 ### `NewClients`
@@ -183,7 +183,7 @@ Each AWS service is reached through a narrow interface listing only the calls th
     func NewClients(ctx context.Context, region string) (*Clients, error)
     ```
 
-    - **Behavior:** Loads the ambient AWS credential chain via `config.LoadDefaultConfig` scoped to `region`, and constructs real `sts`/`dynamodb`/`cloudwatchlogs`/`iam`/`lambda`/`apigatewayv2` clients from it.
+    - **Behavior:** Loads the ambient AWS credential chain via `config.LoadDefaultConfig` scoped to `region`, and constructs real `sts`/`cloudwatchlogs`/`iam`/`lambda`/`apigatewayv2` clients from it.
 
 ## package.go
 
@@ -200,19 +200,7 @@ Each AWS service is reached through a narrow interface listing only the calls th
 
 ## Steps (unexported, one per file)
 
-Each step implements the internal `step` interface (`Name() string`, `Plan(ctx) (Action, error)`, `Apply(ctx, Action) error`) and is constructed by an unexported `newXStep` function taking `(*Clients, Spec, *slog.Logger)`.
-
-### `registryTableStep`
-
-??? note "Signature"
-
-    ```go
-    // step_registry.go
-    func newRegistryTableStep(c *Clients, spec Spec, logger *slog.Logger) *registryTableStep
-    ```
-
-    - **Behavior:** Provisions the Fleet Registry: partition key `ClusterID`, the `ProviderPhaseIndex` GSI (`Provider` hash / `Phase` range, projecting all attributes, created with the table since adding a GSI later is a slow online backfill), pay-per-request billing, SSE, deletion protection, and point-in-time recovery.
-    - **Invariants:** Only ever creates or strengthens the table — turns protections on, adds the missing index — never removes anything. Structural changes (`UpdateTable`, `UpdateContinuousBackups`) are serialised behind a poll loop (`waitActive`) because DynamoDB requires the table to be `ACTIVE` and permits only one structural change at a time.
+Each step implements the internal `step` interface (`Name() string`, `Plan(ctx) (Action, error)`, `Apply(ctx, Action) error`) and is constructed by an unexported `newXStep` function taking `(*Clients, Spec, *slog.Logger)`. There are five, one fewer than before this package's registry migration: `step_registry.go` and its `registryTableStep` were deleted outright rather than repointed at Postgres, since a Postgres database is not an AWS resource this SDK-driven converge engine has any business provisioning — the operator provisions it themselves and `kubespin` connects via `RegistryDSN`/`KUBESPIN_REGISTRY_DSN`.
 
 ### `logGroupsStep`
 
@@ -234,7 +222,7 @@ Each step implements the internal `step` interface (`Name() string`, `Plan(ctx) 
     func newRoleStep(c *Clients, spec Spec, logger *slog.Logger) *roleStep
     ```
 
-    - **Behavior:** Provisions the ingestion Lambda's execution IAM role, with a deliberately tiny inline policy (`ingestion`): only `dynamodb:GetItem`/`UpdateItem` on the registry table ARN and `logs:CreateLogStream`/`PutLogEvents` on its own log group — no `CreateTable`, `Scan`, `Delete`, or access to any other table.
+    - **Behavior:** Provisions the ingestion Lambda's execution IAM role, with a deliberately tiny inline policy (`ingestion`): only `logs:CreateLogStream`/`PutLogEvents` on its own log group. No registry-access statement at all — unlike the DynamoDB-backed registry this replaced, reaching Postgres is over the network via `REGISTRY_DSN`, not an IAM-mediated AWS API, so there is nothing for this policy to grant.
     - **Invariants:** Policy equality is checked semantically (`policyEqual`, via JSON round-trip) against a policy IAM may have reformatted.
 
 ### `functionStep`
@@ -246,7 +234,7 @@ Each step implements the internal `step` interface (`Name() string`, `Plan(ctx) 
     func newFunctionStep(c *Clients, spec Spec, logger *slog.Logger) *functionStep
     ```
 
-    - **Behavior:** Provisions the ingestion Lambda: `provided.al2023` runtime, arm64, 10s timeout, 256MB memory, one env var `REGISTRY_TABLE`.
+    - **Behavior:** Provisions the ingestion Lambda: `provided.al2023` runtime, arm64, 10s timeout, 256MB memory, one env var `REGISTRY_DSN` (never logged, since it carries the Postgres password).
     - **Invariants:** Drift on code is detected by comparing the deployed `CodeSha256` against `codeSHA256(spec.LambdaZip)` (`package.go`), which is why the zip must be byte-deterministic.
 
 ### `apiStep`

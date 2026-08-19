@@ -35,18 +35,21 @@ gcloud auth application-default login
 az login
 ```
 
-### `--registry-region`, on nearly every command
+### `KUBESPIN_REGISTRY_DSN`, on nearly every command
 
-`apply`, `delete`, and every `fleet` subcommand read the Fleet Registry, and
-`--registry-region` has **no default** on purpose (see
-[Fleet bootstrap troubleshooting](fleet-bootstrap.md#troubleshooting)). Supply
-it as a flag, as `KUBESPIN_REGISTRY_REGION`, or as `registry-region` in the
-config file. The examples below pass the flag explicitly; export it once
-instead if you prefer:
+`apply`, `delete`, and every `fleet` subcommand read the Fleet Registry
+(a Postgres database), and its DSN has **no default and no flag** on purpose
+(see [Fleet bootstrap troubleshooting](fleet-bootstrap.md#troubleshooting)) —
+a flag would leak the password into shell history and process listings.
+Supply it as `KUBESPIN_REGISTRY_DSN`, or as `registry-dsn` in the config file:
 
 ```bash
-export KUBESPIN_REGISTRY_REGION=us-east-1
+export KUBESPIN_REGISTRY_DSN=postgres://user:pass@host:5432/dbname?sslmode=require
 ```
+
+`fleet bootstrap` additionally takes its own `--region` flag — the AWS region
+for the ingestion Lambda/IAM/API Gateway it provisions, unrelated to the
+registry DSN.
 
 ### `--profile`, on `apply` and `delete`
 
@@ -128,10 +131,9 @@ kubespin apply \
   --cluster-id demo-aws \
   --access private \
   --profile tier-small@1.0.0 \
-  --github-org "$GITHUB_ORG" \
-  --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 
-kubespin fleet status --phase ready --registry-region us-east-1
+kubespin fleet status --phase ready
 ```
 
 ### GCP, public cluster with a larger node pool
@@ -148,10 +150,9 @@ kubespin apply \
   --profile tier-small@1.0.0 \
   --instance-type e2-standard-4 \
   --min-size 2 --max-size 6 --desired-size 3 \
-  --github-org "$GITHUB_ORG" \
-  --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 
-kubespin fleet status --phase ready --registry-region us-east-1
+kubespin fleet status --phase ready
 ```
 
 `--min-size`, `--max-size`, and `--desired-size` describe the single
@@ -186,8 +187,7 @@ kubespin apply \
   --instance-type e2-standard-2 \
   --min-size 1 --max-size 3 --desired-size 1 \
   --disk-size 30 \
-  --github-org "$GITHUB_ORG" \
-  --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 ```
 
 That's 6 vCPU and 90Gi of boot disk total — comfortably under a 12 vCPU /
@@ -213,10 +213,9 @@ kubespin apply \
   --instance-type Standard_D4s_v7 \
   --profiles-repo platform-profiles \
   --subnets "/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/my-rg/providers/Microsoft.Network/virtualNetworks/my-vnet/subnets/my-subnet" \
-  --github-org "$GITHUB_ORG" \
-  --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 
-kubespin fleet status --phase ready --registry-region us-east-1
+kubespin fleet status --phase ready
 ```
 
 `--profile` with no `--profiles-repo` resolves against the builtin catalog —
@@ -245,8 +244,7 @@ kubespin apply \
   --access private \
   --profile tier-small@1.0.0 \
   --ingestion-endpoint abc123.execute-api.us-east-1.amazonaws.com \
-  --github-org "$GITHUB_ORG" \
-  --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 ```
 
 ### From a cluster.yaml instead of flags
@@ -276,7 +274,7 @@ subnets: []
 
 ```bash
 kubespin apply --spec ./cluster.yaml \
-  --github-org "$GITHUB_ORG" --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 ```
 
 An explicitly-set flag overrides the file, so a checked-out spec can be
@@ -284,7 +282,7 @@ reused with one field changed:
 
 ```bash
 kubespin apply --spec ./cluster.yaml --cluster-id demo-aws-2 \
-  --github-org "$GITHUB_ORG" --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 ```
 
 Overridable this way: `--cluster-id`, `--provider`, `--region`, `--access`,
@@ -309,7 +307,6 @@ kubespin apply \
   --cluster-id demo-aws \
   --access private \
   --profile tier-small@1.0.0 \
-  --registry-region us-east-1 \
   --dry-run
 ```
 
@@ -319,62 +316,130 @@ On an unregistered cluster it prints:
 cluster demo-aws is not registered; apply would create it from phase pending
 ```
 
+## Smoke test: create and destroy a throwaway cluster
+
+The cheapest way to validate a kubespin install (a fresh Fleet Registry, a
+new environment, after upgrading) end to end: bring up one real cluster per
+cloud with the smallest footprint, confirm it reaches `ready`, then tear it
+down.
+
+`apply` installs Argo CD by connecting to the cluster's API server directly
+from wherever `apply` runs (see [Architecture](architecture.md)), so
+`--access private` only works if that machine already has network reachability
+into the cluster's VPC/VNet. Running this from a laptop or a CI runner without
+VPN/peering needs `--access public --authorized-cidrs <your IP>/32` instead —
+on GCP that flag is required outright, since GKE's master-authorized-networks
+otherwise has an empty allowlist and refuses everyone, including the operator.
+`--spot` picks the cheapest viable instance type/pool size for each cloud
+(see [Low-cost dev clusters](low-cost-dev-clusters.md)).
+
+```bash
+MY_IP=$(curl -s https://checkip.amazonaws.com)
+
+kubespin login --only aws,gcp
+
+kubespin apply \
+  --provider aws \
+  --region us-east-1 \
+  --cluster-id smoke-test-aws \
+  --access public \
+  --authorized-cidrs "$MY_IP/32" \
+  --profile tier-small@1.0.0 \
+  --spot \
+  --github-org "$GITHUB_ORG"
+
+kubespin apply \
+  --provider gcp \
+  --gcp-project kubernetes-dev-502710 \
+  --region us-central1 \
+  --cluster-id smoke-test-gcp \
+  --access public \
+  --authorized-cidrs "$MY_IP/32" \
+  --profile tier-small@1.0.0 \
+  --spot \
+  --github-org "$GITHUB_ORG"
+
+kubespin fleet status --phase ready
+```
+
+Once both clusters show `ready`, tear them down:
+
+```bash
+kubespin delete --provider aws --region us-east-1 --cluster-id smoke-test-aws \
+  --profile tier-small@1.0.0 --github-org "$GITHUB_ORG" --yes
+
+kubespin delete --provider gcp --gcp-project kubernetes-dev-502710 --region us-central1 \
+  --cluster-id smoke-test-gcp --profile tier-small@1.0.0 --github-org "$GITHUB_ORG" --yes
+```
+
+A GCP project with several prior test clusters can hit the account-level
+`NETWORKS` quota (5 VPCs by default) before kubespin ever gets a chance to
+create one for the new cluster — the error surfaces as `Quota 'NETWORKS'
+exceeded` from `create cluster: ensuring network`. Check
+`gcloud compute networks list` for orphaned `kubespin-*` networks left behind
+by earlier runs (no matching entry in `kubespin fleet status`, no attached
+GKE cluster in `gcloud container clusters list`) before requesting a quota
+increase — deleting one frees a slot immediately.
+
 ## Fleet lifecycle
 
-The shared fleet infrastructure (Fleet Registry + Central Ingestion API) is
-provisioned once per fleet account, before any cluster. Full walkthrough,
-including required IAM permissions, in [Fleet bootstrap](fleet-bootstrap.md).
+The shared fleet infrastructure — the Central Ingestion API — is provisioned
+once per fleet account, before any cluster, via `fleet bootstrap`. The Fleet
+Registry itself is a separately operated Postgres database
+(`KUBESPIN_REGISTRY_DSN`); it self-migrates its schema on first connect, so
+there is nothing to provision for it. Full walkthrough, including required
+IAM permissions, in [Fleet bootstrap](fleet-bootstrap.md).
 
 ```bash
 # 1. Build the ingestion handler — bootstrap reads it from disk
 make lambda
 
 # 2. Preview
-kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1 --dry-run
+kubespin fleet bootstrap --account-id 465532803838 --region us-east-1 --dry-run
 
 # 3. Apply
-kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1
+kubespin fleet bootstrap --account-id 465532803838 --region us-east-1
 
 # 4. Re-run the preview: everything must now report in sync
-kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1 --dry-run
+kubespin fleet bootstrap --account-id 465532803838 --region us-east-1 --dry-run
 ```
 
 ```bash
 # 5. Spin up clusters (repeat per cluster; see "Spin up a single cluster")
 kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
   --access private --profile tier-small@1.0.0 \
-  --github-org "$GITHUB_ORG" --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 ```
 
 ```bash
 # 6. Watch the fleet — read-only, never connects to a cluster
-kubespin fleet status --registry-region us-east-1
-kubespin fleet status --stale-only --stale-threshold 30m --registry-region us-east-1
-kubespin fleet status --output json --registry-region us-east-1
-kubespin fleet status --provider aws --phase ready --registry-region us-east-1
+kubespin fleet status
+kubespin fleet status --stale-only --stale-threshold 30m
+kubespin fleet status --output json
+kubespin fleet status --provider aws --phase ready
 
 # Same data, rendered as a static HTML snapshot you can open in a browser
-kubespin fleet dashboard --registry-region us-east-1
+kubespin fleet dashboard
 ```
 
 ```bash
 # 7. Roll a component version across every matching cluster
 kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8 \
-  --github-org "$GITHUB_ORG" --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 
 # Scope a wave to one cloud
 kubespin fleet update --component cert-manager --version 1.15.1 --provider aws \
-  --github-org "$GITHUB_ORG" --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 ```
 
 ```bash
 # 8. Check live infra against each cluster's cluster.yaml
 kubespin fleet audit \
-  --github-org "$GITHUB_ORG" --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 
 kubespin fleet audit --provider gcp --concurrency 8 \
   --gcp-project kubernetes-dev-502710 \
-  --github-org "$GITHUB_ORG" --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 ```
 
 `fleet audit` describes live infrastructure through each cloud's SDK, so a
@@ -395,8 +460,7 @@ kubespin delete \
   --region us-east-1 \
   --cluster-id demo-aws \
   --profile tier-small@1.0.0 \
-  --github-org "$GITHUB_ORG" \
-  --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 ```
 
 ```bash
@@ -408,14 +472,13 @@ kubespin delete \
   --cluster-id demo-gcp \
   --profile tier-small@1.0.0 \
   --github-org "$GITHUB_ORG" \
-  --registry-region us-east-1 \
   --yes
 ```
 
 ```bash
 # Using the same cluster.yaml apply was run with
 kubespin delete --spec ./cluster.yaml \
-  --github-org "$GITHUB_ORG" --registry-region us-east-1 --yes
+  --github-org "$GITHUB_ORG" --yes
 ```
 
 `delete` validates a full spec exactly like `apply`, which is why
@@ -452,14 +515,14 @@ Precedence is **flags > `KUBESPIN_*` environment variables > config file >
 defaults**.
 
 ```bash
-kubespin fleet status --registry-region us-east-1 \
+kubespin fleet status \
   --log-level debug --log-format json
 ```
 
 Logs go to stderr and command output to stdout, so the two can be separated:
 
 ```bash
-kubespin fleet status --registry-region us-east-1 --output json 2>/dev/null
+kubespin fleet status --output json 2>/dev/null
 ```
 
 A config file at `$XDG_CONFIG_HOME/kubespin/config.yaml` or `./config.yaml`
@@ -468,11 +531,11 @@ A config file at `$XDG_CONFIG_HOME/kubespin/config.yaml` or `./config.yaml`
 ```yaml
 log-level: info
 log-format: text
-registry-table: kubespin-fleet-registry
-registry-region: us-east-1
+registry-dsn: postgres://user:pass@host:5432/dbname?sslmode=require
 ```
 
-With that in place, every example above works without `--registry-region`.
+With that in place, or with `KUBESPIN_REGISTRY_DSN` exported, every example
+above works as written — the DSN is never a flag.
 
 ## Exit codes
 

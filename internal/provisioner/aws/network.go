@@ -3,13 +3,16 @@ package aws
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"sort"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/smithy-go"
 
 	"github.com/GitOpsHub/kubespin/internal/core"
 	"github.com/GitOpsHub/kubespin/internal/provisioner"
@@ -31,11 +34,15 @@ const (
 type NetworkProvisioner struct {
 	c       *Clients
 	cluster *ClusterProvisioner
+
+	// retryInterval defaults to deleteVPCRetryInterval, overridden to zero in
+	// tests so DeleteNetwork's DependencyViolation retry doesn't actually sleep.
+	retryInterval time.Duration
 }
 
 // NewNetworkProvisioner builds an egress provisioner.
 func NewNetworkProvisioner(c *Clients) *NetworkProvisioner {
-	return &NetworkProvisioner{c: c, cluster: NewClusterProvisioner(c)}
+	return &NetworkProvisioner{c: c, cluster: NewClusterProvisioner(c), retryInterval: deleteVPCRetryInterval}
 }
 
 // Provider identifies this implementation's cloud.
@@ -296,6 +303,198 @@ func (p *NetworkProvisioner) ensureRouteTable(
 	change.Details = append(change.Details,
 		fmt.Sprintf("created route table %s with default route via %s", rtID, igwID))
 	return nil
+}
+
+// deleteVPCRetries/deleteVPCRetryInterval bound how long DeleteNetwork waits
+// out a transient DependencyViolation on the final DeleteVpc call: an ENI a
+// just-deleted load balancer owned can take tens of seconds to detach after
+// the load balancer itself reports deleted, and every other resource this
+// function tears down is already gone by the time it gets here.
+const (
+	deleteVPCRetries       = 12
+	deleteVPCRetryInterval = 10 * time.Second
+)
+
+// DeleteNetwork reverses EnsureNetwork: it finds the VPC by the same
+// deterministic Name tag EnsureNetwork looked it up by and, if found, deletes
+// every resource this package could have created inside it. If no such VPC
+// exists — an operator-supplied --subnets network, or one already torn
+// down — this is a no-op, never touching a network kubespin did not create.
+func (p *NetworkProvisioner) DeleteNetwork(ctx context.Context, spec core.ClusterSpec) error {
+	n := names{spec}
+
+	vpcID, err := p.findVPC(ctx, n)
+	if err != nil {
+		return err
+	}
+	if vpcID == "" {
+		return nil
+	}
+
+	if err := p.deleteSecurityGroups(ctx, vpcID); err != nil {
+		return err
+	}
+	if err := p.deleteInternetGateways(ctx, vpcID); err != nil {
+		return err
+	}
+	if err := p.deleteSubnets(ctx, vpcID); err != nil {
+		return err
+	}
+	if err := p.deleteRouteTables(ctx, vpcID); err != nil {
+		return err
+	}
+	return p.deleteVPC(ctx, vpcID)
+}
+
+func (p *NetworkProvisioner) findVPC(ctx context.Context, n names) (string, error) {
+	out, err := p.c.ec2.DescribeVpcs(ctx, &ec2.DescribeVpcsInput{
+		Filters: []ec2types.Filter{tagNameFilter(n.vpcName())},
+	})
+	if err != nil {
+		return "", fmt.Errorf("describing VPC %s: %w", n.vpcName(), err)
+	}
+	if len(out.Vpcs) == 0 {
+		return "", nil
+	}
+	return aws.ToString(out.Vpcs[0].VpcId), nil
+}
+
+// deleteSecurityGroups removes every non-default group in the VPC. The
+// default group is deleted automatically with the VPC itself and cannot be
+// deleted directly. A group created outside EnsureNetwork — most notably the
+// one a Kubernetes Service of type LoadBalancer's cloud-provider integration
+// creates — would otherwise block DeleteVpc the same way it blocked it during
+// manual cleanup that motivated this method.
+func (p *NetworkProvisioner) deleteSecurityGroups(ctx context.Context, vpcID string) error {
+	out, err := p.c.ec2.DescribeSecurityGroups(ctx, &ec2.DescribeSecurityGroupsInput{
+		Filters: []ec2types.Filter{vpcIDFilter(vpcID)},
+	})
+	if err != nil {
+		return fmt.Errorf("describing security groups in %s: %w", vpcID, err)
+	}
+	for _, sg := range out.SecurityGroups {
+		if aws.ToString(sg.GroupName) == "default" {
+			continue
+		}
+		groupID := aws.ToString(sg.GroupId)
+		if _, err := p.c.ec2.DeleteSecurityGroup(ctx, &ec2.DeleteSecurityGroupInput{
+			GroupId: aws.String(groupID),
+		}); err != nil {
+			return fmt.Errorf("deleting security group %s: %w", groupID, err)
+		}
+		p.c.logger.Info("deleted security group", "group", groupID)
+	}
+	return nil
+}
+
+func (p *NetworkProvisioner) deleteInternetGateways(ctx context.Context, vpcID string) error {
+	out, err := p.c.ec2.DescribeInternetGateways(ctx, &ec2.DescribeInternetGatewaysInput{
+		Filters: []ec2types.Filter{{Name: aws.String("attachment.vpc-id"), Values: []string{vpcID}}},
+	})
+	if err != nil {
+		return fmt.Errorf("describing internet gateways attached to %s: %w", vpcID, err)
+	}
+	for _, igw := range out.InternetGateways {
+		igwID := aws.ToString(igw.InternetGatewayId)
+		if _, err := p.c.ec2.DetachInternetGateway(ctx, &ec2.DetachInternetGatewayInput{
+			InternetGatewayId: aws.String(igwID),
+			VpcId:             aws.String(vpcID),
+		}); err != nil {
+			return fmt.Errorf("detaching internet gateway %s: %w", igwID, err)
+		}
+		if _, err := p.c.ec2.DeleteInternetGateway(ctx, &ec2.DeleteInternetGatewayInput{
+			InternetGatewayId: aws.String(igwID),
+		}); err != nil {
+			return fmt.Errorf("deleting internet gateway %s: %w", igwID, err)
+		}
+		p.c.logger.Info("deleted internet gateway", "gateway", igwID)
+	}
+	return nil
+}
+
+func (p *NetworkProvisioner) deleteSubnets(ctx context.Context, vpcID string) error {
+	out, err := p.c.ec2.DescribeSubnets(ctx, &ec2.DescribeSubnetsInput{
+		Filters: []ec2types.Filter{vpcIDFilter(vpcID)},
+	})
+	if err != nil {
+		return fmt.Errorf("describing subnets in %s: %w", vpcID, err)
+	}
+	for _, subnet := range out.Subnets {
+		subnetID := aws.ToString(subnet.SubnetId)
+		if _, err := p.c.ec2.DeleteSubnet(ctx, &ec2.DeleteSubnetInput{SubnetId: aws.String(subnetID)}); err != nil {
+			return fmt.Errorf("deleting subnet %s: %w", subnetID, err)
+		}
+		p.c.logger.Info("deleted subnet", "subnet", subnetID)
+	}
+	return nil
+}
+
+// deleteRouteTables skips the main table: it is deleted implicitly with the
+// VPC and, unlike the ones EnsureNetwork creates, cannot be deleted directly.
+func (p *NetworkProvisioner) deleteRouteTables(ctx context.Context, vpcID string) error {
+	out, err := p.c.ec2.DescribeRouteTables(ctx, &ec2.DescribeRouteTablesInput{
+		Filters: []ec2types.Filter{vpcIDFilter(vpcID)},
+	})
+	if err != nil {
+		return fmt.Errorf("describing route tables in %s: %w", vpcID, err)
+	}
+	for _, rt := range out.RouteTables {
+		if isMainRouteTable(rt) {
+			continue
+		}
+		rtID := aws.ToString(rt.RouteTableId)
+		if _, err := p.c.ec2.DeleteRouteTable(ctx, &ec2.DeleteRouteTableInput{RouteTableId: aws.String(rtID)}); err != nil {
+			return fmt.Errorf("deleting route table %s: %w", rtID, err)
+		}
+		p.c.logger.Info("deleted route table", "table", rtID)
+	}
+	return nil
+}
+
+func isMainRouteTable(rt ec2types.RouteTable) bool {
+	for _, assoc := range rt.Associations {
+		if aws.ToBool(assoc.Main) {
+			return true
+		}
+	}
+	return false
+}
+
+// deleteVPC retries a DependencyViolation for a while: an ENI a just-deleted
+// load balancer owned can take tens of seconds to detach after the load
+// balancer itself reports deleted.
+func (p *NetworkProvisioner) deleteVPC(ctx context.Context, vpcID string) error {
+	var lastErr error
+	for attempt := 0; attempt < deleteVPCRetries; attempt++ {
+		_, err := p.c.ec2.DeleteVpc(ctx, &ec2.DeleteVpcInput{VpcId: aws.String(vpcID)})
+		if err == nil {
+			p.c.logger.Info("deleted VPC", "vpc", vpcID)
+			return nil
+		}
+		if !isAWSErrorCode(err, "DependencyViolation") {
+			return fmt.Errorf("deleting VPC %s: %w", vpcID, err)
+		}
+		lastErr = err
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(p.retryInterval):
+		}
+	}
+	return fmt.Errorf("deleting VPC %s: dependencies did not clear in time: %w", vpcID, lastErr)
+}
+
+func vpcIDFilter(vpcID string) ec2types.Filter {
+	return ec2types.Filter{Name: aws.String("vpc-id"), Values: []string{vpcID}}
+}
+
+// isAWSErrorCode reports whether err is an AWS API error with the given code
+// (e.g. "DependencyViolation"). EC2 surfaces these as smithy.APIError rather
+// than typed exceptions the way DynamoDB or EKS do.
+func isAWSErrorCode(err error, code string) bool {
+	var apiErr smithy.APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode() == code
 }
 
 // tagNameFilter looks resources up by their deterministic Name tag, the same

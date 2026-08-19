@@ -10,8 +10,6 @@ import (
 	apitypes "github.com/aws/aws-sdk-go-v2/service/apigatewayv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	logstypes "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	dynamotypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
@@ -19,7 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
-// fakeAWS is an in-memory stand-in for the six AWS services this package uses.
+// fakeAWS is an in-memory stand-in for the five AWS services this package uses.
 // It records every call by name so tests can assert not just the end state but
 // which calls were made — which is how --dry-run is held to making none.
 type fakeAWS struct {
@@ -27,8 +25,6 @@ type fakeAWS struct {
 
 	account string
 
-	table        *dynamotypes.TableDescription
-	pitrEnabled  bool
 	logGroups    map[string]*int32 // name -> retention days
 	roleExists   bool
 	rolePolicy   string // URL-encoded, as IAM returns it
@@ -66,7 +62,6 @@ func (f *fakeAWS) called(names ...string) bool {
 
 // mutatingCalls is every call that changes state. A dry run must make none.
 var mutatingCalls = []string{
-	"CreateTable", "UpdateTable", "UpdateContinuousBackups",
 	"CreateLogGroup", "PutRetentionPolicy",
 	"CreateRole", "PutRolePolicy",
 	"CreateFunction", "UpdateFunctionCode", "UpdateFunctionConfiguration", "AddPermission",
@@ -85,7 +80,7 @@ func (f *fakeAWS) assertNoMutations(t *testing.T) {
 }
 
 func (f *fakeAWS) clients() *Clients {
-	return &Clients{sts: f, dynamo: f, logs: f, iam: f, lambda: f, apiGateway: f}
+	return &Clients{sts: f, logs: f, iam: f, lambda: f, apiGateway: f}
 }
 
 // --- STS ---
@@ -93,69 +88,6 @@ func (f *fakeAWS) clients() *Clients {
 func (f *fakeAWS) GetCallerIdentity(context.Context, *sts.GetCallerIdentityInput, ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {
 	f.record("GetCallerIdentity")
 	return &sts.GetCallerIdentityOutput{Account: aws.String(f.account)}, nil
-}
-
-// --- DynamoDB ---
-
-func (f *fakeAWS) DescribeTable(context.Context, *dynamodb.DescribeTableInput, ...func(*dynamodb.Options)) (*dynamodb.DescribeTableOutput, error) {
-	f.record("DescribeTable")
-	if f.table == nil {
-		return nil, &dynamotypes.ResourceNotFoundException{}
-	}
-	return &dynamodb.DescribeTableOutput{Table: f.table}, nil
-}
-
-func (f *fakeAWS) CreateTable(_ context.Context, in *dynamodb.CreateTableInput, _ ...func(*dynamodb.Options)) (*dynamodb.CreateTableOutput, error) {
-	f.record("CreateTable")
-	f.table = &dynamotypes.TableDescription{
-		TableName:                 in.TableName,
-		TableStatus:               dynamotypes.TableStatusActive,
-		DeletionProtectionEnabled: in.DeletionProtectionEnabled,
-		SSEDescription:            &dynamotypes.SSEDescription{Status: dynamotypes.SSEStatusEnabled},
-		GlobalSecondaryIndexes: []dynamotypes.GlobalSecondaryIndexDescription{
-			{IndexName: aws.String(gsiName)},
-		},
-	}
-	return &dynamodb.CreateTableOutput{}, nil
-}
-
-func (f *fakeAWS) UpdateTable(_ context.Context, in *dynamodb.UpdateTableInput, _ ...func(*dynamodb.Options)) (*dynamodb.UpdateTableOutput, error) {
-	f.record("UpdateTable")
-	if in.DeletionProtectionEnabled != nil {
-		f.table.DeletionProtectionEnabled = in.DeletionProtectionEnabled
-	}
-	if in.SSESpecification != nil {
-		f.table.SSEDescription = &dynamotypes.SSEDescription{Status: dynamotypes.SSEStatusEnabled}
-	}
-	for _, update := range in.GlobalSecondaryIndexUpdates {
-		if update.Create != nil {
-			f.table.GlobalSecondaryIndexes = append(f.table.GlobalSecondaryIndexes,
-				dynamotypes.GlobalSecondaryIndexDescription{IndexName: update.Create.IndexName})
-		}
-	}
-	return &dynamodb.UpdateTableOutput{}, nil
-}
-
-func (f *fakeAWS) DescribeContinuousBackups(context.Context, *dynamodb.DescribeContinuousBackupsInput, ...func(*dynamodb.Options)) (*dynamodb.DescribeContinuousBackupsOutput, error) {
-	f.record("DescribeContinuousBackups")
-
-	status := dynamotypes.PointInTimeRecoveryStatusDisabled
-	if f.pitrEnabled {
-		status = dynamotypes.PointInTimeRecoveryStatusEnabled
-	}
-	return &dynamodb.DescribeContinuousBackupsOutput{
-		ContinuousBackupsDescription: &dynamotypes.ContinuousBackupsDescription{
-			PointInTimeRecoveryDescription: &dynamotypes.PointInTimeRecoveryDescription{
-				PointInTimeRecoveryStatus: status,
-			},
-		},
-	}, nil
-}
-
-func (f *fakeAWS) UpdateContinuousBackups(context.Context, *dynamodb.UpdateContinuousBackupsInput, ...func(*dynamodb.Options)) (*dynamodb.UpdateContinuousBackupsOutput, error) {
-	f.record("UpdateContinuousBackups")
-	f.pitrEnabled = true
-	return &dynamodb.UpdateContinuousBackupsOutput{}, nil
 }
 
 // --- CloudWatch Logs ---
@@ -340,9 +272,9 @@ const testAccount = "123456789012"
 
 func testSpec() Spec {
 	return Spec{
-		AccountID:     testAccount,
-		Region:        "us-east-1",
-		RegistryTable: "kubespin-fleet-registry",
-		LambdaZip:     []byte("fake-zip-bytes"),
+		AccountID:   testAccount,
+		Region:      "us-east-1",
+		RegistryDSN: "postgres://user:pass@localhost:5432/kubespin?sslmode=disable",
+		LambdaZip:   []byte("fake-zip-bytes"),
 	}.withDefaults()
 }

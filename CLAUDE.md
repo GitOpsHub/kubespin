@@ -30,7 +30,7 @@ Read the implementation plan before making architectural decisions; it is a comp
 These constrain nearly every design decision — violating one usually means the design is wrong, not that the invariant should bend:
 
 - **Outbound-only.** Nothing on the fleet-management side may require reaching into a cluster. Status, drift, and health information arrives via push from inside the cluster.
-- **Fleet Registry (DynamoDB) is the single source of durable fleet state.** Keyed by `ClusterID`, tracking a phase state machine: `pending → cluster-created → identity-bound → repo-pushed → argocd-installed → ready`. Every component reads/writes it through `internal/registry`, never with raw SDK calls. Concurrent `apply` races are prevented by a DynamoDB conditional-write lease keyed on `ClusterID`.
+- **Fleet Registry (Postgres) is the single source of durable fleet state.** Keyed by `ClusterID`, tracking a phase state machine: `pending → cluster-created → identity-bound → repo-pushed → argocd-installed → ready`. Every component reads/writes it through `internal/registry`, never with raw SQL. Concurrent `apply` races are prevented by a conditional-update lease keyed on `ClusterID`. The database itself is operator-supplied (`KUBESPIN_REGISTRY_DSN`, env/`.env`-only — never a flag, since a flag would leak the password into shell history); `internal/registry.Postgres` self-migrates its schema on first connect, so there is no separate provisioning step for it.
 - **Cloud-native workload identity everywhere** — IRSA (AWS), Workload Identity (GCP), federated credential + managed identity (Azure). No static credentials in clusters; the status reporter's signature is what proves a cluster's identity to the ingestion API, so signatures must not be replayable across clusters.
 - **`apply` is idempotent and split-diff.** Clone the cluster repo, hash desired state against `.state.yaml`, then route changes: infra diffs become cloud SDK calls, addon diffs become a git commit + push. A no-change `apply` must produce zero commits and zero cloud calls.
 - **The three clouds are built against shared interfaces, in parallel** — `ClusterProvisioner` (`Create`/`Describe`/`Reconcile`/`Delete`), `IdentityProvisioner` (`ProvisionForComponent`), and `NetworkProvisioner` (`EnsureNetwork`/`AllowEgress`). Cloud-specific behavior belongs behind these interfaces in `internal/provisioner/{aws,gcp,azure}`; no cloud conditionals should leak into command, orchestrator, or catalog code.
@@ -38,7 +38,7 @@ These constrain nearly every design decision — violating one usually means the
 - **`Access: private|public` is a first-class field on `ClusterSpec`**, not an afterthought. It branches cluster creation (endpoint/authorized-networks config per cloud) *and* addon templating (internal LB unless `access: public` and `ingress.exposure: external`), and is enforced at admission by a Kyverno public-exposure-deny policy.
 - **Installing Argo CD is a direct connection, not a push.** `apply` reaches the API server itself (Helm SDK) from whatever machine runs it — nothing inside the cluster pushes the install out. So `--access private` requires the operator's machine to already have network reachability into the cluster's VPC/VNet (VPN, peering, or a bastion), and on GCP, `--access public` alone is not enough either: GKE enables master-authorized-networks with an empty allowlist by default, so `--authorized-cidrs` must include the caller's IP before *anyone*, including the operator, can reach the endpoint. AWS/Azure public endpoints are open to `0.0.0.0/0` unless `--authorized-cidrs` is set. GKE nodes are also always created with `EnablePrivateNodes` regardless of access mode, so a kubespin-managed GCP network provisions a Cloud Router + Cloud NAT alongside the VPC/subnet — without it those nodes have no path to pull an addon's image from a public registry at all.
 - **Go only — no second toolchain.** Fleet infrastructure is provisioned by `internal/fleetinfra` through `aws-sdk-go-v2`, not Terraform or CloudFormation. There is no state file, so convergence is the contract: every step is create-or-update, never delete, `Plan` is strictly read-only (that is what makes `--dry-run` honest), and a run against provisioned infrastructure must report no changes. Each AWS service is reached through a narrow interface declared in the package so the whole engine is testable without credentials.
-- **Delete is a reverse teardown, and repos are archived, not deleted:** mark decommissioning → IAM/OIDC cleanup → cluster delete → repo archive → registry `decommissioned`.
+- **Delete is a reverse teardown, and repos are archived, not deleted:** mark decommissioning → IAM/OIDC cleanup → drain `Service type=LoadBalancer` (a cloud load balancer the cluster's own deletion does not clean up on its own, orphaned and billing indefinitely otherwise) → cluster delete → network delete (only what `EnsureNetwork` created, found by deterministic name rather than trusting `--subnets` was re-supplied) → repo archive → registry `decommissioned`. Every provider's `Describe`/`Delete` must resolve a cluster by deterministic name, not by trusting the caller's spec to carry the same `--zone`/`--spot`-derived fields `apply` used — GCP's `ClusterProvisioner.locate` exists specifically because `delete` does not require re-supplying them, and a location-derived path that 404s must not be read as "already gone."
 
 ## Package layout
 
@@ -49,7 +49,7 @@ cmd/fleet-status-reporter/    in-cluster CronJob: queries local Argo CD, pushes 
 internal/cli/                 cobra command tree: apply, delete, fleet bootstrap|update|audit|status, login, status, logout
 internal/core/                shared domain types: ClusterID, ClusterSpec, Profile, AddonRef, Access, NodePool
 internal/auth/                operator-facing cloud auth: shells out to aws/gcloud/az, backs `login`/`status`/`logout` and the apply/delete preflight
-internal/fleetinfra/          SDK converge engine behind `fleet bootstrap`
+internal/fleetinfra/          SDK converge engine behind `fleet bootstrap`; provisions the Central Ingestion API (Lambda/IAM/API Gateway) only — the Postgres Fleet Registry self-migrates its own schema, not provisioned here
 internal/provisioner/{aws,gcp,azure}   ClusterProvisioner + IdentityProvisioner + NetworkProvisioner impls (EKS/GKE/AKS)
 internal/repo/                RepoProvisioner over GitHub Enterprise (go-github): Exists/Create/Clone/Push/Archive
 internal/registry/            Fleet Registry client + lease/locking
@@ -91,26 +91,27 @@ kubespin login --only aws,gcp                     # just these
 kubespin status                                   # session validity per provider, never fails the command
 kubespin logout --only azure
 
-# Fleet infra (once per fleet account, before any cluster)
+# Fleet infra (once per fleet account, before any cluster) — --region here is
+# the AWS region for the ingestion Lambda/IAM/API Gateway, unrelated to where
+# the Postgres registry itself is hosted.
 make lambda
-kubespin fleet bootstrap --account-id <12-digit-id> --registry-region us-east-1 --dry-run
-kubespin fleet bootstrap --account-id <12-digit-id> --registry-region us-east-1
+kubespin fleet bootstrap --account-id <12-digit-id> --region us-east-1 --dry-run
+kubespin fleet bootstrap --account-id <12-digit-id> --region us-east-1
 
 # Apply — AWS, letting kubespin create the VPC/subnets
 kubespin apply --provider aws --cluster-id eks-demo-01 --region us-east-1 \
-  --access private --github-org GitOpsHub --profile tier-small@1.0.0 \
-  --registry-region us-east-1 --dry-run
+  --access private --github-org GitOpsHub --profile tier-small@1.0.0 --dry-run
 
 # Apply — GCP, same idea (subnetwork auto-created if --subnets is omitted)
 kubespin apply --provider gcp --gcp-project kubernetes-dev-502710 --cluster-id gke-demo-01 \
   --region us-central1 --access private --github-org GitOpsHub \
-  --profile tier-small@1.0.0 --registry-region us-east-1
+  --profile tier-small@1.0.0
 
 # Apply — Azure, with an operator-supplied subnet instead of an auto-created one
 kubespin apply --provider azure --azure-subscription 3df9adbd-ea55-4c92-964c-0252031979de \
   --cluster-id aks-demo-01 --region eastus --access private \
   --subnets /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet> \
-  --github-org GitOpsHub --profile tier-small@1.0.0 --registry-region us-east-1
+  --github-org GitOpsHub --profile tier-small@1.0.0
 
 # Fleet-wide (operate across clusters, filtered rather than single-cluster)
 kubespin fleet status --stale-only
@@ -118,11 +119,11 @@ kubespin fleet audit --provider aws --github-org GitOpsHub
 kubespin fleet update --component argo-rollouts --version 1.7.0 --github-org GitOpsHub
 
 # Teardown — reverse of apply: decommission mark → IAM/OIDC cleanup → cluster delete → repo archive
-kubespin delete --cluster-id eks-demo-01 --registry-region us-east-1 --dry-run
-kubespin delete --cluster-id eks-demo-01 --registry-region us-east-1
+kubespin delete --cluster-id eks-demo-01 --dry-run
+kubespin delete --cluster-id eks-demo-01
 ```
 
-`--registry-region` has no default — it must come from the flag, `KUBESPIN_REGISTRY_REGION`, or the config file, since silently defaulting risks splitting a fleet across two registries with no error. See [.env.example](.env.example) for the env vars real (non-dry-run) `apply`/`delete` need (`GITHUB_TOKEN`, `GITHUB_ORG`, `KUBESPIN_REGISTRY_REGION`).
+`KUBESPIN_REGISTRY_DSN` has no default and is never a flag (a flag would leak the database password into shell history/process listings) — it must come from the environment, a `.env` file (auto-loaded), or the config file's `registry-dsn` key, since silently defaulting risks splitting a fleet across two registries with no error. See [.env.example](.env.example) for the env vars real (non-dry-run) `apply`/`delete` need (`GITHUB_TOKEN`, `GITHUB_ORG`, `KUBESPIN_REGISTRY_DSN`).
 
 ## Working with the plan
 

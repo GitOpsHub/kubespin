@@ -82,6 +82,7 @@ type networkAPI interface {
 type resourceGroupAPI interface {
 	GetResourceGroup(ctx context.Context, name string) (bool, error)
 	EnsureResourceGroup(ctx context.Context, name, location string) error
+	DeleteResourceGroup(ctx context.Context, name string) error
 }
 
 // Clients bundles the Azure clients the provisioner uses, scoped to one
@@ -389,6 +390,23 @@ func (r realResourceGroups) EnsureResourceGroup(ctx context.Context, name, locat
 	}, nil)
 	if err != nil {
 		return fmt.Errorf("resources: create or update resource group %s: %w", name, err)
+	}
+	return nil
+}
+
+// DeleteResourceGroup deletes the group and everything in it — the cluster,
+// and the VNet/subnet if kubespin created them — and waits for the deletion
+// to finish, unlike Delete on the cluster/node-pool clients, which are
+// deliberately fire-and-forget for the orchestrator's own WaitUntilGone to
+// poll. Nothing polls a network's teardown separately, so this is the one
+// place that has to wait for itself.
+func (r realResourceGroups) DeleteResourceGroup(ctx context.Context, name string) error {
+	poller, err := r.groups.BeginDelete(ctx, name, nil)
+	if err != nil {
+		return fmt.Errorf("resources: delete resource group %s: %w", name, err)
+	}
+	if _, err := poller.PollUntilDone(ctx, nil); err != nil {
+		return fmt.Errorf("resources: delete resource group %s: %w", name, err)
 	}
 	return nil
 }

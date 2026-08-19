@@ -151,11 +151,38 @@ func TestTeardown_CallsIdentityThenClusterThenRepo(t *testing.T) {
 
 	deprovision := slices.Index(f.calls, "Deprovision")
 	del := slices.Index(f.calls, "Delete")
+	deleteNetwork := slices.Index(f.calls, "DeleteNetwork")
 	if deprovision < 0 || del < 0 || deprovision > del {
 		t.Errorf("calls = %v, want Deprovision before Delete", f.calls)
 	}
+	if deleteNetwork < 0 || deleteNetwork < del {
+		t.Errorf("calls = %v, want DeleteNetwork after Delete", f.calls)
+	}
 	if !repoProv.Archived(spec) {
 		t.Error("expected the repository to have been archived")
+	}
+}
+
+// A network kubespin failed to tear down must fail the whole teardown,
+// leaving the phase at decommissioning for a retry — not archive the repo
+// and let the caller mark it decommissioned while a VPC/network still lingers
+// unaccounted for.
+func TestTeardown_FailsWhenNetworkDeletionFails(t *testing.T) {
+	f := newFakeCloud()
+	f.deleteNetworkErr = errors.New("dependency violation")
+	spec := testSpec()
+
+	repoProv := repo.NewMemory()
+	if err := repoProv.Create(t.Context(), spec); err != nil {
+		t.Fatalf("seeding repo: %v", err)
+	}
+
+	err := Teardown(f.cloud(), repoProv, quietLogger())(t.Context(), spec, registry.Record{})
+	if err == nil {
+		t.Fatal("Teardown succeeded, want the DeleteNetwork error surfaced")
+	}
+	if repoProv.Archived(spec) {
+		t.Error("the repository was archived even though the network was never deleted")
 	}
 }
 

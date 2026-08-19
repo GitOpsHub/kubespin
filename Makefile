@@ -54,7 +54,8 @@ lambda:
 test:
 	go test -race -cover ./...
 
-## Integration tests need real cloud/DynamoDB-Local credentials; opt-in only.
+## Integration tests need real cloud credentials and a reachable Postgres
+## (KUBESPIN_POSTGRES_TEST_DSN); opt-in only.
 .PHONY: integration
 integration:
 	go test -race -tags=integration ./...

@@ -20,12 +20,12 @@ func newFleetCommand() *cobra.Command {
 	fleetCmd := &cobra.Command{
 		Use:   "fleet",
 		Short: "Operate on the whole fleet rather than a single cluster",
-		Example: `  # The typical fleet lifecycle, in order
-  kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1
-  kubespin fleet status --registry-region us-east-1
-  kubespin fleet update --component argo-cd --version 2.11.0 \
-    --github-org GitOpsHub --registry-region us-east-1
-  kubespin fleet audit --github-org GitOpsHub --registry-region us-east-1`,
+		Example: `  # The typical fleet lifecycle, in order. KUBESPIN_REGISTRY_DSN must be set
+  # (in .env or the environment) for every one of these.
+  kubespin fleet bootstrap --account-id 465532803838 --region us-east-1
+  kubespin fleet status
+  kubespin fleet update --component argo-cd --version 2.11.0 --github-org GitOpsHub
+  kubespin fleet audit --github-org GitOpsHub`,
 		Args: cobra.NoArgs,
 		// With no subcommand, print help rather than failing.
 		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
@@ -65,15 +65,15 @@ reports "already up to date" and commits nothing, so re-running a partially
 failed wave is safe.`,
 		Example: `  # Roll a new Argo CD version across every cluster, 8 at a time
   kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8 \
-    --github-org GitOpsHub --registry-region us-east-1
+    --github-org GitOpsHub
 
   # Canary the first 3 clusters before rolling to the rest of the fleet
   kubespin fleet update --component cert-manager --version 1.15.1 \
-    --canary-count 3 --github-org GitOpsHub --registry-region us-east-1
+    --canary-count 3 --github-org GitOpsHub
 
   # Scope the wave to one cloud
   kubespin fleet update --component cert-manager --version 1.15.1 \
-    --provider aws --github-org GitOpsHub --registry-region us-east-1`,
+    --provider aws --github-org GitOpsHub`,
 		Args: cobra.NoArgs,
 		RunE: runFleetUpdate,
 	}
@@ -186,16 +186,16 @@ clean result) are persisted to the Fleet Registry, so 'fleet status' and
 other fleet-wide tooling can read the most recent audit result without
 re-running one.`,
 		Example: `  # Audit every cluster in the fleet
-  kubespin fleet audit --github-org GitOpsHub --registry-region us-east-1
+  kubespin fleet audit --github-org GitOpsHub
 
   # Audit only AWS clusters, with more concurrency
   kubespin fleet audit --provider aws --concurrency 8 \
-    --github-org GitOpsHub --registry-region us-east-1
+    --github-org GitOpsHub
 
   # A fleet with GCP or Azure clusters needs their project/subscription too
   kubespin fleet audit --gcp-project kubernetes-dev-502710 \
     --azure-subscription 3df9adbd-ea55-4c92-964c-0252031979de \
-    --github-org GitOpsHub --registry-region us-east-1`,
+    --github-org GitOpsHub`,
 		Args: cobra.NoArgs,
 		RunE: runFleetAudit,
 	}
@@ -295,15 +295,13 @@ func newFleetStatusCommand() *cobra.Command {
 fleet-status-reporter pushing outward. It never connects to a cluster, so a
 cluster that is unreachable shows as stale rather than blocking the command.`,
 		Example: `  # Every cluster, as a table
-  kubespin fleet status --registry-region us-east-1
+  kubespin fleet status
 
   # Only clusters that have missed their reporting window
-  kubespin fleet status --stale-only --stale-threshold 30m \
-    --registry-region us-east-1
+  kubespin fleet status --stale-only --stale-threshold 30m
 
   # Machine-readable output, restricted to one phase
-  kubespin fleet status --phase ready --output json \
-    --registry-region us-east-1`,
+  kubespin fleet status --phase ready --output json`,
 		Args: cobra.NoArgs,
 		RunE: runFleetStatus,
 	}
@@ -401,12 +399,11 @@ func registryPrereqs(cmd *cobra.Command) (*Config, registry.Registry, error) {
 	if !ok {
 		return nil, nil, errors.New("configuration was not resolved")
 	}
-	if cfg.Registry.Region == "" {
-		return nil, nil, fmt.Errorf("%w: --registry-region is required", ErrConfig)
+	if cfg.Registry.DSN == "" {
+		return nil, nil, fmt.Errorf("%w: the Postgres registry DSN is required (KUBESPIN_REGISTRY_DSN)", ErrConfig)
 	}
 
-	reg, err := registry.NewDynamoDB(ctx, cfg.Registry.Region, cfg.Registry.Table,
-		registry.WithLogger(LoggerFrom(ctx)))
+	reg, err := registry.NewPostgres(ctx, cfg.Registry.DSN, registry.WithLogger(LoggerFrom(ctx)))
 	if err != nil {
 		return nil, nil, fmt.Errorf("connecting to the Fleet Registry: %w", err)
 	}

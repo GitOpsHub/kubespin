@@ -51,6 +51,7 @@ var mutatingCalls = []string{
 	"CreateOrUpdateFederatedCredential", "DeleteFederatedCredential",
 	"CreateOrUpdateSecurityRule",
 	"EnsureResourceGroup", "CreateOrUpdateVirtualNetwork", "CreateOrUpdateSubnet",
+	"DeleteResourceGroup",
 }
 
 func (f *fakeAzure) assertNoMutations(t *testing.T) {
@@ -304,6 +305,12 @@ func (f *fakeAzure) GetResourceGroup(_ context.Context, name string) (bool, erro
 func (f *fakeAzure) EnsureResourceGroup(_ context.Context, name, location string) error {
 	f.record("EnsureResourceGroup")
 	f.resourceGroups[name] = location
+	return nil
+}
+
+func (f *fakeAzure) DeleteResourceGroup(_ context.Context, name string) error {
+	f.record("DeleteResourceGroup")
+	delete(f.resourceGroups, name)
 	return nil
 }
 

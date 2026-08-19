@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"slices"
 	"strings"
 	"testing"
@@ -32,10 +33,11 @@ type fakeCloud struct {
 	deletingPolls int
 	deleted       bool
 
-	createErr   error
-	identityErr error
-	egressErr   error
-	networkErr  error
+	createErr        error
+	identityErr      error
+	egressErr        error
+	networkErr       error
+	deleteNetworkErr error
 
 	// ensuredSubnets, if set, is what EnsureNetwork resolves spec.Subnets to
 	// — standing in for Azure creating a network when none was supplied.
@@ -120,12 +122,24 @@ func (f *fakeCloud) EnsureNetwork(
 	return provisioner.NetworkResult{SubnetIDs: subnets}, nil
 }
 
+func (f *fakeCloud) DeleteNetwork(context.Context, core.ClusterSpec) error {
+	f.calls = append(f.calls, "DeleteNetwork")
+	return f.deleteNetworkErr
+}
+
 // RESTConfig fakes provisioner.RESTConfigProvisioner: installArgoCDStep only
 // needs some non-nil config to hand to the (also fake) Installer/KubeApplier
-// below, never a reachable cluster.
+// below, never a reachable cluster. Dial is stubbed to fail immediately
+// rather than really resolving the host, so drainLoadBalancers's Services
+// List call in Teardown tests fails fast instead of hanging on real DNS.
 func (f *fakeCloud) RESTConfig(context.Context, core.ClusterSpec) (*rest.Config, error) {
 	f.calls = append(f.calls, "RESTConfig")
-	return &rest.Config{Host: "https://fake.example.com"}, nil
+	return &rest.Config{
+		Host: "https://fake.example.com",
+		Dial: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("fake: no network in tests")
+		},
+	}, nil
 }
 
 func (f *fakeCloud) cloud() Cloud {
@@ -483,6 +497,85 @@ func TestProvisioningSteps_SeedsRepository_AppliesOverrides(t *testing.T) {
 	}
 	if !strings.Contains(string(addonsYAML), "1.16.0") {
 		t.Errorf("addons.yaml does not reflect the override: %s", addonsYAML)
+	}
+}
+
+// ReadyReconcile must re-run the Argo CD installer on every call, not just
+// at initial install: Argo CD cannot sync itself, so a cluster.yaml override
+// touching the "argocd" addon (e.g. exposing argocd-server) has no other path
+// to the live release once the cluster is already ready.
+func TestReadyReconcile_ReconvergesArgoCDRelease(t *testing.T) {
+	f := newFakeCloud()
+	installer := &fakeInstaller{}
+	repoProv := repo.NewMemory()
+	resolver := catalog.NewBuiltinResolver()
+
+	spec := testSpec()
+	spec.Overrides = []core.AddonOverride{{
+		Name:   "argocd",
+		Values: map[string]any{"server": map[string]any{"service": map[string]any{"type": "LoadBalancer"}}},
+	}}
+
+	profile, err := catalog.ResolveForCluster(t.Context(), resolver, spec)
+	if err != nil {
+		t.Fatalf("resolving profile: %v", err)
+	}
+	if err := repo.Seed(t.Context(), repoProv, spec, profile); err != nil {
+		t.Fatalf("seeding repository: %v", err)
+	}
+
+	reconcile := ReadyReconcile(f.cloud(), installer, repoProv, resolver, quietLogger())
+	if err := reconcile(t.Context(), spec, registry.Record{}); err != nil {
+		t.Fatalf("ReadyReconcile: %v", err)
+	}
+
+	if installer.calls != 1 {
+		t.Errorf("Install called %d times, want 1", installer.calls)
+	}
+}
+
+// ReadyReconcile must also re-commit apps/*.yaml, not just addons.yaml: an
+// override on a regular Argo-CD-synced addon (here cilium) has to reach the
+// Application manifest Argo CD's app-of-apps actually watches, or it never
+// syncs — addons.yaml alone is just the informational record.
+func TestReadyReconcile_ReconvergesAppOfApps(t *testing.T) {
+	f := newFakeCloud()
+	installer := &fakeInstaller{}
+	repoProv := repo.NewMemory()
+	resolver := catalog.NewBuiltinResolver()
+
+	spec := testSpec()
+
+	profile, err := catalog.ResolveForCluster(t.Context(), resolver, spec)
+	if err != nil {
+		t.Fatalf("resolving profile: %v", err)
+	}
+	if err := repo.Seed(t.Context(), repoProv, spec, profile); err != nil {
+		t.Fatalf("seeding repository: %v", err)
+	}
+
+	// Simulate a cluster.yaml edit adding an override after the cluster is
+	// already ready, the same way an operator would push a fix.
+	spec.Overrides = []core.AddonOverride{{
+		Name:   "cilium",
+		Values: map[string]any{"cgroup": map[string]any{"autoMount": map[string]any{"enabled": false}}},
+	}}
+
+	reconcile := ReadyReconcile(f.cloud(), installer, repoProv, resolver, quietLogger())
+	if err := reconcile(t.Context(), spec, registry.Record{}); err != nil {
+		t.Fatalf("ReadyReconcile: %v", err)
+	}
+
+	checkout, err := repoProv.Clone(t.Context(), spec)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	ciliumApp, ok := checkout.File(argocd.AppsDir + "/cilium.yaml")
+	if !ok {
+		t.Fatal("expected apps/cilium.yaml to exist")
+	}
+	if !strings.Contains(string(ciliumApp), "autoMount") {
+		t.Errorf("apps/cilium.yaml does not reflect the override: %s", ciliumApp)
 	}
 }
 

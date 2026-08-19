@@ -27,11 +27,10 @@ kubespin fleet dashboard [flags]
 
 ```bash
   # Snapshot the whole fleet to fleet-dashboard.html
-  kubespin fleet dashboard --registry-region us-east-1
+  kubespin fleet dashboard
 
   # Only AWS clusters, written somewhere else
-  kubespin fleet dashboard --provider aws --output /tmp/fleet.html \
-    --registry-region us-east-1
+  kubespin fleet dashboard --provider aws --output /tmp/fleet.html
 ```
 
 ## Options
@@ -47,12 +46,10 @@ kubespin fleet dashboard [flags]
 ## Options inherited from parent commands
 
 ```text
-      --config string            path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
-      --dry-run                  resolve and report intended changes without performing them
-      --log-format string        log output format: text or json (default "text")
-      --log-level string         log verbosity: debug, info, warn, error (default "info")
-      --registry-region string   AWS region hosting the Fleet Registry
-      --registry-table string    DynamoDB table backing the Fleet Registry (default "kubespin-fleet-registry")
+      --config string       path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
+      --dry-run             resolve and report intended changes without performing them
+      --log-format string   log output format: text or json (default "text")
+      --log-level string    log verbosity: debug, info, warn, error (default "info")
 ```
 
 ## See also

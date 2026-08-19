@@ -59,7 +59,7 @@ addons that silently never sync.`,
 		Example: `  # AWS, private API server, default node pool
   kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
     --access private --profile tier-small@1.0.0 \
-    --github-org GitOpsHub --registry-region us-east-1
+    --github-org GitOpsHub
 
   # GCP, public API server, larger node pool — authorized-cidrs is required on GCP
   # for the operator's own machine to reach the endpoint and install Argo CD
@@ -67,17 +67,17 @@ addons that silently never sync.`,
     --cluster-id demo-gcp --access public --authorized-cidrs 203.0.113.4/32 \
     --profile tier-small@1.0.0 \
     --instance-type e2-standard-4 --desired-size 3 \
-    --github-org GitOpsHub --registry-region us-east-1
+    --github-org GitOpsHub
 
   # Azure, resolving addons from a platform-profiles repo instead of the builtin catalog
   kubespin apply --provider azure --azure-subscription 3df9adbd-ea55-4c92-964c-0252031979de --region eastus \
     --cluster-id demo-azure --access private --profile tier-standard@1.0.0 \
     --instance-type Standard_D4s_v7 \
     --profiles-repo platform-profiles \
-    --github-org GitOpsHub --registry-region us-east-1
+    --github-org GitOpsHub
 
   # Preview what apply would do without touching any cloud
-  kubespin apply --spec ./cluster.yaml --registry-region us-east-1 --dry-run`,
+  kubespin apply --spec ./cluster.yaml --dry-run`,
 		Args: cobra.NoArgs,
 		RunE: runApply,
 	}
@@ -163,12 +163,13 @@ func runApply(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	installer := argocd.NewHelmInstaller(logger)
 	o := orchestrator.New(reg,
 		orchestrator.WithSteps(orchestrator.ProvisioningSteps(
 			cloud, repoProv, resolver, reg,
-			argocd.NewHelmInstaller(logger), argocd.NewDynamicApplier(logger), logger,
+			installer, argocd.NewDynamicApplier(logger), logger,
 		)),
-		orchestrator.WithReadyReconcile(orchestrator.ReadyReconcile(cloud, repoProv, resolver, logger)),
+		orchestrator.WithReadyReconcile(orchestrator.ReadyReconcile(cloud, installer, repoProv, resolver, logger)),
 		orchestrator.WithLogger(logger),
 	)
 
@@ -220,11 +221,11 @@ func updateLocalKubeconfig(ctx context.Context, cmd *cobra.Command, logger *slog
 }
 
 // printAccessSummary prints how to reach the cluster and its local Argo CD
-// once apply succeeds: the kubectl context, and the port-forward + admin
-// credential commands for Argo CD's UI, which is deliberately never exposed
-// beyond ClusterIP by kubespin's install (see internal/argocd) — nothing
-// reaches into a cluster on this architecture, including from the operator's
-// browser, so port-forward is the only path regardless of --access.
+// once apply succeeds: the kubectl context, and the LoadBalancer + admin
+// credential commands for Argo CD's UI (see internal/argocd.DefaultAddon /
+// ServerLoadBalancerValues) — a cloud LoadBalancer address takes a few
+// minutes to provision, so the external-IP lookup is printed alongside it
+// rather than resolved here.
 func printAccessSummary(cmd *cobra.Command, spec core.ClusterSpec, kubeContext string) {
 	out := cmd.OutOrStdout()
 
@@ -236,9 +237,9 @@ func printAccessSummary(cmd *cobra.Command, spec core.ClusterSpec, kubeContext s
 	_, _ = fmt.Fprintln(out, "  kubectl get nodes")
 
 	_, _ = fmt.Fprintln(out)
-	_, _ = fmt.Fprintln(out, "Argo CD (ClusterIP only; reach it via port-forward):")
-	_, _ = fmt.Fprintf(out, "  kubectl -n %s port-forward svc/argocd-server 8080:443\n", argocd.Namespace)
-	_, _ = fmt.Fprintln(out, "  open https://localhost:8080")
+	_, _ = fmt.Fprintln(out, "Argo CD (LoadBalancer; external IP may take a few minutes to provision):")
+	_, _ = fmt.Fprintf(out, "  kubectl -n %s get svc argocd-server -w\n", argocd.Namespace)
+	_, _ = fmt.Fprintln(out, "  open https://<EXTERNAL-IP>")
 	_, _ = fmt.Fprintln(out, "  username: admin")
 	_, _ = fmt.Fprintf(out,
 		"  password: kubectl -n %s get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo\n",
@@ -474,16 +475,16 @@ this command a preview. Use --yes to skip the confirmation prompt only when
 you mean it.`,
 		Example: `  # AWS, prompts to type the cluster ID to confirm
   kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
-    --profile tier-small@1.0.0 --github-org GitOpsHub --registry-region us-east-1
+    --profile tier-small@1.0.0 --github-org GitOpsHub
 
   # GCP, scripted (no interactive confirmation)
   kubespin delete --provider gcp --gcp-project kubernetes-dev-502710 --region us-central1 \
     --cluster-id demo-gcp --profile tier-small@1.0.0 \
-    --github-org GitOpsHub --registry-region us-east-1 --yes
+    --github-org GitOpsHub --yes
 
   # Using the same cluster.yaml apply was run with
   kubespin delete --spec ./cluster.yaml \
-    --github-org GitOpsHub --registry-region us-east-1 --yes`,
+    --github-org GitOpsHub --yes`,
 		Args: cobra.NoArgs,
 		RunE: runDelete,
 	}

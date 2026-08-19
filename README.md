@@ -51,18 +51,18 @@ Full detail, prerequisites, and more scenarios in
 checkout after `make build`. All three clouds follow the same shape:
 authenticate, `apply`, confirm with `fleet status`.
 
-Two flags recur because neither has a usable default: `--registry-region`
-(the Fleet Registry has no default region, on purpose) and `--profile`
-(`apply`/`delete` validate a full spec, and a profile reference is part of
-one). Export `KUBESPIN_REGISTRY_REGION` to drop the first.
+The Fleet Registry DSN has no usable default, so it is never a flag —
+`apply`/`delete`/`fleet` read it only from `KUBESPIN_REGISTRY_DSN` (or a
+`.env` file). `--profile` recurs instead because `apply`/`delete` validate a
+full spec, and a profile reference is part of one.
 
 ```bash
 # AWS, private cluster
 kubespin login --only aws
 kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
   --access private --profile tier-small@1.0.0 \
-  --github-org "$GITHUB_ORG" --registry-region us-east-1
-kubespin fleet status --phase ready --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
+kubespin fleet status --phase ready
 ```
 
 ```bash
@@ -70,7 +70,7 @@ kubespin fleet status --phase ready --registry-region us-east-1
 kubespin apply --provider gcp --gcp-project kubernetes-dev-502710 --region us-central1 \
   --cluster-id demo-gcp --access public --profile tier-small@1.0.0 \
   --instance-type e2-standard-4 --desired-size 3 \
-  --github-org "$GITHUB_ORG" --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 ```
 
 > A GKE cluster whose `--region` is a region (not a zone) replicates the
@@ -88,25 +88,25 @@ kubespin apply --provider gcp --gcp-project kubernetes-dev-502710 --region us-ce
 kubespin apply --provider azure --azure-subscription "$AZURE_SUBSCRIPTION_ID" \
   --region eastus --cluster-id demo-azure --access private \
   --profile tier-standard@1.0.0 --profiles-repo platform-profiles \
-  --github-org "$GITHUB_ORG" --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 ```
 
 ```bash
 # Fleet-wide: bootstrap once, then operate across every cluster
 make lambda
-kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1
-kubespin fleet status --registry-region us-east-1
+kubespin fleet bootstrap --account-id 465532803838 --region us-east-1
+kubespin fleet status
 kubespin fleet update --component argo-cd --version 2.11.0 \
-  --github-org "$GITHUB_ORG" --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 kubespin fleet audit \
-  --github-org "$GITHUB_ORG" --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 ```
 
 ```bash
 # Tear down
 kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
   --profile tier-small@1.0.0 \
-  --github-org "$GITHUB_ORG" --registry-region us-east-1 --yes
+  --github-org "$GITHUB_ORG" --yes
 ```
 
 `--dry-run` is a root persistent flag, but only `apply` and `fleet bootstrap`
@@ -122,16 +122,22 @@ defaults**. The config file is `$XDG_CONFIG_HOME/kubespin/config.yaml` or
 ```yaml
 log-level: info
 log-format: text
-registry-table: kubespin-fleet-registry
-registry-region: us-east-1
+registry-dsn: postgres://user:pass@host:5432/dbname?sslmode=require
 ```
+
+Note `registry-dsn` is deliberately not settable via flag — only the config
+file or `KUBESPIN_REGISTRY_DSN`, so a connection string carrying a password
+never appears in shell history or a process listing.
 
 ## Fleet bootstrap
 
 Before any cluster can be provisioned, the shared infrastructure has to exist:
-the Fleet Registry table and the Central Ingestion API. Both are created by
-`kubespin` itself through the AWS SDK — there is no Terraform, no CloudFormation,
-and no second toolchain.
+the Central Ingestion API. It is created by `kubespin` itself through the AWS
+SDK — there is no Terraform, no CloudFormation, and no second toolchain. The
+Fleet Registry itself is a Postgres database the operator provisions
+separately and points `KUBESPIN_REGISTRY_DSN` at; it self-migrates its own
+schema on first connect, so there is nothing for `fleet bootstrap` to
+provision for it.
 
 Run it against a dedicated fleet account that hosts no clusters. The caller's
 real account is checked against `--account-id` before anything is created, so
@@ -145,13 +151,14 @@ make lambda
 ```
 
 ```bash
-kubespin fleet bootstrap --account-id <id> --registry-region <region> --dry-run
+kubespin fleet bootstrap --account-id <id> --region <region> --dry-run
 ```
 
 Drop `--dry-run` to apply. Re-running is safe and expected: every resource is
 create-or-update, so a second run reports everything in sync. Nothing is ever
-deleted — tearing down fleet infrastructure is a deliberate manual act, and the
-registry table keeps deletion protection on.
+deleted — tearing down fleet infrastructure is a deliberate manual act, and
+Postgres-level protections (e.g. deletion protection on a managed instance)
+are the operator's responsibility, not kubespin's.
 
 The command prints the ingestion endpoint, which every cluster's egress
 allowlist must permit.

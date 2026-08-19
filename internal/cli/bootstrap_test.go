@@ -11,7 +11,7 @@ import (
 )
 
 func TestBootstrap_RequiresAccountID(t *testing.T) {
-	_, err := execute(t, "fleet", "bootstrap", "--registry-region", "us-east-1")
+	_, err := execute(t, "fleet", "bootstrap", "--region", "us-east-1")
 	if err == nil {
 		t.Fatal("expected an error when --account-id is missing")
 	}
@@ -22,12 +22,12 @@ func TestBootstrap_RequiresAccountID(t *testing.T) {
 
 func TestBootstrap_RequiresRegion(t *testing.T) {
 	// Region has no default: bootstrapping into an unintended region would
-	// create a second, silently empty registry.
+	// create a second, silently orphaned ingestion API.
 	_, err := execute(t, "fleet", "bootstrap", "--account-id", "123456789012")
 	if err == nil {
 		t.Fatal("expected an error when no region is configured")
 	}
-	if !strings.Contains(err.Error(), "registry-region") {
+	if !strings.Contains(err.Error(), "region") {
 		t.Errorf("error %q does not mention the missing region", err)
 	}
 }
@@ -35,9 +35,11 @@ func TestBootstrap_RequiresRegion(t *testing.T) {
 // The handler is read from disk, so a missing build has to point at the fix
 // rather than failing with a bare file-not-found.
 func TestBootstrap_MissingHandlerExplainsHowToBuild(t *testing.T) {
+	t.Setenv("KUBESPIN_REGISTRY_DSN", "postgres://user:pass@localhost:5432/kubespin?sslmode=disable")
+
 	_, err := execute(t, "fleet", "bootstrap",
 		"--account-id", "123456789012",
-		"--registry-region", "us-east-1",
+		"--region", "us-east-1",
 		"--lambda-binary", filepath.Join(t.TempDir(), "absent"),
 	)
 	if err == nil {
@@ -60,11 +62,14 @@ func TestBootstrap_PackagesHandlerFromDisk(t *testing.T) {
 	if err := cmd.Flags().Set("account-id", "123456789012"); err != nil {
 		t.Fatalf("setting flag: %v", err)
 	}
+	if err := cmd.Flags().Set("region", "us-east-1"); err != nil {
+		t.Fatalf("setting flag: %v", err)
+	}
 	if err := cmd.Flags().Set("lambda-binary", path); err != nil {
 		t.Fatalf("setting flag: %v", err)
 	}
 
-	cfg := &Config{Registry: RegistryConfig{Table: "t", Region: "us-east-1"}}
+	cfg := &Config{Registry: RegistryConfig{DSN: "postgres://user:pass@localhost:5432/kubespin?sslmode=disable"}}
 	spec, err := bootstrapSpec(cmd, cfg)
 	if err != nil {
 		t.Fatalf("bootstrapSpec: %v", err)
@@ -89,13 +94,13 @@ func TestPrintReport(t *testing.T) {
 		"dry run with changes": {
 			report: fleetinfra.Report{
 				DryRun:  true,
-				Actions: []fleetinfra.Action{{Resource: "registry table", Kind: fleetinfra.ActionCreate}},
+				Actions: []fleetinfra.Action{{Resource: "example resource", Kind: fleetinfra.ActionCreate}},
 			},
-			contains: []string{"registry table", "create", "re-run without --dry-run"},
+			contains: []string{"example resource", "create", "re-run without --dry-run"},
 		},
 		"everything in sync": {
 			report: fleetinfra.Report{
-				Actions: []fleetinfra.Action{{Resource: "registry table", Kind: fleetinfra.ActionNone}},
+				Actions: []fleetinfra.Action{{Resource: "example resource", Kind: fleetinfra.ActionNone}},
 			},
 			contains: []string{"in sync", "already in sync"},
 		},

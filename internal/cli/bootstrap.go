@@ -17,8 +17,11 @@ func newFleetBootstrapCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "bootstrap",
 		Short: "Provision the shared fleet infrastructure in the fleet account",
-		Long: `bootstrap creates the Fleet Registry table and the Central Ingestion API,
-converging live infrastructure toward the desired state.
+		Long: `bootstrap creates the Central Ingestion API, converging live infrastructure
+toward the desired state. The Fleet Registry itself is a Postgres database
+(KUBESPIN_REGISTRY_DSN) the operator provisions and supplies connection
+details for — it self-migrates its own schema on first connect, so there is
+nothing for bootstrap to provision for it.
 
 It is safe to re-run: every resource is create-or-update, and a run against
 already-provisioned infrastructure reports no changes. Nothing is ever deleted.
@@ -30,19 +33,20 @@ checked against --account-id before anything is created.`,
   make lambda
 
   # Preview what bootstrap would create
-  kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1 --dry-run
+  kubespin fleet bootstrap --account-id 465532803838 --region us-east-1 --dry-run
 
   # Provision it for real
-  kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1
+  kubespin fleet bootstrap --account-id 465532803838 --region us-east-1
 
   # Re-running is safe; a converged fleet reports no changes
-  kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1 --dry-run`,
+  kubespin fleet bootstrap --account-id 465532803838 --region us-east-1 --dry-run`,
 		Args: cobra.NoArgs,
 		RunE: runFleetBootstrap,
 	}
 
 	fs := cmd.Flags()
 	fs.String("account-id", "", "AWS account ID hosting fleet infrastructure (required)")
+	fs.String("region", "", "AWS region to provision the ingestion API and its Lambda into (required)")
 	fs.String("lambda-binary", defaultLambdaBinary, "compiled ingestion handler to deploy")
 	fs.String("name-prefix", fleetinfra.DefaultNamePrefix, "prefix for every provisioned resource name")
 	fs.Int32("log-retention-days", fleetinfra.DefaultLogRetentionDays, "CloudWatch log retention")
@@ -50,6 +54,9 @@ checked against --account-id before anything is created.`,
 	fs.Float64("throttle-rate", fleetinfra.DefaultThrottleRate, "ingestion API steady-state request rate")
 
 	if err := cmd.MarkFlagRequired("account-id"); err != nil {
+		panic(err) // programmer error: the flag was just declared
+	}
+	if err := cmd.MarkFlagRequired("region"); err != nil {
 		panic(err) // programmer error: the flag was just declared
 	}
 	return cmd
@@ -63,8 +70,8 @@ func runFleetBootstrap(cmd *cobra.Command, _ []string) error {
 	if !ok {
 		return errors.New("configuration was not resolved")
 	}
-	if cfg.Registry.Region == "" {
-		return fmt.Errorf("%w: --registry-region is required to bootstrap", ErrConfig)
+	if cfg.Registry.DSN == "" {
+		return fmt.Errorf("%w: the Postgres registry DSN is required (KUBESPIN_REGISTRY_DSN)", ErrConfig)
 	}
 
 	spec, err := bootstrapSpec(cmd, cfg)
@@ -72,7 +79,7 @@ func runFleetBootstrap(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	clients, err := fleetinfra.NewClients(ctx, cfg.Registry.Region)
+	clients, err := fleetinfra.NewClients(ctx, spec.Region)
 	if err != nil {
 		return fmt.Errorf("building AWS clients: %w", err)
 	}
@@ -96,6 +103,10 @@ func bootstrapSpec(cmd *cobra.Command, cfg *Config) (fleetinfra.Spec, error) {
 	accountID, err := flags.GetString("account-id")
 	if err != nil {
 		return fleetinfra.Spec{}, fmt.Errorf("reading --account-id: %w", err)
+	}
+	region, err := flags.GetString("region")
+	if err != nil {
+		return fleetinfra.Spec{}, fmt.Errorf("reading --region: %w", err)
 	}
 	binaryPath, err := flags.GetString("lambda-binary")
 	if err != nil {
@@ -131,9 +142,9 @@ func bootstrapSpec(cmd *cobra.Command, cfg *Config) (fleetinfra.Spec, error) {
 
 	return fleetinfra.Spec{
 		AccountID:        accountID,
-		Region:           cfg.Registry.Region,
+		Region:           region,
 		NamePrefix:       namePrefix,
-		RegistryTable:    cfg.Registry.Table,
+		RegistryDSN:      cfg.Registry.DSN,
 		LogRetentionDays: retention,
 		ThrottleBurst:    burst,
 		ThrottleRate:     rate,

@@ -31,16 +31,16 @@ kubespin delete [flags]
 ```bash
   # AWS, prompts to type the cluster ID to confirm
   kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
-    --profile tier-small@1.0.0 --github-org GitOpsHub --registry-region us-east-1
+    --profile tier-small@1.0.0 --github-org GitOpsHub
 
   # GCP, scripted (no interactive confirmation)
   kubespin delete --provider gcp --gcp-project kubernetes-dev-502710 --region us-central1 \
     --cluster-id demo-gcp --profile tier-small@1.0.0 \
-    --github-org GitOpsHub --registry-region us-east-1 --yes
+    --github-org GitOpsHub --yes
 
   # Using the same cluster.yaml apply was run with
   kubespin delete --spec ./cluster.yaml \
-    --github-org GitOpsHub --registry-region us-east-1 --yes
+    --github-org GitOpsHub --yes
 ```
 
 ## Options
@@ -78,12 +78,10 @@ kubespin delete [flags]
 ## Options inherited from parent commands
 
 ```text
-      --config string            path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
-      --dry-run                  resolve and report intended changes without performing them
-      --log-format string        log output format: text or json (default "text")
-      --log-level string         log verbosity: debug, info, warn, error (default "info")
-      --registry-region string   AWS region hosting the Fleet Registry
-      --registry-table string    DynamoDB table backing the Fleet Registry (default "kubespin-fleet-registry")
+      --config string       path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
+      --dry-run             resolve and report intended changes without performing them
+      --log-format string   log output format: text or json (default "text")
+      --log-level string    log verbosity: debug, info, warn, error (default "info")
 ```
 
 ## See also

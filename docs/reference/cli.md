@@ -56,12 +56,16 @@ they can't collide with keys any other package might put on the same context.
 ## `config.go`
 
 Resolves `Config`, the global configuration every command reads through
-`ConfigFrom`. `LoadConfig` binds a `pflag.FlagSet` to a fresh `viper.Viper`,
+`ConfigFrom`. `LoadConfig` best-effort loads a `.env` file via `godotenv.Load`
+(never overwriting a variable already set in the environment, so an explicit
+`export` still wins), binds a `pflag.FlagSet` to a fresh `viper.Viper`,
 applies `KUBESPIN_` as the env prefix (with `-`/`.` replaced by `_`, so
-`--registry-region` binds to `KUBESPIN_REGISTRY_REGION`), then layers in a
-config file via `loadConfigFile` before reading final values. Precedence is
-flags > env > file > defaults, which viper gives for free once flags are
-bound rather than read directly.
+`registry-dsn` binds to `KUBESPIN_REGISTRY_DSN`), then layers in a config
+file via `loadConfigFile` before reading final values. Precedence is flags >
+env > file > defaults, which viper gives for free once flags are bound
+rather than read directly. Note `registry-dsn` is never bound to a flag —
+only env and the config file feed it — so a connection string carrying a
+password can't land in shell history or a process listing.
 
 `loadConfigFile` reads an explicit `--config` (or `KUBESPIN_CONFIG` env var)
 path if given — a missing explicit path is an error — otherwise it searches
@@ -91,16 +95,20 @@ always `os.Stderr` in practice, so command output on stdout stays pipeable.
 
 ```go
 type RegistryConfig struct {
-    Table  string
-    Region string
+    DSN string
 }
 ```
 
-Locates the DynamoDB-backed Fleet Registry. `Region` has no default —
-`apply`/`delete`/every `fleet` subcommand explicitly checks it's non-empty
-and returns an `ErrConfig`-wrapped error ("`--registry-region` is required")
-rather than silently defaulting, since defaulting risks splitting a fleet
-across two registries with no error.
+Locates the Postgres-backed Fleet Registry. `DSN` has no default and — unlike
+every other piece of `Config` — no flag either: it is read only from
+`KUBESPIN_REGISTRY_DSN` (or a `.env` file, or `registry-dsn` in the config
+file), deliberately, so a connection string carrying a password never
+appears in shell history or a process listing. `apply`/`delete`/every
+`fleet` subcommand (via `registryPrereqs` in `fleet.go`) explicitly checks
+it's non-empty and returns an `ErrConfig`-wrapped error ("the Postgres
+registry DSN is required (KUBESPIN_REGISTRY_DSN)") rather than silently
+defaulting, since defaulting risks splitting a fleet across two databases
+with no error.
 
 ### Functions
 
@@ -114,10 +122,10 @@ across two registries with no error.
 
     - **Behavior:**
         - `LoadConfig` — see above: binds flags to viper, layers env (`KUBESPIN_` prefix) and config file, resolves final values, calls `validate()`.
-        - `registerGlobalFlags` — declares `--config`, `--log-level`, `--log-format`, `--dry-run`, `--registry-table`, `--registry-region` on the given flag set; called once on the root command's persistent flags.
+        - `registerGlobalFlags` — declares `--config`, `--log-level`, `--log-format`, `--dry-run` on the given flag set; called once on the root command's persistent flags. Deliberately no `--registry-dsn` flag — see `RegistryConfig` above.
         - `parseLogLevel` — maps a case-insensitive string to `slog.Level`; also used by `(*Config) Logger` with a fallback to `slog.LevelInfo` since `validate()` has already run by the time `Logger` is called.
     - **Calls into:** none (this is the base layer other files build on).
-    - **Non-obvious control flow:** `LoadConfig` takes a `*pflag.FlagSet` (not a `*cobra.Command`) so tests can exercise precedence against a bare flag set. `ErrConfig = errors.New("configuration error")` wraps every configuration resolution failure across the whole package (not just `config.go`) — `apply.go`, `fleet.go`, and `bootstrap.go` all wrap missing `--registry-region` with it.
+    - **Non-obvious control flow:** `LoadConfig` takes a `*pflag.FlagSet` (not a `*cobra.Command`) so tests can exercise precedence against a bare flag set. `ErrConfig = errors.New("configuration error")` wraps every configuration resolution failure across the whole package (not just `config.go`) — `apply.go` (via `fleet.go`'s `registryPrereqs`), `fleet.go`, and `bootstrap.go` all wrap a missing registry DSN with it.
 
 ## `spec.go`
 
@@ -164,8 +172,8 @@ Backs both `apply` (`newApplyCommand`/`runApply`) and `delete`
 
     - **Behavior — steps in order:**
         1. Load spec (`loadSpec`).
-        2. Resolve config and connect to the Fleet Registry (`registryPrereqs`, shared with `runDelete` and every `fleet` subcommand — errors if `cfg.Registry.Region` is empty).
-        3. Pick which cloud auth providers to preflight via `cloudAuthProviders`: a **dry run** only reads the (AWS-hosted) Fleet Registry and never touches the cluster's own cloud, so it preflights `aws` alone regardless of `spec.Provider`; a real run preflights `aws` plus the cluster's own provider (skipped if the cluster's own provider is already `aws`, to avoid checking it twice).
+        2. Resolve config and connect to the Fleet Registry (`registryPrereqs`, shared with `runDelete` and every `fleet` subcommand — errors if `cfg.Registry.DSN` is empty).
+        3. Pick which cloud auth providers to preflight: a **dry run** preflights `aws` alone, unconditionally, regardless of `spec.Provider` — not because the Fleet Registry is AWS-hosted (it is a Postgres database that can be hosted anywhere, reached only via `KUBESPIN_REGISTRY_DSN`, no IAM involved), but because this code path predates that migration and has not been revisited; a real (non-dry-run) run instead calls `cloudAuthProviders`, which preflights `aws` plus the cluster's own provider (skipped if the cluster's own provider is already `aws`, to avoid checking it twice) — again unconditionally including `aws` regardless of `spec.Provider`.
         4. Dry-run branch: call `reportPlan` and return.
         5. Otherwise: `buildCloud` (provisioner set), `buildRepoClients` + `repo.NewProvisioner`, `buildResolver` (profile catalog), then construct an `orchestrator.Orchestrator` with `orchestrator.ProvisioningSteps` and `orchestrator.ReadyReconcile`, and call `o.Apply(ctx, spec)`.
         6. On error, print the phase the run stopped at (so the operator knows where a retry resumes from) before wrapping and returning the error.
@@ -232,7 +240,7 @@ instead of `internal/orchestrator`.
     ```
 
     - **Behavior:**
-        - `runFleetBootstrap` — requires `cfg.Registry.Region`; builds a `fleetinfra.Spec` (`bootstrapSpec`), builds `fleetinfra.Clients`, then calls `fleetinfra.Converge(ctx, clients, spec, cfg.DryRun, ...)`.
+        - `runFleetBootstrap` — requires `cfg.Registry.DSN` (returning an `ErrConfig`-wrapped error if empty); builds a `fleetinfra.Spec` (`bootstrapSpec`, which threads `cfg.Registry.DSN` through as `Spec.RegistryDSN`), builds `fleetinfra.Clients`, then calls `fleetinfra.Converge(ctx, clients, spec, cfg.DryRun, ...)`. Note `fleet bootstrap` reads its AWS region from its own required `--region` flag, not from the registry config — the two are unrelated since bootstrap only provisions the Central Ingestion API, never the registry itself.
         - `bootstrapSpec` — reads flags (`--account-id` required via `cmd.MarkFlagRequired`, `--lambda-binary`, `--name-prefix`, `--log-retention-days`, `--throttle-burst`, `--throttle-rate`) and packages the compiled ingestion Lambda handler off disk via `fleetinfra.PackageLambda(binaryPath)`. The handler is read from disk (default `bin/ingestion/bootstrap`, i.e. `defaultLambdaBinary`) rather than embedded, so `go build ./...` never depends on build ordering with `make lambda`. A missing binary is translated from a raw `fs.ErrNotExist` into an actionable message pointing at `make lambda`.
         - `printReport` — prints each `report.Actions` entry, then a dry-run/converged summary line based on `report.DryRun` and `report.Changed()`, and finally the ingestion endpoint URL (with a reminder that every cluster's egress allowlist must permit it) if `report.IngestionURL` is set.
     - **Calls into:** `internal/fleetinfra` (`Converge`, `PackageLambda`, `Spec`, `Report`, `Clients`).
@@ -302,7 +310,7 @@ help when called with no subcommand) and attaches
     ```
 
     - **Behavior:**
-        - `registryPrereqs` — resolves `Config` from context and connects to the Fleet Registry; the two things every command that talks to the registry needs before doing anything else. Errors if `cfg.Registry.Region` is empty. Despite living in `fleet.go`, it is shared beyond the `fleet` subcommands: `runApply` and `runDelete` (`apply.go`) call it too, replacing what used to be their own copy of the same region-check-and-connect sequence.
+        - `registryPrereqs` — resolves `Config` from context and connects to the Fleet Registry via `registry.NewPostgres(ctx, cfg.Registry.DSN, ...)`; the two things every command that talks to the registry needs before doing anything else. Errors (`ErrConfig`-wrapped, "the Postgres registry DSN is required (KUBESPIN_REGISTRY_DSN)") if `cfg.Registry.DSN` is empty. Despite living in `fleet.go`, it is shared beyond the `fleet` subcommands: `runApply` and `runDelete` (`apply.go`) call it too, replacing what used to be their own copy of the same check-and-connect sequence.
         - `fleetFilter` — builds a `registry.Filter{Provider: ...}` from a named flag (defaulting the flag name to `"provider"` when called with `""`).
     - **Calls into:** `internal/registry`.
     - **Non-obvious control flow:** if the calling command doesn't define the named flag at all (`cmd.Flags().Lookup(flagName) == nil`), `fleetFilter` returns a zero-value filter matching every provider rather than erroring — this is why `dashboard.go` and `fleet status`, which do declare `--provider`, get filtering while a hypothetical command without the flag wouldn't panic.

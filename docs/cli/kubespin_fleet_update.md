@@ -32,15 +32,15 @@ kubespin fleet update [flags]
 ```bash
   # Roll a new Argo CD version across every cluster, 8 at a time
   kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8 \
-    --github-org GitOpsHub --registry-region us-east-1
+    --github-org GitOpsHub
 
   # Canary the first 3 clusters before rolling to the rest of the fleet
   kubespin fleet update --component cert-manager --version 1.15.1 \
-    --canary-count 3 --github-org GitOpsHub --registry-region us-east-1
+    --canary-count 3 --github-org GitOpsHub
 
   # Scope the wave to one cloud
   kubespin fleet update --component cert-manager --version 1.15.1 \
-    --provider aws --github-org GitOpsHub --registry-region us-east-1
+    --provider aws --github-org GitOpsHub
 ```
 
 ## Options
@@ -61,12 +61,10 @@ kubespin fleet update [flags]
 ## Options inherited from parent commands
 
 ```text
-      --config string            path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
-      --dry-run                  resolve and report intended changes without performing them
-      --log-format string        log output format: text or json (default "text")
-      --log-level string         log verbosity: debug, info, warn, error (default "info")
-      --registry-region string   AWS region hosting the Fleet Registry
-      --registry-table string    DynamoDB table backing the Fleet Registry (default "kubespin-fleet-registry")
+      --config string       path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
+      --dry-run             resolve and report intended changes without performing them
+      --log-format string   log output format: text or json (default "text")
+      --log-level string    log verbosity: debug, info, warn, error (default "info")
 ```
 
 ## See also

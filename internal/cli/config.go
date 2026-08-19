@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/joho/godotenv"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
@@ -35,17 +36,19 @@ type Config struct {
 	SourceFile string
 }
 
-// RegistryConfig locates the DynamoDB-backed Fleet Registry.
+// RegistryConfig locates the Postgres-backed Fleet Registry.
 type RegistryConfig struct {
-	Table  string
-	Region string
+	// DSN is read only from KUBESPIN_REGISTRY_DSN (or a .env file providing
+	// it) — there is deliberately no --registry-dsn flag, so a connection
+	// string carrying a password never appears in shell history or process
+	// listings.
+	DSN string
 }
 
 // Defaults applied when nothing else supplies a value.
 const (
-	defaultLogLevel      = "info"
-	defaultLogFormat     = "text"
-	defaultRegistryTable = "kubespin-fleet-registry"
+	defaultLogLevel  = "info"
+	defaultLogFormat = "text"
 )
 
 // registerGlobalFlags declares the flags available on every command. It takes a
@@ -56,8 +59,6 @@ func registerGlobalFlags(fs *pflag.FlagSet) {
 	fs.String("log-level", defaultLogLevel, "log verbosity: debug, info, warn, error")
 	fs.String("log-format", defaultLogFormat, "log output format: text or json")
 	fs.Bool("dry-run", false, "resolve and report intended changes without performing them")
-	fs.String("registry-table", defaultRegistryTable, "DynamoDB table backing the Fleet Registry")
-	fs.String("registry-region", "", "AWS region hosting the Fleet Registry")
 }
 
 // LoadConfig resolves configuration from fs plus environment and config file.
@@ -67,10 +68,16 @@ func registerGlobalFlags(fs *pflag.FlagSet) {
 // unchanged flag falls through to env and file, and its default is consulted
 // only last.
 func LoadConfig(fs *pflag.FlagSet) (*Config, error) {
+	// Best-effort: a missing .env is not an error (the operator may export the
+	// DSN some other way), mirroring loadConfigFile's "missing default is fine"
+	// behavior below. godotenv.Load never overwrites a variable already set in
+	// the environment, so an explicit `export` still wins.
+	_ = godotenv.Load()
+
 	v := viper.New()
 
 	v.SetEnvPrefix(envPrefix)
-	// --log-level -> KUBESPIN_LOG_LEVEL, registry.table -> KUBESPIN_REGISTRY_TABLE.
+	// --log-level -> KUBESPIN_LOG_LEVEL, registry.dsn -> KUBESPIN_REGISTRY_DSN.
 	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_", ".", "_"))
 	v.AutomaticEnv()
 
@@ -88,8 +95,7 @@ func LoadConfig(fs *pflag.FlagSet) (*Config, error) {
 		DryRun:     v.GetBool("dry-run"),
 		SourceFile: v.ConfigFileUsed(),
 		Registry: RegistryConfig{
-			Table:  v.GetString("registry-table"),
-			Region: v.GetString("registry-region"),
+			DSN: v.GetString("registry-dsn"),
 		},
 	}
 

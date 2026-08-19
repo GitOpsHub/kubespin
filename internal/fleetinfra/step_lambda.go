@@ -67,9 +67,9 @@ func (s *functionStep) Plan(ctx context.Context) (Action, error) {
 		s.updateCode = true
 		action.Details = append(action.Details, "handler code changed")
 	}
-	if envValue(cfg.Environment, "REGISTRY_TABLE") != s.spec.RegistryTable {
+	if envValue(cfg.Environment, "REGISTRY_DSN") != s.spec.RegistryDSN {
 		s.updateConf = true
-		action.Details = append(action.Details, "REGISTRY_TABLE environment variable")
+		action.Details = append(action.Details, "REGISTRY_DSN environment variable")
 	}
 	if aws.ToInt32(cfg.Timeout) != lambdaTimeoutSeconds || aws.ToInt32(cfg.MemorySize) != lambdaMemoryMB {
 		s.updateConf = true
@@ -130,14 +130,15 @@ func (s *functionStep) Apply(ctx context.Context, _ Action) error {
 		s.log.Info("updated Lambda function configuration",
 			"function", s.spec.functionName(),
 			"timeout_seconds", lambdaTimeoutSeconds,
-			"memory_mb", lambdaMemoryMB,
-			"registry_table", s.spec.RegistryTable)
+			"memory_mb", lambdaMemoryMB)
 	}
 	return nil
 }
 
+// environment is deliberately not logged anywhere: REGISTRY_DSN carries the
+// Postgres password.
 func (s *functionStep) environment() map[string]string {
-	return map[string]string{"REGISTRY_TABLE": s.spec.RegistryTable}
+	return map[string]string{"REGISTRY_DSN": s.spec.RegistryDSN}
 }
 
 func envValue(env *lambdatypes.EnvironmentResponse, key string) string {

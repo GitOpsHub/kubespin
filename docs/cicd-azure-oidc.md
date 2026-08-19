@@ -4,10 +4,19 @@
 the binary with `make build` and runs
 `kubespin apply --provider azure` from a manually dispatched GitHub
 Actions run, authenticating to both clouds it touches with short-lived OIDC
-tokens — no long-lived cloud secrets stored in GitHub at all:
+tokens — no long-lived cloud secrets stored in GitHub for either:
 
-- **AWS**, because the Fleet Registry (DynamoDB) is always AWS-hosted,
-  regardless of which cloud the cluster itself runs on.
+- **AWS**, because `apply`'s own auth preflight
+  (`cloudAuthProviders` in [internal/cli/apply.go](https://github.com/GitOpsHub/kubespin/blob/main/internal/cli/apply.go))
+  unconditionally requires an authenticated AWS session before it will run
+  anything — even a dry run, and even for a cluster whose `--provider` is
+  `azure`. This is no longer about where the Fleet Registry lives: the
+  registry is now a Postgres database reachable over the network from
+  wherever it's hosted (not necessarily AWS at all — this deployment's
+  instance isn't), reached purely via `KUBESPIN_REGISTRY_DSN`, with no
+  IAM-mediated access of any kind. The AWS credential this workflow needs is
+  therefore minimal: just enough for `sts:GetCallerIdentity` to succeed,
+  which requires no IAM permissions beyond the role being assumable at all.
 - **Azure**, because that's where the AKS cluster and its workload identity
   get created.
 
@@ -16,11 +25,13 @@ tokens — no long-lived cloud secrets stored in GitHub at all:
 actual AKS cluster.
 
 `apply` also always provisions the cluster's GitHub repo
-(`internal/repo`) regardless of cloud, so this pipeline needs a **third**
-credential beyond the two OIDC exchanges: a GitHub token with repo-create
-scope in the target org. GitHub Actions' OIDC federation authenticates to
-*cloud providers*; it does not cover GitHub's own REST API, so this one stays
-a real stored secret — see step 3.
+(`internal/repo`) regardless of cloud, and always reaches the Fleet Registry
+over `KUBESPIN_REGISTRY_DSN`, so this pipeline needs two credentials beyond
+the two OIDC exchanges: a GitHub token with repo-create scope in the target
+org, and the registry's Postgres connection string. GitHub Actions' OIDC
+federation authenticates to *cloud providers*; it does not cover GitHub's own
+REST API or an arbitrary Postgres database, so both of these stay real
+stored secrets — see step 3.
 
 `azure/login` is used even though nothing in the workflow calls `az`
 directly: the Go SDK's `azidentity.NewDefaultAzureCredential`, which
@@ -35,10 +46,12 @@ Run these once per environment (they provision IAM/AD resources — outside
 what `kubespin` itself manages, and outside anything this repo's CI can do on
 its own since it needs your tenant/account admin rights).
 
-### 1. AWS: let GitHub Actions assume a Fleet Registry role
+### 1. AWS: let GitHub Actions authenticate for the auth preflight
 
-Create (or reuse) the GitHub OIDC provider in the AWS account that hosts the
-Fleet Registry:
+Create (or reuse) the GitHub OIDC provider in whichever AWS account you're
+willing to let this workflow authenticate against — it does not need to be
+the account hosting anything cluster- or registry-related, since nothing
+beyond `sts:GetCallerIdentity` is ever called against it:
 
 ```bash
 aws iam create-open-id-connect-provider \
@@ -68,11 +81,12 @@ per-environment roles:
 }
 ```
 
-Permissions policy: the same `dynamodb:GetItem`/`PutItem`/`UpdateItem`/
-`Query` shape the orchestrator's registry client uses, scoped to the
-`kubespin-fleet-registry` table — narrower than the `fleet bootstrap`
-policy in [fleet-bootstrap.md](fleet-bootstrap.md), since `apply` never
-creates or reconfigures the table itself.
+No permissions policy is required beyond the trust policy above:
+`sts:GetCallerIdentity` — the only AWS call this workflow's `apply` run ever
+makes — needs no IAM grant at all, just a principal that can assume the role.
+There is deliberately no `dynamodb:*` (or any other data-plane) statement
+here, unlike the DynamoDB-backed registry this replaced: Postgres access
+happens over `KUBESPIN_REGISTRY_DSN`, not through this role.
 
 ### 2. Azure: federated credential for the App Registration
 
@@ -97,7 +111,7 @@ OIDC issuer + federated credential + managed identity for the cluster's own
 workload identity — a separate federation, one layer down, between the AKS
 cluster and its in-cluster workloads.
 
-### 3. GitHub: environment, variables, and the repo token
+### 3. GitHub: environment, variables, and secrets
 
 Create a GitHub **environment** named `azure-production` (Settings →
 Environments) and require reviewer approval on it — this is what makes
@@ -105,13 +119,13 @@ Environments) and require reviewer approval on it — this is what makes
 manual sign-off, not just a manual trigger.
 
 Add these as environment **variables** (not secrets — none of them are
-sensitive; the OIDC token exchange is what actually authenticates the two
-cloud providers):
+sensitive; the OIDC token exchanges are what authenticate to the two cloud
+providers, and the two secrets below carry everything else that needs to
+stay private):
 
 | Variable | Value |
 |---|---|
-| `AWS_FLEET_REGISTRY_ROLE_ARN` | ARN of the role created in step 1 |
-| `AWS_FLEET_REGISTRY_REGION` | Region hosting the Fleet Registry table |
+| `AWS_AUTH_ROLE_ARN` | ARN of the role created in step 1 |
 | `AZURE_CLIENT_ID` | The App Registration's application (client) ID |
 | `AZURE_TENANT_ID` | Your Azure AD tenant ID |
 | `AZURE_SUBSCRIPTION_ID` | Subscription that hosts the AKS cluster |
@@ -121,13 +135,14 @@ cloud providers):
 | `GITHUB_ENTERPRISE_UPLOAD_URL` | Same, paired with the base URL |
 | `PROFILES_REPO` | Only if resolving profiles from a `platform-profiles` repo rather than the builtin catalog |
 
-Add one environment **secret** — this is the exception to "no stored
-credentials" above, because it authenticates to GitHub's REST API rather than
-a cloud provider:
+Add these as environment **secrets** — the exception to "no stored
+credentials" above, because neither is authenticated by the Azure OIDC
+exchange:
 
 | Secret | Value |
 |---|---|
 | `KUBESPIN_CLUSTER_REPO_TOKEN` | A PAT or GitHub App installation token with repo-create/push scope in `CLUSTER_REPO_GITHUB_ORG`. Not the ambient `GITHUB_TOKEN` — that's scoped only to the `kubespin` repo itself. |
+| `KUBESPIN_REGISTRY_DSN` | The Fleet Registry's Postgres connection string, injected as an environment variable in the workflow step so it never appears in a flag or in shell history. |
 
 ## Running it
 
@@ -140,4 +155,4 @@ would resume from without touching either cloud, same as
 
 Uncheck `dry-run` once the plan looks right. The `deploy-aks-<cluster-id>`
 concurrency group serializes runs per cluster so two dispatches against the
-same cluster queue instead of racing the DynamoDB lease.
+same cluster queue instead of racing the Fleet Registry's lease.

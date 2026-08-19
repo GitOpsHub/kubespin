@@ -30,8 +30,8 @@ method-level reference.
 
 | Package | Covers |
 |---|---|
-| [internal/fleetinfra](fleetinfra.md) | SDK converge engine behind `fleet bootstrap` (registry table, ingestion Lambda, API Gateway) |
-| [internal/registry](registry.md) | Fleet Registry client, DynamoDB/in-memory implementations, conditional-write lease |
+| [internal/fleetinfra](fleetinfra.md) | SDK converge engine behind `fleet bootstrap` (ingestion Lambda, IAM role, API Gateway — the registry itself is a separately operated Postgres database) |
+| [internal/registry](registry.md) | Fleet Registry client, Postgres/in-memory implementations, conditional-write lease |
 | [internal/fleet](fleet.md) | Fleet-wide `audit`/`update`/`status`/`dashboard` operations |
 
 ## Cluster repo and addons

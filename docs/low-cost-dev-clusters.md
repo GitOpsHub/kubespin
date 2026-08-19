@@ -15,8 +15,7 @@ kubespin apply \
   --access private \
   --profile tier-small@1.0.0 \
   --spot \
-  --github-org "$GITHUB_ORG" \
-  --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 ```
 
 No `--instance-type`/`--min-size`/`--max-size`/`--desired-size`/`--disk-size`
@@ -75,8 +74,7 @@ kubespin apply \
   --access private \
   --profile tier-small@1.0.0 \
   --spot \
-  --github-org "$GITHUB_ORG" \
-  --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 ```
 
 Override either piece individually if you want spot without going zonal, or
@@ -92,8 +90,7 @@ kubespin apply \
   --access private \
   --profile tier-small@1.0.0 \
   --zone us-central1-a \
-  --github-org "$GITHUB_ORG" \
-  --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 ```
 
 ```bash
@@ -106,8 +103,7 @@ kubespin apply \
   --access private \
   --profile tier-small@1.0.0 \
   --spot --gcp-public-nodes=false \
-  --github-org "$GITHUB_ORG" \
-  --registry-region us-east-1
+  --github-org "$GITHUB_ORG"
 ```
 
 ## Fixed costs `--spot` cannot remove
@@ -127,19 +123,19 @@ kubespin apply \
 # AWS
 kubespin apply --provider aws --region us-east-1 --cluster-id dev-aws \
   --access private --profile tier-small@1.0.0 \
-  --spot --github-org "$GITHUB_ORG" --registry-region us-east-1
+  --spot --github-org "$GITHUB_ORG"
 
 # GCP — also goes zonal + public-nodes automatically, see above
 kubespin apply --provider gcp --gcp-project kubernetes-dev-502710 \
   --region us-central1 --cluster-id dev-gcp \
   --access private --profile tier-small@1.0.0 \
-  --spot --github-org "$GITHUB_ORG" --registry-region us-east-1
+  --spot --github-org "$GITHUB_ORG"
 
 # Azure — --spot still sizes the node pool down even though capacity stays on-demand
 kubespin apply --provider azure --azure-subscription "$AZURE_SUBSCRIPTION_ID" \
   --region eastus --cluster-id dev-azure \
   --access private --profile tier-small@1.0.0 \
-  --spot --github-org "$GITHUB_ORG" --registry-region us-east-1
+  --spot --github-org "$GITHUB_ORG"
 ```
 
 See [Examples](examples.md) for the full flag reference on `apply`, and

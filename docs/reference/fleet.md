@@ -336,7 +336,7 @@
 
 ## Invariants
 
-- **All reads and writes go through `internal/registry`.** No function in this package makes a raw DynamoDB (or other SDK) call directly — every fleet-wide view starts with `reg.List(ctx, filter)`.
+- **All reads and writes go through `internal/registry`.** No function in this package makes a raw SQL (or other SDK) call directly — every fleet-wide view starts with `reg.List(ctx, filter)`.
 - **`Status` and `Dashboard` never reach into a cluster.** They compute everything — phase, staleness, findings — from the registry record. This is what keeps a `fleet status` run from hanging on one unreachable cluster: a gap in `LastReportedAt` is a real signal (*stale*), not a timeout.
 - **`Audit` is read-only against cloud infra**: it calls `Describe`, never `Reconcile`, and calls `Clone`, never `Push`.
 - **`Update` is the only writer**, and only to each cluster's repository (`addons.yaml` via `repo.ReconcileAddons`) — never to cloud infra directly.

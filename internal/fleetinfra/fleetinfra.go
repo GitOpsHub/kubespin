@@ -1,5 +1,8 @@
-// Package fleetinfra provisions the shared fleet infrastructure — the Fleet
-// Registry table and the Central Ingestion API — directly through the AWS SDK.
+// Package fleetinfra provisions the shared fleet infrastructure — the Central
+// Ingestion API — directly through the AWS SDK. The Fleet Registry itself is a
+// Postgres database (internal/registry) the operator supplies connection
+// details for; it self-migrates its schema on connect and is not provisioned
+// here.
 //
 // There is no state file. Every step describes live state and diffs it against
 // desired state, so a run against already-provisioned infrastructure must report
@@ -37,10 +40,6 @@ const (
 	// the path is what M6 binds the caller's token subject against.
 	StatusRouteKey  = "POST /v1/clusters/{clusterId}/status"
 	statusRoutePath = "/v1/clusters/{clusterId}/status"
-
-	// gsiName indexes by provider and phase so `fleet audit` and `fleet update`
-	// can enumerate without scanning.
-	gsiName = "ProviderPhaseIndex"
 )
 
 var accountIDPattern = regexp.MustCompile(`^[0-9]{12}$`)
@@ -53,7 +52,7 @@ type Spec struct {
 	Region    string
 
 	NamePrefix       string
-	RegistryTable    string
+	RegistryDSN      string
 	LogRetentionDays int32
 	ThrottleBurst    int32
 	ThrottleRate     float64
@@ -88,8 +87,8 @@ func (s Spec) Validate() error {
 	if s.Region == "" {
 		errs = append(errs, fmt.Errorf("%w: region is required", ErrSpec))
 	}
-	if s.RegistryTable == "" {
-		errs = append(errs, fmt.Errorf("%w: registry table name is required", ErrSpec))
+	if s.RegistryDSN == "" {
+		errs = append(errs, fmt.Errorf("%w: registry DSN is required", ErrSpec))
 	}
 	if len(s.LambdaZip) == 0 {
 		errs = append(errs, fmt.Errorf("%w: packaged lambda is required", ErrSpec))
@@ -104,10 +103,6 @@ func (s Spec) roleName() string       { return s.NamePrefix + "-ingestion" }
 func (s Spec) apiName() string        { return s.NamePrefix + "-ingestion" }
 func (s Spec) lambdaLogGroup() string { return "/aws/lambda/" + s.functionName() }
 func (s Spec) apiLogGroup() string    { return "/aws/apigateway/" + s.apiName() }
-
-func (s Spec) tableARN() string {
-	return fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s", s.Region, s.AccountID, s.RegistryTable)
-}
 
 func (s Spec) roleARN() string {
 	return fmt.Sprintf("arn:aws:iam::%s:role/%s", s.AccountID, s.roleName())
@@ -256,12 +251,10 @@ func Converge(ctx context.Context, c *Clients, spec Spec, dryRun bool, opts ...O
 		"account_id", spec.AccountID,
 		"region", spec.Region,
 		"name_prefix", spec.NamePrefix,
-		"registry_table", spec.RegistryTable,
 		"dry_run", dryRun)
 
 	api := newAPIStep(c, spec, logger)
 	steps := []step{
-		newRegistryTableStep(c, spec, logger),
 		newLogGroupsStep(c, spec, logger),
 		newRoleStep(c, spec, logger),
 		newFunctionStep(c, spec, logger),

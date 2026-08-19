@@ -4,6 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 
 	"github.com/GitOpsHub/kubespin/internal/argocd"
 	"github.com/GitOpsHub/kubespin/internal/catalog"
@@ -68,18 +75,29 @@ func ProvisioningSteps(
 // every cloud's ClusterProvisioner (internal/provisioner/{aws,gcp,azure}),
 // so the type assertion here only fails for a hypothetical future provider
 // that has not implemented it yet.
+// restConfigFor builds the *rest.Config for spec's cluster, the prerequisite
+// every direct-to-API-server call (installing/upgrading Argo CD, applying the
+// root Application) needs before it can do anything.
+func restConfigFor(ctx context.Context, cloud Cloud, spec core.ClusterSpec) (*rest.Config, error) {
+	restConfigProv, ok := cloud.Cluster.(provisioner.RESTConfigProvisioner)
+	if !ok {
+		return nil, fmt.Errorf("provider %s cannot build a cluster REST config", cloud.Cluster.Provider())
+	}
+	restConfig, err := restConfigProv.RESTConfig(ctx, spec)
+	if err != nil {
+		return nil, fmt.Errorf("building REST config for %s: %w", spec.ID, err)
+	}
+	return restConfig, nil
+}
+
 func installArgoCDStep(
 	cloud Cloud, installer argocd.Installer, applier argocd.KubeApplier,
 	repoProv repo.Provisioner, resolver catalog.Resolver, logger *slog.Logger,
 ) func(context.Context, core.ClusterSpec, registry.Record) error {
 	return func(ctx context.Context, spec core.ClusterSpec, _ registry.Record) error {
-		restConfigProv, ok := cloud.Cluster.(provisioner.RESTConfigProvisioner)
-		if !ok {
-			return fmt.Errorf("provider %s cannot build a cluster REST config", cloud.Cluster.Provider())
-		}
-		restConfig, err := restConfigProv.RESTConfig(ctx, spec)
+		restConfig, err := restConfigFor(ctx, cloud, spec)
 		if err != nil {
-			return fmt.Errorf("building REST config for %s: %w", spec.ID, err)
+			return err
 		}
 
 		profile, err := catalog.ResolveForCluster(ctx, resolver, spec)
@@ -160,7 +178,19 @@ func seedRepoStep(
 // converged on every subsequent `apply`: an infra diff routes to
 // cloud.Cluster.Reconcile, an addon diff routes to repo.ReconcileAddons, and a
 // no-change run makes neither call. See WithReadyReconcile.
-func ReadyReconcile(cloud Cloud, repoProv repo.Provisioner, resolver catalog.Resolver, logger *slog.Logger) ReconcileFunc {
+//
+// Argo CD's own release is the one addon app-of-apps cannot converge, since it
+// cannot sync itself — installArgoCDStep is the only other caller of
+// installer.Install, and that only runs once, on the PhaseRepoPushed->
+// PhaseArgoCDInstalled transition. Without re-running it here, a
+// cluster.yaml override touching the "argocd" addon (e.g. exposing
+// argocd-server) would commit into addons.yaml on every subsequent apply but
+// never actually reach the live release. installer.Install is documented
+// safe to call on every apply (see the Installer interface), so this costs
+// nothing on the common no-change path.
+func ReadyReconcile(
+	cloud Cloud, installer argocd.Installer, repoProv repo.Provisioner, resolver catalog.Resolver, logger *slog.Logger,
+) ReconcileFunc {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -179,12 +209,40 @@ func ReadyReconcile(cloud Cloud, repoProv repo.Provisioner, resolver catalog.Res
 			return fmt.Errorf("resolving profile for %s: %w", spec.ID, err)
 		}
 
+		addon, ok := profile.Addon(argocd.ReleaseName)
+		if !ok {
+			return fmt.Errorf("resolved profile for %s carries no argocd addon", spec.ID)
+		}
+		restConfig, err := restConfigFor(ctx, cloud, spec)
+		if err != nil {
+			return err
+		}
+		if err := installer.Install(ctx, restConfig, addon); err != nil {
+			return fmt.Errorf("reconciling argocd release for %s: %w", spec.ID, err)
+		}
+
 		committed, err := repo.ReconcileAddons(ctx, repoProv, spec, profile)
 		if err != nil {
 			return fmt.Errorf("reconciling addons for %s: %w", spec.ID, err)
 		}
 		if committed {
 			logger.Info("committed addon changes", "cluster", spec.ID, "profile", spec.Profile)
+		}
+
+		// addons.yaml above is the informational record of the resolved
+		// profile; apps/*.yaml is what Argo CD's app-of-apps root Application
+		// actually watches and syncs from. Without also reconciling this, an
+		// override on any Argo-CD-synced addon (cilium, cert-manager, ...)
+		// would land in addons.yaml but never reach the Application Argo CD
+		// reads, so it would never sync — installArgoCDStep is the only other
+		// caller of ReconcileAppOfApps, and that runs once, at initial
+		// install.
+		appsCommitted, err := repo.ReconcileAppOfApps(ctx, repoProv, spec, profile)
+		if err != nil {
+			return fmt.Errorf("reconciling app-of-apps for %s: %w", spec.ID, err)
+		}
+		if appsCommitted {
+			logger.Info("committed app-of-apps changes", "cluster", spec.ID, "profile", spec.Profile)
 		}
 		return nil
 	}
@@ -211,6 +269,15 @@ func Teardown(cloud Cloud, repoProv repo.Provisioner, logger *slog.Logger) Teard
 		}
 		logger.Info("deprovisioned workload identity", "cluster", spec.ID, "component", comp.Name)
 
+		// Must happen before the cluster itself goes: a Kubernetes Service of
+		// type LoadBalancer (Argo CD's own exposure, or an addon's) owns a real
+		// cloud load balancer that deleting the cluster does not clean up on its
+		// own, left orphaned — billing indefinitely — and blocking the VPC/
+		// network teardown below with a dependency violation.
+		if err := drainLoadBalancers(ctx, cloud, spec, logger); err != nil {
+			return fmt.Errorf("draining load balancers for %s: %w", spec.ID, err)
+		}
+
 		// Node pools drain before the control plane goes, so this call blocks
 		// for minutes; say so rather than looking hung.
 		logger.Info("deleting cluster; node pools drain first, this takes several minutes",
@@ -227,12 +294,114 @@ func Teardown(cloud Cloud, repoProv repo.Provisioner, logger *slog.Logger) Teard
 		}
 		logger.Info("deleted cluster", "cluster", spec.ID)
 
+		// Reverses EnsureNetwork, symmetric with createClusterStep calling it on
+		// the way up. Identified by deterministic name rather than spec.Subnets,
+		// so this is safe even when delete was not given the same --subnets an
+		// earlier apply was.
+		if cloud.Network != nil {
+			if err := cloud.Network.DeleteNetwork(ctx, spec); err != nil {
+				return fmt.Errorf("deleting network for %s: %w", spec.ID, err)
+			}
+			logger.Info("deleted network", "cluster", spec.ID)
+		}
+
 		if err := repoProv.Archive(ctx, spec); err != nil {
 			return fmt.Errorf("archiving repository for %s: %w", spec.ID, err)
 		}
 		logger.Info("archived cluster repository", "cluster", spec.ID)
 
 		return nil
+	}
+}
+
+// drainLoadBalancersTimeout/drainLoadBalancersPollInterval bound how long
+// Teardown waits for a deleted Service's cloud load balancer to actually tear
+// down before giving up and proceeding with cluster deletion anyway — a stuck
+// drain must not wedge delete forever.
+const (
+	drainLoadBalancersTimeout      = 3 * time.Minute
+	drainLoadBalancersPollInterval = 5 * time.Second
+)
+
+// drainLoadBalancers deletes every Service of type LoadBalancer across all
+// namespaces and waits for each to actually disappear from the API before
+// returning.
+//
+// If the cluster cannot be reached at all — already deleted by an earlier,
+// interrupted teardown, or never became active in the first place — this is
+// a no-op rather than a failure: there is nothing to drain from a cluster
+// that is not there, and a resumed delete must still be able to converge.
+func drainLoadBalancers(ctx context.Context, cloud Cloud, spec core.ClusterSpec, logger *slog.Logger) error {
+	restConfig, err := restConfigFor(ctx, cloud, spec)
+	if err != nil {
+		logger.Debug("skipping load balancer drain; cluster is not reachable",
+			"cluster", spec.ID, "error", err)
+		return nil
+	}
+
+	clientset, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return fmt.Errorf("building Kubernetes client for %s: %w", spec.ID, err)
+	}
+
+	services, err := clientset.CoreV1().Services("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		// Same reasoning as the RESTConfig failure above: an unreachable API
+		// server here means there is nothing left to drain, not a teardown
+		// failure.
+		logger.Debug("skipping load balancer drain; could not list services",
+			"cluster", spec.ID, "error", err)
+		return nil
+	}
+
+	var toDelete []corev1.Service
+	for _, svc := range services.Items {
+		if svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
+			toDelete = append(toDelete, svc)
+		}
+	}
+	if len(toDelete) == 0 {
+		return nil
+	}
+
+	logger.Info("draining LoadBalancer services before cluster deletion",
+		"cluster", spec.ID, "count", len(toDelete))
+	for _, svc := range toDelete {
+		err := clientset.CoreV1().Services(svc.Namespace).Delete(ctx, svc.Name, metav1.DeleteOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("deleting service %s/%s: %w", svc.Namespace, svc.Name, err)
+		}
+	}
+
+	deadline := time.Now().Add(drainLoadBalancersTimeout)
+	for {
+		remaining := 0
+		for _, svc := range toDelete {
+			_, err := clientset.CoreV1().Services(svc.Namespace).Get(ctx, svc.Name, metav1.GetOptions{})
+			switch {
+			case err == nil:
+				remaining++
+			case apierrors.IsNotFound(err):
+			default:
+				return fmt.Errorf("checking service %s/%s: %w", svc.Namespace, svc.Name, err)
+			}
+		}
+		if remaining == 0 {
+			logger.Info("load balancer services drained", "cluster", spec.ID)
+			return nil
+		}
+		if time.Now().After(deadline) {
+			logger.Warn(
+				"load balancer services did not finish draining in time; proceeding with cluster deletion anyway",
+				"cluster", spec.ID, "still_present", remaining)
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(drainLoadBalancersPollInterval):
+		}
 	}
 }
 

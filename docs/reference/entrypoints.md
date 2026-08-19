@@ -42,7 +42,7 @@ The Central Ingestion API's Lambda handler — the only inbound network
 surface in the system, and the endpoint every cluster's
 `fleet-status-reporter` pushes signed status to. The handler in
 [cmd/ingestion/main.go](https://github.com/GitOpsHub/kubespin/blob/main/cmd/ingestion/main.go)
-is a thin adapter over `internal/ingestion.Handler`: it wires up a DynamoDB
+is a thin adapter over `internal/ingestion.Handler`: it wires up a Postgres
 Fleet Registry client and a JWKS-backed token verifier, translates between
 API Gateway's HTTP v2 event shape and the handler's plain Go signature, and
 delegates the actual verification/write logic to `internal/ingestion`. The
@@ -57,11 +57,13 @@ in this file.
     func newHandler(ctx context.Context) (*ingestion.Handler, error)
     ```
 
-    - **Behavior:** Reads `AWS_REGION` and `REGISTRY_TABLE` from the
-      environment, builds a `registry.NewDynamoDB` client and an
-      `ingestion.NewVerifier` wrapping `ingestion.NewJWKSResolver(nil)`, and
-      returns an `ingestion.NewHandler`. Returns an error if the registry
-      connection fails.
+    - **Behavior:** Reads `REGISTRY_DSN` from the environment, builds a
+      `registry.NewPostgres` client (which pings the connection and
+      idempotently ensures the `fleet_registry` table and its index exist)
+      and an `ingestion.NewVerifier` wrapping
+      `ingestion.NewJWKSResolver(nil)`, and returns an
+      `ingestion.NewHandler`. Returns an error if the registry connection
+      fails.
 
 ??? note "Signature: `func handleRequest(h *ingestion.Handler) func(...)`"
 
@@ -100,8 +102,9 @@ in this file.
     - **Behavior:** Sets up a JSON `slog` logger to stderr (structured
       fields are queryable in CloudWatch Logs, unlike free text), builds
       the handler via `newHandler`, exits 1 and logs an error if that
-      fails, logs a startup message with the region and table, and calls
-      `lambda.Start(handleRequest(h))`.
+      fails, logs a startup message (deliberately not including
+      `REGISTRY_DSN` itself, which carries the Postgres password), and
+      calls `lambda.Start(handleRequest(h))`.
 
 ## cmd/fleet-status-reporter
 

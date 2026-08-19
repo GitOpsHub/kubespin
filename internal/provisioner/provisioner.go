@@ -207,6 +207,15 @@ type NetworkProvisioner interface {
 	EnsureNetwork(ctx context.Context, spec core.ClusterSpec) (NetworkResult, error)
 
 	AllowEgress(ctx context.Context, spec core.ClusterSpec, dest EgressDestination) (Change, error)
+
+	// DeleteNetwork reverses EnsureNetwork: it tears down the network delete's
+	// cluster caused to be created, identified by the same deterministic
+	// name EnsureNetwork looked it up by — never by spec.Subnets, which the
+	// caller may not have re-supplied at delete time. If no network with that
+	// deterministic name exists — because the operator supplied --subnets at
+	// apply time, or it is already gone — this is a no-op, the same
+	// adopt-or-skip discipline EnsureNetwork applies in the other direction.
+	DeleteNetwork(ctx context.Context, spec core.ClusterSpec) error
 }
 
 // StatusReporter is the component whose identity and egress every cluster gets.

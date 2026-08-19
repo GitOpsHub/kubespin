@@ -25,6 +25,10 @@ import (
 // clusterAPI is the GKE Cluster Manager surface this package uses.
 type clusterAPI interface {
 	GetCluster(context.Context, *containerpb.GetClusterRequest, ...gax.CallOption) (*containerpb.Cluster, error)
+	// ListClusters is used only by locate, to find a cluster by name across
+	// every location in the project when spec.Zone is not known — see locate
+	// for why that lookup exists at all.
+	ListClusters(context.Context, *containerpb.ListClustersRequest, ...gax.CallOption) (*containerpb.ListClustersResponse, error)
 	CreateCluster(context.Context, *containerpb.CreateClusterRequest, ...gax.CallOption) (*containerpb.Operation, error)
 	UpdateCluster(context.Context, *containerpb.UpdateClusterRequest, ...gax.CallOption) (*containerpb.Operation, error)
 	DeleteCluster(context.Context, *containerpb.DeleteClusterRequest, ...gax.CallOption) (*containerpb.Operation, error)
@@ -52,18 +56,21 @@ type serviceAccountsAPI interface {
 type firewallsAPI interface {
 	GetFirewall(ctx context.Context, project, name string) (*compute.Firewall, error)
 	Insert(ctx context.Context, project string, fw *compute.Firewall) error
+	DeleteFirewall(ctx context.Context, project, name string) error
 }
 
 // networksAPI is used only by EnsureNetwork, when spec.Subnets is empty.
 type networksAPI interface {
 	GetNetwork(ctx context.Context, project, name string) (*compute.Network, error)
 	InsertNetwork(ctx context.Context, project string, network *compute.Network) error
+	DeleteNetwork(ctx context.Context, project, name string) error
 }
 
 // subnetworksAPI is used only by EnsureNetwork, when spec.Subnets is empty.
 type subnetworksAPI interface {
 	GetSubnetwork(ctx context.Context, project, region, name string) (*compute.Subnetwork, error)
 	InsertSubnetwork(ctx context.Context, project, region string, subnet *compute.Subnetwork) error
+	DeleteSubnetwork(ctx context.Context, project, region, name string) error
 }
 
 // routersAPI is used only by EnsureNetwork, when spec.Subnets is empty.
@@ -77,6 +84,7 @@ type subnetworksAPI interface {
 type routersAPI interface {
 	GetRouter(ctx context.Context, project, region, name string) (*compute.Router, error)
 	InsertRouter(ctx context.Context, project, region string, router *compute.Router) error
+	DeleteRouter(ctx context.Context, project, region, name string) error
 }
 
 // Clients bundles the GCP clients the provisioner uses, scoped to one project.
@@ -218,6 +226,17 @@ func (r realFirewalls) Insert(ctx context.Context, project string, fw *compute.F
 	return nil
 }
 
+func (r realFirewalls) DeleteFirewall(ctx context.Context, project, name string) error {
+	op, err := r.svc.Delete(project, name).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("compute: delete firewall %s: %w", name, err)
+	}
+	if err := waitGlobalOperation(ctx, r.ops, project, op); err != nil {
+		return fmt.Errorf("compute: delete firewall %s: %w", name, err)
+	}
+	return nil
+}
+
 // realNetworks adapts the fluent compute/v1 client to networksAPI.
 type realNetworks struct {
 	svc *compute.NetworksService
@@ -239,6 +258,17 @@ func (r realNetworks) InsertNetwork(ctx context.Context, project string, network
 	}
 	if err := waitGlobalOperation(ctx, r.ops, project, op); err != nil {
 		return fmt.Errorf("compute: insert network %s: %w", network.Name, err)
+	}
+	return nil
+}
+
+func (r realNetworks) DeleteNetwork(ctx context.Context, project, name string) error {
+	op, err := r.svc.Delete(project, name).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("compute: delete network %s: %w", name, err)
+	}
+	if err := waitGlobalOperation(ctx, r.ops, project, op); err != nil {
+		return fmt.Errorf("compute: delete network %s: %w", name, err)
 	}
 	return nil
 }
@@ -268,6 +298,17 @@ func (r realSubnetworks) InsertSubnetwork(ctx context.Context, project, region s
 	return nil
 }
 
+func (r realSubnetworks) DeleteSubnetwork(ctx context.Context, project, region, name string) error {
+	op, err := r.svc.Delete(project, region, name).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("compute: delete subnetwork %s: %w", name, err)
+	}
+	if err := waitRegionOperation(ctx, r.ops, project, region, op); err != nil {
+		return fmt.Errorf("compute: delete subnetwork %s: %w", name, err)
+	}
+	return nil
+}
+
 // realRouters adapts the fluent compute/v1 client to routersAPI.
 type realRouters struct {
 	svc *compute.RoutersService
@@ -289,6 +330,17 @@ func (r realRouters) InsertRouter(ctx context.Context, project, region string, r
 	}
 	if err := waitRegionOperation(ctx, r.ops, project, region, op); err != nil {
 		return fmt.Errorf("compute: insert router %s: %w", router.Name, err)
+	}
+	return nil
+}
+
+func (r realRouters) DeleteRouter(ctx context.Context, project, region, name string) error {
+	op, err := r.svc.Delete(project, region, name).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("compute: delete router %s: %w", name, err)
+	}
+	if err := waitRegionOperation(ctx, r.ops, project, region, op); err != nil {
+		return fmt.Errorf("compute: delete router %s: %w", name, err)
 	}
 	return nil
 }

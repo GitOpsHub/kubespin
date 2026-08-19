@@ -16,15 +16,13 @@ kubespin fleet status [flags]
 
 ```bash
   # Every cluster, as a table
-  kubespin fleet status --registry-region us-east-1
+  kubespin fleet status
 
   # Only clusters that have missed their reporting window
-  kubespin fleet status --stale-only --stale-threshold 30m \
-    --registry-region us-east-1
+  kubespin fleet status --stale-only --stale-threshold 30m
 
   # Machine-readable output, restricted to one phase
-  kubespin fleet status --phase ready --output json \
-    --registry-region us-east-1
+  kubespin fleet status --phase ready --output json
 ```
 
 ## Options
@@ -41,12 +39,10 @@ kubespin fleet status [flags]
 ## Options inherited from parent commands
 
 ```text
-      --config string            path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
-      --dry-run                  resolve and report intended changes without performing them
-      --log-format string        log output format: text or json (default "text")
-      --log-level string         log verbosity: debug, info, warn, error (default "info")
-      --registry-region string   AWS region hosting the Fleet Registry
-      --registry-table string    DynamoDB table backing the Fleet Registry (default "kubespin-fleet-registry")
+      --config string       path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
+      --dry-run             resolve and report intended changes without performing them
+      --log-format string   log output format: text or json (default "text")
+      --log-level string    log verbosity: debug, info, warn, error (default "info")
 ```
 
 ## See also

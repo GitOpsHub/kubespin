@@ -223,3 +223,70 @@ func TestAllowEgress_RequiresAClusterSecurityGroup(t *testing.T) {
 		t.Fatalf("error = %v, want one wrapping ErrNotFound", err)
 	}
 }
+
+func TestDeleteNetwork_DeletesEverythingEnsureNetworkCreated(t *testing.T) {
+	f := newFakeAWS()
+	spec := testSpec()
+	spec.Subnets = nil
+	p := NewNetworkProvisioner(f.clients())
+
+	if _, err := p.EnsureNetwork(t.Context(), spec); err != nil {
+		t.Fatalf("EnsureNetwork: %v", err)
+	}
+	if len(f.vpcs) == 0 {
+		t.Fatal("EnsureNetwork created no VPC; nothing for DeleteNetwork to prove")
+	}
+
+	if err := p.DeleteNetwork(t.Context(), spec); err != nil {
+		t.Fatalf("DeleteNetwork: %v", err)
+	}
+
+	if len(f.vpcs) != 0 {
+		t.Errorf("%d VPC(s) left behind", len(f.vpcs))
+	}
+	if len(f.subnets) != 0 {
+		t.Errorf("%d subnet(s) left behind", len(f.subnets))
+	}
+	if len(f.igws) != 0 {
+		t.Errorf("%d internet gateway(s) left behind", len(f.igws))
+	}
+	if len(f.routeTables) != 0 {
+		t.Errorf("%d route table(s) left behind", len(f.routeTables))
+	}
+}
+
+// An operator-supplied --subnets network was never created by kubespin, so
+// DeleteNetwork must never touch it — this is what protects it, since delete
+// may not have --subnets re-supplied the way apply did.
+func TestDeleteNetwork_NoOpWhenNetworkWasNeverCreated(t *testing.T) {
+	f := newFakeAWS()
+	spec := testSpec() // carries operator-supplied Subnets
+
+	if err := NewNetworkProvisioner(f.clients()).DeleteNetwork(t.Context(), spec); err != nil {
+		t.Fatalf("DeleteNetwork: %v", err)
+	}
+	f.assertNoMutations(t)
+}
+
+// The ENI a just-deleted load balancer owned can take tens of seconds to
+// detach; DeleteNetwork must ride that out rather than failing the whole
+// teardown on it.
+func TestDeleteNetwork_RetriesDependencyViolationOnDeleteVpc(t *testing.T) {
+	f := newFakeAWS()
+	spec := testSpec()
+	spec.Subnets = nil
+	p := NewNetworkProvisioner(f.clients())
+	p.retryInterval = 0
+
+	if _, err := p.EnsureNetwork(t.Context(), spec); err != nil {
+		t.Fatalf("EnsureNetwork: %v", err)
+	}
+	f.deleteVPCDependencyErrors = 2
+
+	if err := p.DeleteNetwork(t.Context(), spec); err != nil {
+		t.Fatalf("DeleteNetwork: %v", err)
+	}
+	if len(f.vpcs) != 0 {
+		t.Error("VPC still present after DeleteNetwork retried past DependencyViolation")
+	}
+}

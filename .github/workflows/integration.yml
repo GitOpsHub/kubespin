@@ -1,6 +1,6 @@
 name: Integration
 
-# Integration tests touch real AWS and a local DynamoDB, so they run nightly and
+# Integration tests touch real AWS and a local Postgres, so they run nightly and
 # on demand rather than on every pull request.
 on:
   schedule:
@@ -17,10 +17,17 @@ jobs:
     environment: integration
 
     services:
-      dynamodb:
-        image: amazon/dynamodb-local:latest
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
         ports:
-          - 8000:8000
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@v6
@@ -30,7 +37,7 @@ jobs:
           cache: true
 
       # Configured once the fleet AWS account exists (see infra/fleet/README.md).
-      # Until then the DynamoDB-Local-backed tests below run without it.
+      # Until then the Postgres-backed registry tests below run without it.
       - name: Configure AWS credentials
         if: vars.AWS_INTEGRATION_ROLE_ARN != ''
         uses: aws-actions/configure-aws-credentials@v5
@@ -40,6 +47,6 @@ jobs:
 
       - name: Integration tests
         env:
-          KUBESPIN_DYNAMODB_ENDPOINT: http://localhost:8000
+          KUBESPIN_POSTGRES_TEST_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
           AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
         run: go test -race -tags=integration -timeout 30m ./...

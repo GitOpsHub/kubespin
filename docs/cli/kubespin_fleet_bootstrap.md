@@ -4,8 +4,11 @@ Provision the shared fleet infrastructure in the fleet account
 
 ## Synopsis
 
-bootstrap creates the Fleet Registry table and the Central Ingestion API,
-converging live infrastructure toward the desired state.
+bootstrap creates the Central Ingestion API, converging live infrastructure
+toward the desired state. The Fleet Registry itself is a Postgres database
+(KUBESPIN_REGISTRY_DSN) the operator provisions and supplies connection
+details for — it self-migrates its own schema on first connect, so there is
+nothing for bootstrap to provision for it.
 
 It is safe to re-run: every resource is create-or-update, and a run against
 already-provisioned infrastructure reports no changes. Nothing is ever deleted.
@@ -25,13 +28,13 @@ kubespin fleet bootstrap [flags]
   make lambda
 
   # Preview what bootstrap would create
-  kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1 --dry-run
+  kubespin fleet bootstrap --account-id 465532803838 --region us-east-1 --dry-run
 
   # Provision it for real
-  kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1
+  kubespin fleet bootstrap --account-id 465532803838 --region us-east-1
 
   # Re-running is safe; a converged fleet reports no changes
-  kubespin fleet bootstrap --account-id 465532803838 --registry-region us-east-1 --dry-run
+  kubespin fleet bootstrap --account-id 465532803838 --region us-east-1 --dry-run
 ```
 
 ## Options
@@ -42,6 +45,7 @@ kubespin fleet bootstrap [flags]
       --lambda-binary string       compiled ingestion handler to deploy (default "bin/ingestion/bootstrap")
       --log-retention-days int32   CloudWatch log retention (default 30)
       --name-prefix string         prefix for every provisioned resource name (default "kubespin")
+      --region string              AWS region to provision the ingestion API and its Lambda into (required)
       --throttle-burst int32       ingestion API burst limit (default 100)
       --throttle-rate float        ingestion API steady-state request rate (default 50)
 ```
@@ -49,12 +53,10 @@ kubespin fleet bootstrap [flags]
 ## Options inherited from parent commands
 
 ```text
-      --config string            path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
-      --dry-run                  resolve and report intended changes without performing them
-      --log-format string        log output format: text or json (default "text")
-      --log-level string         log verbosity: debug, info, warn, error (default "info")
-      --registry-region string   AWS region hosting the Fleet Registry
-      --registry-table string    DynamoDB table backing the Fleet Registry (default "kubespin-fleet-registry")
+      --config string       path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
+      --dry-run             resolve and report intended changes without performing them
+      --log-format string   log output format: text or json (default "text")
+      --log-level string    log verbosity: debug, info, warn, error (default "info")
 ```
 
 ## See also

@@ -27,11 +27,16 @@ const (
 type NetworkProvisioner struct {
 	c       *Clients
 	cluster *ClusterProvisioner
+
+	// retryInterval defaults to deleteNetworkRetryInterval, overridden to zero
+	// in tests so DeleteNetwork's resourceInUseByAnotherResource retry doesn't
+	// actually sleep.
+	retryInterval time.Duration
 }
 
 // NewNetworkProvisioner builds an egress provisioner.
 func NewNetworkProvisioner(c *Clients) *NetworkProvisioner {
-	return &NetworkProvisioner{c: c, cluster: NewClusterProvisioner(c)}
+	return &NetworkProvisioner{c: c, cluster: NewClusterProvisioner(c), retryInterval: deleteNetworkRetryInterval}
 }
 
 // Provider identifies this implementation's cloud.
@@ -192,6 +197,136 @@ func (p *NetworkProvisioner) ensureSubnetwork(
 	change.Changed = true
 	change.Details = append(change.Details, fmt.Sprintf("created subnetwork %s (%s)", name, cidr))
 	return nil
+}
+
+// deleteNetworkRetries/deleteNetworkRetryInterval bound how long DeleteNetwork
+// waits out a transient resourceInUseByAnotherResource on the final network
+// delete: GKE cleans up its own auto-created firewall rules asynchronously
+// after the cluster itself reports deleted, and every other resource this
+// function tears down is already gone by the time it gets here.
+const (
+	deleteNetworkRetries       = 12
+	deleteNetworkRetryInterval = 10 * time.Second
+)
+
+// DeleteNetwork reverses EnsureNetwork: it finds the network by the same
+// deterministic name EnsureNetwork looked it up by and, if found, deletes the
+// egress firewall rule, Cloud Router/NAT, subnetwork, and network EnsureNetwork
+// could have created. If no such network exists — an operator-supplied
+// --subnets network, or one already torn down — this is a no-op, never
+// touching a network kubespin did not create.
+func (p *NetworkProvisioner) DeleteNetwork(ctx context.Context, spec core.ClusterSpec) error {
+	n := names{project: p.c.project, spec: spec}
+
+	if _, err := p.c.networks.GetNetwork(ctx, n.project, n.network()); err != nil {
+		if code(err) == 404 {
+			return nil
+		}
+		return fmt.Errorf("describing network %s: %w", n.network(), err)
+	}
+
+	if err := p.deleteEgressFirewall(ctx, spec); err != nil {
+		return err
+	}
+	if err := p.deleteRouter(ctx, n); err != nil {
+		return err
+	}
+	if err := p.deleteSubnetwork(ctx, n); err != nil {
+		return err
+	}
+	return p.deleteNetwork(ctx, n)
+}
+
+func (p *NetworkProvisioner) deleteEgressFirewall(ctx context.Context, spec core.ClusterSpec) error {
+	name := "kubespin-" + spec.ID.String() + "-egress"
+
+	if _, err := p.c.firewalls.GetFirewall(ctx, p.c.project, name); err != nil {
+		if code(err) == 404 {
+			return nil
+		}
+		return fmt.Errorf("describing firewall rule %s: %w", name, err)
+	}
+	if err := p.c.firewalls.DeleteFirewall(ctx, p.c.project, name); err != nil {
+		return fmt.Errorf("deleting firewall rule %s: %w", name, err)
+	}
+	p.c.logger.Info("deleted egress firewall rule", "rule", name)
+	return nil
+}
+
+func (p *NetworkProvisioner) deleteRouter(ctx context.Context, n names) error {
+	name := n.router()
+
+	if _, err := p.c.routers.GetRouter(ctx, n.project, n.location(), name); err != nil {
+		if code(err) == 404 {
+			return nil
+		}
+		return fmt.Errorf("describing router %s: %w", name, err)
+	}
+	if err := p.c.routers.DeleteRouter(ctx, n.project, n.location(), name); err != nil {
+		return fmt.Errorf("deleting router %s: %w", name, err)
+	}
+	p.c.logger.Info("deleted Cloud Router and NAT", "router", name)
+	return nil
+}
+
+func (p *NetworkProvisioner) deleteSubnetwork(ctx context.Context, n names) error {
+	name := n.subnetwork()
+
+	if _, err := p.c.subnetworks.GetSubnetwork(ctx, n.project, n.location(), name); err != nil {
+		if code(err) == 404 {
+			return nil
+		}
+		return fmt.Errorf("describing subnetwork %s: %w", name, err)
+	}
+	if err := p.c.subnetworks.DeleteSubnetwork(ctx, n.project, n.location(), name); err != nil {
+		return fmt.Errorf("deleting subnetwork %s: %w", name, err)
+	}
+	p.c.logger.Info("deleted subnetwork", "subnetwork", name)
+	return nil
+}
+
+// deleteNetwork retries a resourceInUseByAnotherResource for a while: GKE
+// removes its own auto-created firewall rules asynchronously after
+// DeleteCluster's operation itself reports done.
+func (p *NetworkProvisioner) deleteNetwork(ctx context.Context, n names) error {
+	name := n.network()
+
+	var lastErr error
+	for attempt := 0; attempt < deleteNetworkRetries; attempt++ {
+		err := p.c.networks.DeleteNetwork(ctx, n.project, name)
+		if err == nil {
+			p.c.logger.Info("deleted VPC network", "network", name)
+			return nil
+		}
+		if !isResourceInUse(err) {
+			return fmt.Errorf("deleting network %s: %w", name, err)
+		}
+		lastErr = err
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(p.retryInterval):
+		}
+	}
+	return fmt.Errorf("deleting network %s: dependencies did not clear in time: %w", name, lastErr)
+}
+
+// isResourceInUse reports whether err is the 400 resourceInUseByAnotherResource
+// GCP returns while something still references a network being deleted —
+// here, a GKE-managed firewall rule the cluster's own deletion has not
+// finished cleaning up yet.
+func isResourceInUse(err error) bool {
+	var gerr *googleapi.Error
+	if !errors.As(err, &gerr) || gerr.Code != 400 {
+		return false
+	}
+	for _, item := range gerr.Errors {
+		if item.Reason == "resourceInUseByAnotherResource" {
+			return true
+		}
+	}
+	return false
 }
 
 // isResourceNotReady reports whether err is the 400 resourceNotReady GCP

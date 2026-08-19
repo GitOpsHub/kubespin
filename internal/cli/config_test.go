@@ -131,20 +131,32 @@ func TestLoadConfig_BoolPrecedence(t *testing.T) {
 }
 
 func TestLoadConfig_NestedKeysFromFile(t *testing.T) {
-	path := writeConfig(t, "registry-table: from-file\nregistry-region: eu-west-1\n")
+	path := writeConfig(t, "registry-dsn: postgres://from-file\n")
 
 	cfg, err := LoadConfig(newFlags(t, "--config", path))
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.Registry.Table != "from-file" {
-		t.Errorf("Registry.Table = %q, want from-file", cfg.Registry.Table)
-	}
-	if cfg.Registry.Region != "eu-west-1" {
-		t.Errorf("Registry.Region = %q, want eu-west-1", cfg.Registry.Region)
+	if cfg.Registry.DSN != "postgres://from-file" {
+		t.Errorf("Registry.DSN = %q, want postgres://from-file", cfg.Registry.DSN)
 	}
 	if cfg.SourceFile != path {
 		t.Errorf("SourceFile = %q, want %q", cfg.SourceFile, path)
+	}
+}
+
+// The registry DSN carries a password, so it must only ever be readable from
+// KUBESPIN_REGISTRY_DSN (or a config file) — never a CLI flag, which would
+// leak it into shell history and process listings.
+func TestLoadConfig_RegistryDSNFromEnv(t *testing.T) {
+	t.Setenv("KUBESPIN_REGISTRY_DSN", "postgres://from-env")
+
+	cfg, err := LoadConfig(newFlags(t))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Registry.DSN != "postgres://from-env" {
+		t.Errorf("Registry.DSN = %q, want postgres://from-env", cfg.Registry.DSN)
 	}
 }
 

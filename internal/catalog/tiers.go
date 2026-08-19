@@ -1,6 +1,9 @@
 package catalog
 
-import "github.com/GitOpsHub/kubespin/internal/core"
+import (
+	"github.com/GitOpsHub/kubespin/internal/argocd"
+	"github.com/GitOpsHub/kubespin/internal/core"
+)
 
 // withAddons returns a copy of base's addon list plus extra, without
 // aliasing base's backing array — appending to tierSmall.Addons directly
@@ -35,6 +38,7 @@ var tierStandard = core.Profile{
 			Repository: "https://argoproj.github.io/argo-helm",
 			Version:    "7.7.11",
 			Namespace:  "argocd",
+			Values:     argocd.ServerLoadBalancerValues,
 		},
 		core.AddonRef{
 			Name:       "velero",

@@ -27,7 +27,7 @@ flowchart LR
 
     repo[("Cluster repository<br/>cluster.yaml · addons.yaml · .state.yaml")]
     ingest["Central Ingestion API<br/>API Gateway + Lambda"]
-    registry[("Fleet Registry<br/>DynamoDB")]
+    registry[("Fleet Registry<br/>Postgres")]
     cli["kubespin CLI"]
 
     repo -->|Argo CD pulls| argo
@@ -58,18 +58,31 @@ every later decision:
 
 ## The Fleet Registry
 
-DynamoDB, one item per cluster, partition key `ClusterID`. It is the single
-source of durable fleet state, and every component reaches it through
-`internal/registry` rather than raw SDK calls.
+Postgres, one row per cluster in a `fleet_registry` table keyed by
+`cluster_id`. It is the single source of durable fleet state, and every
+component reaches it through `internal/registry` rather than raw SQL. The
+client (`registry.Postgres`, in `internal/registry/postgres.go`) self-migrates
+this schema idempotently on connect, so there is no separate migration step
+and no state to provision ahead of time.
 
-The partition key is `ClusterID` **alone**, deliberately. One item per cluster
-means a status report and a phase transition contend on the same item, so the
-lease actually serialises them. A composite key would let them proceed
-independently and the lock would protect nothing.
+The primary key is `cluster_id` **alone**, deliberately. One row per cluster
+means a status report and a phase transition contend on the same row, so the
+lease actually serialises them (`AcquireLease` is a conditional `UPDATE` on
+that row). A composite key would let them proceed independently and the lock
+would protect nothing.
 
-A `ProviderPhaseIndex` GSI on `Provider`+`Phase` exists from the first day the
-table does, because `fleet audit` and `fleet update` enumerate by provider and
-phase, and adding a GSI to a populated table is a slow online backfill.
+A `(provider, phase)` index exists from the first day the table does, because
+`fleet audit` and `fleet update` enumerate by provider and phase, and adding
+an index to a populated table is a slow online operation. Every `List` call is
+one query filtered by whichever of provider/phase are set — Postgres reads are
+always consistent, so unlike the eventually-consistent scan-or-index choice a
+DynamoDB-backed registry would face, there is no separate path to pick between
+or paginate through.
+
+The database itself can be hosted anywhere reachable over the network — kubespin
+does not require it to be AWS-hosted. `fleet bootstrap` provisions the AWS-side
+Central Ingestion API only; the operator provisions Postgres separately and
+supplies its connection string via `KUBESPIN_REGISTRY_DSN`.
 
 ### The phase state machine
 
@@ -224,7 +237,8 @@ minted for another audience would be accepted.
 
 ## Convergence without a state file
 
-Fleet infrastructure — the registry table and ingestion API — is provisioned by
+Fleet infrastructure — the ingestion API (the Fleet Registry is a separately
+operated Postgres database, not part of this) — is provisioned by
 [internal/fleetinfra](https://github.com/GitOpsHub/kubespin/tree/main/internal/fleetinfra) through `aws-sdk-go-v2`, not
 Terraform or CloudFormation. One language, one toolchain, and the stack is
 unit-testable with `go test` like everything else.
@@ -236,8 +250,9 @@ actually asserted:
   `Apply` calls skipped — not a parallel branch that rots. The test fakes fail if
   a dry run makes any mutating call.
 - **No step ever deletes.** There is no destroy path. Tearing down fleet
-  infrastructure is a deliberate manual act, and the registry table keeps
-  deletion protection on.
+  infrastructure is a deliberate manual act; any deletion protection on the
+  Postgres instance itself is the operator's responsibility, outside
+  `fleet bootstrap`'s scope.
 - **A second run must report nothing.** Every step is create-or-update, and
   `TestConverge_SecondRunIsNoOp` asserts that converging already-provisioned
   infrastructure produces no actions *and* no mutating calls. Drift tests go

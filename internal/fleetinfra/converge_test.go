@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 )
 
 // converge runs against the fake and fails the test on error.
@@ -36,19 +36,19 @@ func TestConverge_EmptyAccountCreatesEverything(t *testing.T) {
 	f := newFakeAWS()
 	report := converge(t, f, false)
 
-	if len(report.Actions) != 6 {
-		t.Fatalf("got %d actions, want 6", len(report.Actions))
+	if len(report.Actions) != 5 {
+		t.Fatalf("got %d actions, want 5", len(report.Actions))
 	}
 	for _, action := range report.Actions {
 		if action.Kind != ActionCreate {
 			t.Errorf("%s: kind = %s, want create", action.Resource, action.Kind)
 		}
 	}
-	if report.Changed() != 6 {
-		t.Errorf("Changed() = %d, want 6", report.Changed())
+	if report.Changed() != 5 {
+		t.Errorf("Changed() = %d, want 5", report.Changed())
 	}
 
-	for _, want := range []string{"CreateTable", "CreateLogGroup", "CreateRole", "CreateFunction", "CreateApi", "AddPermission"} {
+	for _, want := range []string{"CreateLogGroup", "CreateRole", "CreateFunction", "CreateApi", "AddPermission"} {
 		if !f.called(want) {
 			t.Errorf("%s was never called", want)
 		}
@@ -86,8 +86,8 @@ func TestConverge_DryRunMakesNoMutatingCalls(t *testing.T) {
 	if !report.DryRun {
 		t.Error("report does not record that it was a dry run")
 	}
-	if report.Changed() != 6 {
-		t.Errorf("Changed() = %d, want 6 — a dry run still reports what it would do", report.Changed())
+	if report.Changed() != 5 {
+		t.Errorf("Changed() = %d, want 5 — a dry run still reports what it would do", report.Changed())
 	}
 	if report.IngestionURL != "" {
 		t.Errorf("IngestionURL = %q, want empty: the API does not exist yet", report.IngestionURL)
@@ -125,7 +125,7 @@ func TestConverge_RefusesWrongAccount(t *testing.T) {
 	if !errors.Is(err, ErrAccountMismatch) {
 		t.Fatalf("error = %v, want one wrapping ErrAccountMismatch", err)
 	}
-	if f.called("DescribeTable", "GetApis") {
+	if f.called("DescribeLogGroups", "GetApis") {
 		t.Error("converge inspected resources before the account check passed")
 	}
 	f.assertNoMutations(t)
@@ -135,7 +135,7 @@ func TestConverge_RejectsInvalidSpec(t *testing.T) {
 	tests := map[string]func(*Spec){
 		"short account id": func(s *Spec) { s.AccountID = "123" },
 		"no region":        func(s *Spec) { s.Region = "" },
-		"no table":         func(s *Spec) { s.RegistryTable = "" },
+		"no dsn":           func(s *Spec) { s.RegistryDSN = "" },
 		"no lambda zip":    func(s *Spec) { s.LambdaZip = nil },
 	}
 
@@ -165,21 +165,6 @@ func TestConverge_DetectsDrift(t *testing.T) {
 			drift:    func(f *fakeAWS) { f.logGroups["/aws/lambda/kubespin-ingestion"] = aws.Int32(1) },
 			resource: "log groups",
 			wantCall: "PutRetentionPolicy",
-		},
-		"point-in-time recovery disabled": {
-			drift:    func(f *fakeAWS) { f.pitrEnabled = false },
-			resource: "registry table",
-			wantCall: "UpdateContinuousBackups",
-		},
-		"deletion protection removed": {
-			drift:    func(f *fakeAWS) { f.table.DeletionProtectionEnabled = aws.Bool(false) },
-			resource: "registry table",
-			wantCall: "UpdateTable",
-		},
-		"index dropped": {
-			drift:    func(f *fakeAWS) { f.table.GlobalSecondaryIndexes = nil },
-			resource: "registry table",
-			wantCall: "UpdateTable",
 		},
 		"handler code changed": {
 			drift:    func(f *fakeAWS) { f.function.CodeSha256 = aws.String("stale") },
@@ -245,28 +230,14 @@ func TestConverge_ReportsDistinctResourceNames(t *testing.T) {
 	}
 }
 
-func TestConverge_RecreatesMissingTable(t *testing.T) {
-	f := provisioned(t)
-	f.table = nil
-	f.pitrEnabled = false
-
-	report := converge(t, f, false)
-	if !hasAction(report, "registry table", ActionCreate) {
-		t.Fatalf("missing table was not planned for creation: %v", report.Actions)
-	}
-	if !f.called("CreateTable") {
-		t.Error("CreateTable was never called")
-	}
-}
-
 func TestConverge_StopsAtFirstFailure(t *testing.T) {
-	f := &failingDynamo{fakeAWS: newFakeAWS()}
+	f := &failingLogs{fakeAWS: newFakeAWS()}
 
 	_, err := Converge(context.Background(), f.clients(), testSpec(), false)
 	if err == nil {
 		t.Fatal("expected an error")
 	}
-	if !strings.Contains(err.Error(), "registry table") {
+	if !strings.Contains(err.Error(), "log groups") {
 		t.Errorf("error %q does not name the failing step", err)
 	}
 	// Later steps must not have run.
@@ -275,18 +246,20 @@ func TestConverge_StopsAtFirstFailure(t *testing.T) {
 	}
 }
 
-// failingDynamo makes table creation fail while leaving every other service
-// working, to prove the run stops rather than pressing on.
-type failingDynamo struct{ *fakeAWS }
+// failingLogs makes creating the log group fail while leaving every other
+// service working, to prove the run stops rather than pressing on. Log groups
+// is the first step in the converge order, so this exercises the
+// stop-at-first-failure path.
+type failingLogs struct{ *fakeAWS }
 
-func (f *failingDynamo) CreateTable(_ context.Context, _ *dynamodb.CreateTableInput, _ ...func(*dynamodb.Options)) (*dynamodb.CreateTableOutput, error) {
-	f.record("CreateTable")
+func (f *failingLogs) CreateLogGroup(_ context.Context, _ *cloudwatchlogs.CreateLogGroupInput, _ ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.CreateLogGroupOutput, error) {
+	f.record("CreateLogGroup")
 	return nil, errors.New("insufficient permissions")
 }
 
-func (f *failingDynamo) clients() *Clients {
+func (f *failingLogs) clients() *Clients {
 	c := f.fakeAWS.clients()
-	c.dynamo = f
+	c.logs = f
 	return c
 }
 

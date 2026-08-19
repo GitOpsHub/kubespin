@@ -45,6 +45,20 @@ var DefaultAddon = core.AddonRef{
 	Repository: "https://argoproj.github.io/argo-helm",
 	Version:    "7.7.11",
 	Namespace:  installNamespace,
+	Values:     ServerLoadBalancerValues,
+}
+
+// ServerLoadBalancerValues overlays the argo-cd chart's default server
+// Service (ClusterIP) with a cloud LoadBalancer, so the Argo CD UI/API gets a
+// reachable external address without a kubectl port-forward. Shared between
+// DefaultAddon and every tier's tracked argocd catalog entry so they don't
+// drift.
+var ServerLoadBalancerValues = map[string]any{
+	"server": map[string]any{
+		"service": map[string]any{
+			"type": "LoadBalancer",
+		},
+	},
 }
 
 // Installer installs or upgrades Argo CD itself into a cluster — the one

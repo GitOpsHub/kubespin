@@ -231,3 +231,74 @@ func TestNetworkProvisioner_AllowEgress_RequiresNetwork(t *testing.T) {
 		t.Fatal("expected an error opening egress on an absent cluster")
 	}
 }
+
+func TestDeleteNetwork_DeletesEverythingEnsureNetworkCreated(t *testing.T) {
+	f := newFakeGCP()
+	spec := testSpec()
+	spec.Subnets = nil
+	p := NewNetworkProvisioner(f.clients())
+
+	if _, err := p.EnsureNetwork(t.Context(), spec); err != nil {
+		t.Fatalf("EnsureNetwork: %v", err)
+	}
+	networkName := "kubespin-" + spec.ID.String()
+	if _, ok := f.networks[networkName]; !ok {
+		t.Fatal("EnsureNetwork created no network; nothing for DeleteNetwork to prove")
+	}
+	// A Cloud Router/NAT is only created when PublicNodes is unset — confirm
+	// DeleteNetwork also reverses it in the default (private-nodes) case.
+	if len(f.routers) == 0 {
+		t.Fatal("EnsureNetwork created no router")
+	}
+
+	if err := p.DeleteNetwork(t.Context(), spec); err != nil {
+		t.Fatalf("DeleteNetwork: %v", err)
+	}
+
+	if _, ok := f.networks[networkName]; ok {
+		t.Error("network left behind")
+	}
+	if len(f.subnetworks) != 1 { // the fixture "us-central1/default" entry stays
+		t.Errorf("%d subnetwork(s) left behind beyond the fixture", len(f.subnetworks)-1)
+	}
+	if len(f.routers) != 0 {
+		t.Errorf("%d router(s) left behind", len(f.routers))
+	}
+}
+
+// An operator-supplied --subnets network was never created by kubespin, so
+// DeleteNetwork must never touch it — this is what protects it, since delete
+// may not have --subnets re-supplied the way apply did.
+func TestDeleteNetwork_NoOpWhenNetworkWasNeverCreated(t *testing.T) {
+	f := newFakeGCP()
+	spec := testSpec() // carries operator-supplied Subnets
+
+	if err := NewNetworkProvisioner(f.clients()).DeleteNetwork(t.Context(), spec); err != nil {
+		t.Fatalf("DeleteNetwork: %v", err)
+	}
+	f.assertNoMutations(t)
+}
+
+// GKE cleans up its own auto-created firewall rules asynchronously after
+// DeleteCluster's operation reports done; DeleteNetwork must ride that race
+// out rather than failing the whole teardown on it.
+func TestDeleteNetwork_RetriesResourceInUseOnDeleteNetwork(t *testing.T) {
+	f := newFakeGCP()
+	spec := testSpec()
+	spec.Subnets = nil
+	p := NewNetworkProvisioner(f.clients())
+	p.retryInterval = 0
+
+	if _, err := p.EnsureNetwork(t.Context(), spec); err != nil {
+		t.Fatalf("EnsureNetwork: %v", err)
+	}
+	f.deleteNetworkInUseErrors = 2
+
+	if err := p.DeleteNetwork(t.Context(), spec); err != nil {
+		t.Fatalf("DeleteNetwork: %v", err)
+	}
+	networkName := "kubespin-" + spec.ID.String()
+	if _, ok := f.networks[networkName]; ok {
+		t.Error("network still present after DeleteNetwork retried past resourceInUseByAnotherResource")
+	}
+}

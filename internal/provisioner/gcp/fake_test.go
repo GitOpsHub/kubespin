@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"cloud.google.com/go/container/apiv1/containerpb"
@@ -25,13 +26,23 @@ type fakeGCP struct {
 
 	cluster      *containerpb.Cluster
 	createParent string // the Parent passed to the last CreateCluster call
-	nodePools    map[string]*containerpb.NodePool
-	svcAccts     map[string]*iam.ServiceAccount // resource -> account
-	policies     map[string]*iam.Policy         // resource -> policy
-	firewalls    map[string]*compute.Firewall
-	networks     map[string]*compute.Network    // name -> network
-	subnetworks  map[string]*compute.Subnetwork // "region/name" -> subnetwork
-	routers      map[string]*compute.Router     // "region/name" -> router
+	// clusterLocation is derived from createParent ("projects/x/locations/Y")
+	// so ListClusters can report where the fake cluster "actually" lives,
+	// modeling a zonal cluster GetCluster at the region-derived path would
+	// 404 against.
+	clusterLocation string
+	nodePools       map[string]*containerpb.NodePool
+	svcAccts        map[string]*iam.ServiceAccount // resource -> account
+	policies        map[string]*iam.Policy         // resource -> policy
+	firewalls       map[string]*compute.Firewall
+	networks        map[string]*compute.Network    // name -> network
+	subnetworks     map[string]*compute.Subnetwork // "region/name" -> subnetwork
+	routers         map[string]*compute.Router     // "region/name" -> router
+
+	// deleteNetworkInUseErrors makes the next N DeleteNetwork calls fail with
+	// resourceInUseByAnotherResource before succeeding, modeling a GKE-managed
+	// firewall rule the cluster's own deletion has not cleaned up yet.
+	deleteNetworkInUseErrors int
 }
 
 func newFakeGCP() *fakeGCP {
@@ -60,6 +71,7 @@ var mutatingCalls = []string{
 	"CreateNodePool", "SetNodePoolSize", "DeleteNodePool",
 	"CreateServiceAccount", "DeleteServiceAccount", "SetIamPolicy",
 	"InsertFirewall", "InsertNetwork", "InsertSubnetwork", "InsertRouter",
+	"DeleteFirewall", "DeleteNetwork", "DeleteSubnetwork", "DeleteRouter",
 }
 
 func (f *fakeGCP) assertNoMutations(t *testing.T) {
@@ -93,12 +105,29 @@ func (f *fakeGCP) GetCluster(_ context.Context, req *containerpb.GetClusterReque
 	if f.cluster == nil || f.cluster.Name != clusterNameFromPath(req.Name) {
 		return nil, status.Error(codes.NotFound, "cluster not found")
 	}
+	// Models a zonal cluster 404ing at the region-derived path a caller with
+	// no Zone in its spec would try first — locationFromPath(req.Name) is
+	// empty when the request's own location string is "-" or otherwise
+	// unset in a test, in which case there is nothing to mismatch against.
+	if f.clusterLocation != "" && locationFromPath(req.Name) != f.clusterLocation {
+		return nil, status.Error(codes.NotFound, "cluster not found at this location")
+	}
 	return f.cluster, nil
+}
+
+func (f *fakeGCP) ListClusters(_ context.Context, _ *containerpb.ListClustersRequest, _ ...gax.CallOption) (*containerpb.ListClustersResponse, error) {
+	f.record("ListClusters")
+	if f.cluster == nil {
+		return &containerpb.ListClustersResponse{}, nil
+	}
+	listed := &containerpb.Cluster{Name: f.cluster.Name, Location: f.clusterLocation}
+	return &containerpb.ListClustersResponse{Clusters: []*containerpb.Cluster{listed}}, nil
 }
 
 func (f *fakeGCP) CreateCluster(_ context.Context, req *containerpb.CreateClusterRequest, _ ...gax.CallOption) (*containerpb.Operation, error) {
 	f.record("CreateCluster")
 	f.createParent = req.Parent
+	f.clusterLocation = locationFromParent(req.Parent)
 	if f.cluster != nil {
 		return nil, status.Error(codes.AlreadyExists, "cluster exists")
 	}
@@ -304,6 +333,34 @@ func (f *fakeGCP) InsertRouter(_ context.Context, _, region string, router *comp
 	return nil
 }
 
+func (f *fakeGCP) DeleteFirewall(_ context.Context, _, name string) error {
+	f.record("DeleteFirewall")
+	delete(f.firewalls, name)
+	return nil
+}
+
+func (f *fakeGCP) DeleteNetwork(_ context.Context, _, name string) error {
+	f.record("DeleteNetwork")
+	if f.deleteNetworkInUseErrors > 0 {
+		f.deleteNetworkInUseErrors--
+		return &googleapi.Error{Code: 400, Errors: []googleapi.ErrorItem{{Reason: "resourceInUseByAnotherResource"}}}
+	}
+	delete(f.networks, name)
+	return nil
+}
+
+func (f *fakeGCP) DeleteSubnetwork(_ context.Context, _, region, name string) error {
+	f.record("DeleteSubnetwork")
+	delete(f.subnetworks, region+"/"+name)
+	return nil
+}
+
+func (f *fakeGCP) DeleteRouter(_ context.Context, _, region, name string) error {
+	f.record("DeleteRouter")
+	delete(f.routers, region+"/"+name)
+	return nil
+}
+
 // --- helpers ---
 
 const testProject = "kubespin-test"
@@ -316,6 +373,25 @@ func clusterNameFromPath(path string) string {
 		}
 	}
 	return path
+}
+
+// locationFromParent extracts Y from "projects/x/locations/Y".
+func locationFromParent(parent string) string {
+	const marker = "/locations/"
+	i := strings.Index(parent, marker)
+	if i < 0 {
+		return ""
+	}
+	return parent[i+len(marker):]
+}
+
+// locationFromPath extracts Y from "projects/x/locations/Y/clusters/Z".
+func locationFromPath(path string) string {
+	loc := locationFromParent(path)
+	if i := strings.Index(loc, "/"); i >= 0 {
+		return loc[:i]
+	}
+	return loc
 }
 
 func testSpec() core.ClusterSpec {
