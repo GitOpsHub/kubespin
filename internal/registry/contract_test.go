@@ -312,6 +312,69 @@ func runContract(t *testing.T, newRegistry factory) {
 		}
 	})
 
+	t.Run("RecordArgoCDAccess round-trips and upserts", func(t *testing.T) {
+		clock := newFakeClock()
+		r := newRegistry(t, clock)
+		rec := seed(t, r, clock, "team-alpha")
+
+		access := ArgoCDAccess{
+			Provider:    core.ProviderAWS,
+			Region:      "us-east-1",
+			KubeContext: "kubespin-team-alpha",
+			Endpoint:    "203.0.113.10",
+			Username:    "admin",
+			Password:    "s3cr3t",
+		}
+		if err := r.RecordArgoCDAccess(context.Background(), rec.ClusterID, access); err != nil {
+			t.Fatalf("RecordArgoCDAccess: %v", err)
+		}
+
+		got, err := r.GetArgoCDAccess(context.Background(), rec.ClusterID)
+		if err != nil {
+			t.Fatalf("GetArgoCDAccess: %v", err)
+		}
+		if got != access {
+			t.Errorf("GetArgoCDAccess = %+v, want %+v", got, access)
+		}
+
+		// A second call upserts rather than duplicating or erroring.
+		access.Endpoint = "203.0.113.20"
+		if err := r.RecordArgoCDAccess(context.Background(), rec.ClusterID, access); err != nil {
+			t.Fatalf("RecordArgoCDAccess (update): %v", err)
+		}
+		got, err = r.GetArgoCDAccess(context.Background(), rec.ClusterID)
+		if err != nil {
+			t.Fatalf("GetArgoCDAccess (after update): %v", err)
+		}
+		if got.Endpoint != access.Endpoint {
+			t.Errorf("Endpoint = %q, want %q", got.Endpoint, access.Endpoint)
+		}
+	})
+
+	t.Run("RecordArgoCDAccess on a missing cluster", func(t *testing.T) {
+		clock := newFakeClock()
+		r := newRegistry(t, clock)
+
+		err := r.RecordArgoCDAccess(context.Background(), "absent-cluster", ArgoCDAccess{
+			Provider: core.ProviderAWS, Region: "us-east-1", KubeContext: "x",
+			Endpoint: "1.2.3.4", Username: "admin", Password: "x",
+		})
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("error = %v, want one wrapping ErrNotFound", err)
+		}
+	})
+
+	t.Run("GetArgoCDAccess when nothing has been captured", func(t *testing.T) {
+		clock := newFakeClock()
+		r := newRegistry(t, clock)
+		rec := seed(t, r, clock, "team-alpha")
+
+		_, err := r.GetArgoCDAccess(context.Background(), rec.ClusterID)
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("error = %v, want one wrapping ErrNotFound", err)
+		}
+	})
+
 	t.Run("RecordFindings persists drift without bumping version", func(t *testing.T) {
 		clock := newFakeClock()
 		r := newRegistry(t, clock)

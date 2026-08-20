@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
 	"github.com/GitOpsHub/kubespin/internal/core"
@@ -38,6 +39,24 @@ CREATE TABLE IF NOT EXISTS fleet_registry (
 	lease_expires_at  TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS fleet_registry_provider_phase_idx ON fleet_registry (provider, phase);
+`
+
+// argoCDDetailsDDL creates the cluster_argocd_details table, a child of
+// fleet_registry holding one row per cluster's Argo CD connection details.
+// provider/region are denormalized from fleet_registry so ad hoc queries
+// don't need a join.
+const argoCDDetailsDDL = `
+CREATE TABLE IF NOT EXISTS cluster_argocd_details (
+	cluster_id       TEXT PRIMARY KEY REFERENCES fleet_registry(cluster_id) ON DELETE CASCADE,
+	provider         TEXT NOT NULL,
+	region           TEXT NOT NULL,
+	kube_context     TEXT NOT NULL,
+	argocd_endpoint  TEXT NOT NULL,
+	argocd_username  TEXT NOT NULL,
+	argocd_password  TEXT NOT NULL,
+	captured_at      TIMESTAMPTZ NOT NULL,
+	updated_at       TIMESTAMPTZ NOT NULL
+);
 `
 
 // selectColumns is shared by every read (Get, List, and UpdatePhase's
@@ -81,6 +100,9 @@ func NewPostgres(ctx context.Context, dsn string, opts ...Option) (*Postgres, er
 	}
 	if _, err := db.ExecContext(ctx, schemaDDL); err != nil {
 		return nil, fmt.Errorf("migrating fleet registry schema: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, argoCDDetailsDDL); err != nil {
+		return nil, fmt.Errorf("migrating cluster_argocd_details schema: %w", err)
 	}
 
 	p := &Postgres{db: db, now: time.Now, logger: slog.Default()}
@@ -225,6 +247,72 @@ func (p *Postgres) RecordFindings(ctx context.Context, id core.ClusterID, findin
 	}
 	p.log().Debug("recorded audit findings", "cluster", id, "findings", len(findings), "at", at)
 	return nil
+}
+
+// RecordArgoCDAccess upserts a cluster's Argo CD connection details.
+// captured_at is set only by the INSERT branch, so it never moves once
+// written; updated_at bumps on every call.
+func (p *Postgres) RecordArgoCDAccess(ctx context.Context, id core.ClusterID, access ArgoCDAccess) error {
+	now := p.now().UTC()
+	res, err := p.db.ExecContext(ctx, `
+		INSERT INTO cluster_argocd_details (
+			cluster_id, provider, region, kube_context, argocd_endpoint,
+			argocd_username, argocd_password, captured_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+		ON CONFLICT (cluster_id) DO UPDATE SET
+			provider = EXCLUDED.provider,
+			region = EXCLUDED.region,
+			kube_context = EXCLUDED.kube_context,
+			argocd_endpoint = EXCLUDED.argocd_endpoint,
+			argocd_username = EXCLUDED.argocd_username,
+			argocd_password = EXCLUDED.argocd_password,
+			updated_at = EXCLUDED.updated_at`,
+		id.String(), access.Provider.String(), access.Region, access.KubeContext,
+		access.Endpoint, access.Username, access.Password, now)
+	if err != nil {
+		if isForeignKeyViolation(err) {
+			return fmt.Errorf("%w: %s", ErrNotFound, id)
+		}
+		return fmt.Errorf("recording argocd access for %s: %w", id, err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+	p.log().Debug("recorded argocd access", "cluster", id, "endpoint", access.Endpoint)
+	return nil
+}
+
+// GetArgoCDAccess returns a cluster's recorded Argo CD access details.
+func (p *Postgres) GetArgoCDAccess(ctx context.Context, id core.ClusterID) (ArgoCDAccess, error) {
+	var (
+		provider, region, kubeContext, endpoint, username, password string
+	)
+	row := p.db.QueryRowContext(ctx, `
+		SELECT provider, region, kube_context, argocd_endpoint, argocd_username, argocd_password
+		FROM cluster_argocd_details WHERE cluster_id = $1`, id.String())
+	err := row.Scan(&provider, &region, &kubeContext, &endpoint, &username, &password)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ArgoCDAccess{}, fmt.Errorf("%w: %s", ErrNotFound, id)
+		}
+		return ArgoCDAccess{}, fmt.Errorf("getting argocd access for %s: %w", id, err)
+	}
+	return ArgoCDAccess{
+		Provider:    core.Provider(provider),
+		Region:      region,
+		KubeContext: kubeContext,
+		Endpoint:    endpoint,
+		Username:    username,
+		Password:    password,
+	}, nil
+}
+
+// isForeignKeyViolation reports whether err is a Postgres foreign-key
+// constraint violation (SQLSTATE 23503) — the shape RecordArgoCDAccess gets
+// when the referenced fleet_registry row doesn't exist.
+func isForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
 // execNoVersionCheck runs an update conditioned only on the row existing —

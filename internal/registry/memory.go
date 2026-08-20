@@ -18,9 +18,10 @@ import (
 // implementation, and both are exercised by the same contract test suite. A
 // fake with weaker semantics would let real bugs pass.
 type Memory struct {
-	mu      sync.Mutex
-	records map[core.ClusterID]Record
-	now     func() time.Time
+	mu           sync.Mutex
+	records      map[core.ClusterID]Record
+	argocdAccess map[core.ClusterID]ArgoCDAccess
+	now          func() time.Time
 }
 
 // MemoryOption configures a Memory registry.
@@ -34,7 +35,11 @@ func WithClock(now func() time.Time) MemoryOption {
 
 // NewMemory returns an empty in-memory registry.
 func NewMemory(opts ...MemoryOption) *Memory {
-	m := &Memory{records: map[core.ClusterID]Record{}, now: time.Now}
+	m := &Memory{
+		records:      map[core.ClusterID]Record{},
+		argocdAccess: map[core.ClusterID]ArgoCDAccess{},
+		now:          time.Now,
+	}
 	for _, opt := range opts {
 		opt(m)
 	}
@@ -227,6 +232,30 @@ func (m *Memory) RenewLease(_ context.Context, id core.ClusterID, holder string,
 	m.records[id] = stored
 
 	return lease, nil
+}
+
+// RecordArgoCDAccess upserts a cluster's Argo CD connection details.
+func (m *Memory) RecordArgoCDAccess(_ context.Context, id core.ClusterID, access ArgoCDAccess) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.records[id]; !ok {
+		return fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+	m.argocdAccess[id] = access
+	return nil
+}
+
+// GetArgoCDAccess returns a cluster's recorded Argo CD access details.
+func (m *Memory) GetArgoCDAccess(_ context.Context, id core.ClusterID) (ArgoCDAccess, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	access, ok := m.argocdAccess[id]
+	if !ok {
+		return ArgoCDAccess{}, fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+	return access, nil
 }
 
 // ReleaseLease drops a lease the caller holds.

@@ -33,7 +33,7 @@ func TestPostgresRegistry(t *testing.T) {
 		// Every contract subtest expects a fresh, empty registry — truncate up
 		// front rather than relying on the previous factory call's cleanup, so a
 		// failed prior run can't leave stale rows behind.
-		if _, err := p.db.ExecContext(context.Background(), "TRUNCATE TABLE fleet_registry"); err != nil {
+		if _, err := p.db.ExecContext(context.Background(), "TRUNCATE TABLE cluster_argocd_details, fleet_registry"); err != nil {
 			t.Fatalf("truncating fleet_registry: %v", err)
 		}
 		t.Cleanup(func() {

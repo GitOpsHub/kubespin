@@ -10,6 +10,7 @@
 | [`Record`](#record) | struct | registry.go | One cluster's row in the registry — the durable half of a cluster's state. |
 | [`Filter`](#filter) | struct | registry.go | Narrows a `List` call; a zero `Filter` matches every cluster. |
 | [`Registry`](#registry-interface) | interface | registry.go | The durable store of fleet state — the contract both `Postgres` and `Memory` implement identically. |
+| [`ArgoCDAccess`](#argocdaccess) | struct | registry.go | A cluster's Argo CD connection details — endpoint, admin username/password, kube context. |
 | [`NewRecord`](#record) | func | registry.go | Builds a `PhasePending` record from a validated `ClusterSpec`, `Version` seeded at 1. |
 | [Sentinel errors](#sentinel-errors) | vars | registry.go | `ErrNotFound`, `ErrAlreadyExists`, `ErrVersionConflict`, `ErrLeaseHeld`, `ErrLeaseLost`. |
 | [`Postgres`](#postgres) | struct | postgres.go | Production `Registry`, backed by a Postgres `fleet_registry` table it creates and migrates itself. |
@@ -87,6 +88,25 @@
 - **Functions:**
     - `NewRecord(spec core.ClusterSpec, now time.Time) Record` — builds a `PhasePending` record from a validated `ClusterSpec`, `Version` seeded at 1.
 
+### `ArgoCDAccess`
+
+??? abstract "Signature"
+
+    ```go
+    type ArgoCDAccess struct {
+        Provider    core.Provider
+        Region      string
+        KubeContext string
+        Endpoint    string // argocd-server LB external IP or hostname, no scheme
+        Username    string
+        Password    string // plaintext
+    }
+    ```
+
+- **Purpose:** a cluster's Argo CD connection details, captured by `kubespin apply` (`internal/cli/apply.go`'s `captureAndRecordArgoCDAccess`) once the cluster reaches `PhaseReady` and the `argocd-server` LoadBalancer Service has an assigned endpoint. It is observational metadata, like `Record.OIDCIssuer`, not part of the phase state machine — capture runs on every apply that reaches ready, including a no-op reconcile against an already-ready cluster, so a failed capture simply gets another chance on the next run.
+- **Invariant:** `Password` is stored in **plaintext**, matching the trust model already extended to `KUBESPIN_REGISTRY_DSN` (an operator-supplied, non-flag secret). There is no separate secrets-manager integration for it.
+- **Storage:** persisted in a Postgres child table, `cluster_argocd_details`, one row per cluster (upserted, not appended), foreign-keyed to `fleet_registry(cluster_id)` with `ON DELETE CASCADE` so a decommissioned cluster's row disappears with it. `provider`/`region` are denormalized from `fleet_registry` so ad hoc `psql` queries don't need a join.
+
 ### `Filter`
 
 ??? abstract "Signature"
@@ -117,13 +137,16 @@
         AcquireLease(ctx context.Context, id core.ClusterID, holder string, ttl time.Duration) (Lease, error)
         RenewLease(ctx context.Context, id core.ClusterID, holder string, ttl time.Duration) (Lease, error)
         ReleaseLease(ctx context.Context, id core.ClusterID, holder string) error
+        RecordArgoCDAccess(ctx context.Context, id core.ClusterID, access ArgoCDAccess) error
+        GetArgoCDAccess(ctx context.Context, id core.ClusterID) (ArgoCDAccess, error)
     }
     ```
 
 - **Purpose:** the durable store of fleet state — the contract both `Postgres` and `Memory` implement identically.
 - **Invariants implementations must enforce** (callers rely on these rather than re-checking):
     - `UpdatePhase` rejects an illegal transition with `ErrInvalidTransition` (checked against `core.ValidateTransition`), and rejects a write against a stale `Phase`/`Version` pair with `ErrVersionConflict`.
-    - `Touch`, `RecordOIDCIssuer`, and `RecordFindings` carry **no** version check — heartbeats, identity-issuer recording, and audit findings are metadata writes that must not contend with an in-flight phase transition.
+    - `Touch`, `RecordOIDCIssuer`, `RecordFindings`, and `RecordArgoCDAccess` carry **no** version check — heartbeats, identity-issuer recording, audit findings, and Argo CD access details are metadata writes that must not contend with an in-flight phase transition.
+    - `RecordArgoCDAccess` upserts (repeat calls replace the previous values); `GetArgoCDAccess` returns `ErrNotFound` if nothing has been captured yet for the cluster.
     - `AcquireLease` fails with `ErrLeaseHeld` if another holder's lease is still valid; an expired lease is taken over without ceremony.
     - `RenewLease` fails with `ErrLeaseLost` if the caller's lease already expired — silently re-acquiring here would defeat the lock, since another holder may already own it.
     - `ReleaseLease` fails with `ErrLeaseLost` if the lease is held by someone else.
@@ -177,6 +200,27 @@
     - **Behavior:** run by `NewPostgres` on every connect, via `CREATE TABLE IF NOT EXISTS`/`CREATE INDEX IF NOT EXISTS`, so a fresh database is ready without a separate migration step and a run against an already-provisioned one is a no-op. It only ever adds — there is no `DROP`/`ALTER` anywhere in this package.
     - **Invariant:** `cluster_id` alone is the primary key, deliberately — this is what makes `AcquireLease` (a conditional `UPDATE` on that same row) actually serialize a status report against a concurrent phase transition; a composite key would let them proceed independently and the lock would protect nothing.
     - `selectColumns` is a single shared column list used by every read (`Get`, `List`, and `UpdatePhase`'s `RETURNING`), so a column can't drift between them.
+
+??? note "`argoCDDetailsDDL`"
+
+    ```go
+    const argoCDDetailsDDL = `
+    CREATE TABLE IF NOT EXISTS cluster_argocd_details (
+        cluster_id       TEXT PRIMARY KEY REFERENCES fleet_registry(cluster_id) ON DELETE CASCADE,
+        provider         TEXT NOT NULL,
+        region           TEXT NOT NULL,
+        kube_context     TEXT NOT NULL,
+        argocd_endpoint  TEXT NOT NULL,
+        argocd_username  TEXT NOT NULL,
+        argocd_password  TEXT NOT NULL,
+        captured_at      TIMESTAMPTZ NOT NULL,
+        updated_at       TIMESTAMPTZ NOT NULL
+    );
+    `
+    ```
+
+    - **Behavior:** a second migration, run by `NewPostgres` right after `schemaDDL`, following the same self-migration-on-connect convention. One row per cluster (upsert, not append). `captured_at` is set only by the `INSERT` branch of `RecordArgoCDAccess`'s `ON CONFLICT ... DO UPDATE` and never moves on a later upsert; `updated_at` bumps on every call.
+    - **Invariant:** every column is `NOT NULL` — a capture attempt that cannot obtain all six fields (endpoint, username, password, kube context, provider, region) writes no row at all, so there is no partial/incomplete state to reason about.
 
 ### `Postgres`
 
@@ -251,6 +295,16 @@
 
     - Same no-version-check pattern (via `execNoVersionCheck`), sets `findings` and `findings_at` together, replacing whatever was recorded before.
 
+??? note "`RecordArgoCDAccess`"
+
+    - `INSERT INTO cluster_argocd_details (...) VALUES (...) ON CONFLICT (cluster_id) DO UPDATE SET ...` — every column except `captured_at` is refreshed on conflict; `captured_at` is only ever set by the `INSERT` branch, so it stays fixed across repeat calls while `updated_at` advances.
+    - A foreign-key violation (the referenced `fleet_registry` row doesn't exist — checked via `errors.As` against `*pgconn.PgError` with SQLSTATE `23503`) maps to `ErrNotFound`, the same as every other write against a nonexistent cluster.
+
+??? note "`GetArgoCDAccess`"
+
+    - `SELECT provider, region, kube_context, argocd_endpoint, argocd_username, argocd_password FROM cluster_argocd_details WHERE cluster_id = $1`.
+    - Returns `ErrNotFound` on `sql.ErrNoRows` — covers both "no such cluster" and "cluster exists but nothing has been captured yet", since the table only ever has entries once `RecordArgoCDAccess` has succeeded at least once.
+
 ??? note "`List`"
 
     - One query, always: `SELECT <selectColumns> FROM fleet_registry WHERE ($1 = '' OR provider = $1) AND ($2 = '' OR phase = $2) ORDER BY cluster_id`, served by the `(provider, phase)` index whenever `Provider` is set.
@@ -312,9 +366,10 @@
 
     ```go
     type Memory struct {
-        mu      sync.Mutex
-        records map[core.ClusterID]Record
-        now     func() time.Time
+        mu           sync.Mutex
+        records      map[core.ClusterID]Record
+        argocdAccess map[core.ClusterID]ArgoCDAccess
+        now          func() time.Time
     }
     ```
 
@@ -370,9 +425,9 @@ Mirrors `Postgres` exactly, implemented against the map instead of conditional `
     - Then compares both `stored.Version != rec.Version` and `stored.Phase != rec.Phase` before mutating — `ErrVersionConflict` otherwise.
     - On success bumps `Version`, sets `Phase`, and stamps `UpdatedAt` from the injected clock.
 
-??? note "`Touch` / `RecordOIDCIssuer` / `RecordFindings`"
+??? note "`Touch` / `RecordOIDCIssuer` / `RecordFindings` / `RecordArgoCDAccess` / `GetArgoCDAccess`"
 
-    - Mutate directly with no version bump, matching the "not a phase transition" reasoning in `postgres.go`.
+    - The four writes mutate directly with no version bump, matching the "not a phase transition" reasoning in `postgres.go`. `RecordArgoCDAccess` requires the cluster to exist in `records` first (`ErrNotFound` otherwise, mirroring `Postgres`'s foreign-key check) and stores into the separate `argocdAccess` map, upserting by key. `GetArgoCDAccess` returns `ErrNotFound` if that map has no entry for the cluster.
 
 ??? note "`List`"
 

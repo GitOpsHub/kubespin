@@ -9,8 +9,12 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/GitOpsHub/kubespin/internal/argocd"
 	"github.com/GitOpsHub/kubespin/internal/catalog"
@@ -190,6 +194,10 @@ func runApply(cmd *cobra.Command, _ []string) error {
 		kubeContext = updateLocalKubeconfig(ctx, cmd, logger, spec)
 	}
 
+	if rec.Phase == core.PhaseReady {
+		captureAndRecordArgoCDAccess(ctx, logger, reg, cloud, spec, kubeContext)
+	}
+
 	printAccessSummary(cmd, spec, kubeContext)
 
 	return nil
@@ -218,6 +226,124 @@ func updateLocalKubeconfig(ctx context.Context, cmd *cobra.Command, logger *slog
 	}
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "updated kubeconfig context for %s\n", spec.ID)
 	return contextName
+}
+
+const (
+	argoCDAccessWaitTimeout  = 2 * time.Minute
+	argoCDAccessPollInterval = 5 * time.Second
+
+	argoCDAdminSecretName = "argocd-initial-admin-secret" // #nosec G101 -- Secret name, not a credential
+	argoCDAdminUsername   = "admin"
+)
+
+// captureAndRecordArgoCDAccess captures the cluster's Argo CD LoadBalancer
+// endpoint and admin credentials and persists them to the Fleet Registry's
+// cluster_argocd_details table. It runs on every apply that reaches
+// PhaseReady — including a no-op reconcile against an already-ready cluster
+// — so the row stays current and a failed capture gets another chance next
+// run.
+//
+// Best-effort: the cluster is already fully provisioned by the time this
+// runs, so any failure here (REST config, LoadBalancer never assigned, the
+// admin secret missing) is logged as a warning and does not fail the apply.
+func captureAndRecordArgoCDAccess(
+	ctx context.Context, logger *slog.Logger, reg registry.Registry,
+	cloud orchestrator.Cloud, spec core.ClusterSpec, kubeContext string,
+) {
+	restConfigProv, ok := cloud.Cluster.(provisioner.RESTConfigProvisioner)
+	if !ok {
+		logger.Warn("skipping argocd access capture; provider cannot build a cluster REST config",
+			"cluster", spec.ID, "provider", cloud.Cluster.Provider())
+		return
+	}
+	restConfig, err := restConfigProv.RESTConfig(ctx, spec)
+	if err != nil {
+		logger.Warn("skipping argocd access capture; could not build cluster REST config",
+			"cluster", spec.ID, "error", err)
+		return
+	}
+
+	clientset, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		logger.Warn("skipping argocd access capture; could not build Kubernetes client",
+			"cluster", spec.ID, "error", err)
+		return
+	}
+
+	endpoint, err := waitForArgoCDEndpoint(ctx, clientset)
+	if err != nil {
+		logger.Warn("skipping argocd access capture; argocd-server LoadBalancer endpoint not ready",
+			"cluster", spec.ID, "error", err)
+		return
+	}
+
+	secret, err := clientset.CoreV1().Secrets(argocd.Namespace).
+		Get(ctx, argoCDAdminSecretName, metav1.GetOptions{})
+	if err != nil {
+		logger.Warn("skipping argocd access capture; could not read admin secret",
+			"cluster", spec.ID, "error", err)
+		return
+	}
+	password := string(secret.Data["password"])
+	if password == "" {
+		logger.Warn("skipping argocd access capture; admin secret has no password", "cluster", spec.ID)
+		return
+	}
+
+	access := registry.ArgoCDAccess{
+		Provider:    spec.Provider,
+		Region:      spec.Region,
+		KubeContext: kubeContext,
+		Endpoint:    endpoint,
+		Username:    argoCDAdminUsername,
+		Password:    password,
+	}
+	if err := reg.RecordArgoCDAccess(ctx, spec.ID, access); err != nil {
+		logger.Warn("could not record argocd access details", "cluster", spec.ID, "error", err)
+		return
+	}
+	logger.Info("recorded argocd access details", "cluster", spec.ID, "endpoint", endpoint)
+}
+
+// waitForArgoCDEndpoint polls the argocd-server Service for a LoadBalancer
+// ingress IP or hostname, bounded to argoCDAccessWaitTimeout — a fresh
+// LoadBalancer can take a few minutes to provision, so this does not treat
+// the first empty read as failure.
+func waitForArgoCDEndpoint(ctx context.Context, clientset kubernetes.Interface) (string, error) {
+	deadline := time.Now().Add(argoCDAccessWaitTimeout)
+	for {
+		svc, err := clientset.CoreV1().Services(argocd.Namespace).
+			Get(ctx, "argocd-server", metav1.GetOptions{})
+		if err != nil {
+			return "", fmt.Errorf("getting argocd-server service: %w", err)
+		}
+		if endpoint := loadBalancerEndpoint(svc); endpoint != "" {
+			return endpoint, nil
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("argocd-server LoadBalancer endpoint not assigned within %s", argoCDAccessWaitTimeout)
+		}
+
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(argoCDAccessPollInterval):
+		}
+	}
+}
+
+// loadBalancerEndpoint returns svc's first LoadBalancer ingress IP or
+// hostname, or "" if none is assigned yet.
+func loadBalancerEndpoint(svc *corev1.Service) string {
+	for _, ingress := range svc.Status.LoadBalancer.Ingress {
+		if ingress.IP != "" {
+			return ingress.IP
+		}
+		if ingress.Hostname != "" {
+			return ingress.Hostname
+		}
+	}
+	return ""
 }
 
 // printAccessSummary prints how to reach the cluster and its local Argo CD

@@ -84,6 +84,14 @@ does not require it to be AWS-hosted. `fleet bootstrap` provisions the AWS-side
 Central Ingestion API only; the operator provisions Postgres separately and
 supplies its connection string via `KUBESPIN_REGISTRY_DSN`.
 
+A second table, `cluster_argocd_details`, holds one upserted row per cluster
+of its Argo CD connection details (LoadBalancer endpoint, admin username,
+plaintext password) — foreign-keyed to `fleet_registry(cluster_id)` with
+`ON DELETE CASCADE` so a decommissioned cluster's row disappears with it.
+`apply` captures into it automatically every time a cluster reaches
+`ready`, via `internal/registry`'s `RecordArgoCDAccess`/`GetArgoCDAccess`
+(see [internal/registry](reference/registry.md)).
+
 ### The phase state machine
 
 Defined in [internal/core/phase.go](https://github.com/GitOpsHub/kubespin/blob/main/internal/core/phase.go). Transitions are

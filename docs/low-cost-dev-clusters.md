@@ -141,3 +141,29 @@ kubespin apply --provider azure --azure-subscription "$AZURE_SUBSCRIPTION_ID" \
 See [Examples](examples.md) for the full flag reference on `apply`, and
 [Examples: quota on low-quota / sandbox GCP projects](examples.md#quota-on-low-quota--sandbox-gcp-projects)
 for why `--disk-size` also matters on a regional (non-`--spot`) GCP cluster.
+
+## `make spot`: all three clouds at once
+
+`make spot` runs this same recipe on AWS, GCP, and Azure in parallel, with
+`--access public --authorized-cidrs` pinned to the caller's own public IP
+(auto-detected) instead of the `--access private` shown above — a bare `make
+spot` has no VPN/bastion reachability into any of the three VPCs/VNets to
+assume, and public-plus-authorized-cidrs is what lets the Argo CD install
+step in each `apply` reach that cluster's API server from this machine.
+
+```bash
+export GITHUB_ORG=GitOpsHub
+export GCP_PROJECT=kubernetes-dev-502710
+export AZURE_SUBSCRIPTION_ID=3df9adbd-ea55-4c92-964c-0252031979de
+make spot
+```
+
+Requires `kubespin login` to have already authenticated all three clouds
+(`kubespin status` to check), `GITHUB_TOKEN`/`KUBESPIN_REGISTRY_DSN` set the
+same as any real `apply`, and the three env vars above. Cluster IDs and
+regions default to `eks-spot-dev`/`us-east-1`, `gke-spot-dev`/`us-central1`,
+and `aks-spot-dev`/`eastus`, each overridable, e.g.:
+
+```bash
+make spot AWS_REGION=us-west-2 AWS_CLUSTER_ID=my-aws-dev
+```

@@ -151,6 +151,19 @@ func NewRecord(spec core.ClusterSpec, now time.Time) Record {
 	}
 }
 
+// ArgoCDAccess is a cluster's Argo CD connection details, captured once the
+// cluster reaches PhaseReady and Argo CD's LoadBalancer endpoint resolves.
+// It is observational metadata like OIDCIssuer, not part of the phase state
+// machine.
+type ArgoCDAccess struct {
+	Provider    core.Provider
+	Region      string
+	KubeContext string
+	Endpoint    string // argocd-server LB external IP or hostname, no scheme
+	Username    string
+	Password    string // plaintext, matching the trust model of KUBESPIN_REGISTRY_DSN
+}
+
 // Filter narrows a List. A zero Filter matches every cluster.
 type Filter struct {
 	// Provider, when set, is served by the ProviderPhaseIndex GSI rather than a
@@ -212,4 +225,14 @@ type Registry interface {
 	// ReleaseLease drops a lease the caller holds. Releasing one held by someone
 	// else returns ErrLeaseLost.
 	ReleaseLease(ctx context.Context, id core.ClusterID, holder string) error
+
+	// RecordArgoCDAccess upserts a cluster's Argo CD connection details. Like
+	// RecordOIDCIssuer it carries no version check — observational metadata,
+	// not a phase transition — and re-recording replaces the previous values.
+	// Returns ErrNotFound if the cluster has no record.
+	RecordArgoCDAccess(ctx context.Context, id core.ClusterID, access ArgoCDAccess) error
+
+	// GetArgoCDAccess returns a cluster's recorded Argo CD access details, or
+	// ErrNotFound if none have been captured.
+	GetArgoCDAccess(ctx context.Context, id core.ClusterID) (ArgoCDAccess, error)
 }
