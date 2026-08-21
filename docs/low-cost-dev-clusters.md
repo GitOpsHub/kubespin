@@ -13,14 +13,13 @@ kubespin apply \
   --region us-east-1 \
   --cluster-id dev-aws \
   --access private \
-  --profile tier-small@1.0.0 \
   --spot \
   --github-org "$GITHUB_ORG"
 ```
 
 No `--instance-type`/`--min-size`/`--max-size`/`--desired-size`/`--disk-size`
 needed — `--spot` picks smaller defaults for all five, sized to still run
-kubespin's `tier-small` addon set (cilium, kube-prometheus-stack,
+kubespin's default (`--size small`) addon set (cilium, kube-prometheus-stack,
 ingress-nginx, kyverno, and the rest) without failing to schedule:
 
 | Cloud | Instance type | min/max/desired | Disk |
@@ -72,7 +71,6 @@ kubespin apply \
   --region us-central1 \
   --cluster-id dev-gcp \
   --access private \
-  --profile tier-small@1.0.0 \
   --spot \
   --github-org "$GITHUB_ORG"
 ```
@@ -88,7 +86,6 @@ kubespin apply \
   --region us-central1 \
   --cluster-id dev-gcp \
   --access private \
-  --profile tier-small@1.0.0 \
   --zone us-central1-a \
   --github-org "$GITHUB_ORG"
 ```
@@ -101,7 +98,6 @@ kubespin apply \
   --region us-central1 \
   --cluster-id dev-gcp \
   --access private \
-  --profile tier-small@1.0.0 \
   --spot --gcp-public-nodes=false \
   --github-org "$GITHUB_ORG"
 ```
@@ -122,19 +118,19 @@ kubespin apply \
 ```bash
 # AWS
 kubespin apply --provider aws --region us-east-1 --cluster-id dev-aws \
-  --access private --profile tier-small@1.0.0 \
+  --access private \
   --spot --github-org "$GITHUB_ORG"
 
 # GCP — also goes zonal + public-nodes automatically, see above
 kubespin apply --provider gcp --gcp-project kubernetes-dev-502710 \
   --region us-central1 --cluster-id dev-gcp \
-  --access private --profile tier-small@1.0.0 \
+  --access private \
   --spot --github-org "$GITHUB_ORG"
 
 # Azure — --spot still sizes the node pool down even though capacity stays on-demand
 kubespin apply --provider azure --azure-subscription "$AZURE_SUBSCRIPTION_ID" \
   --region eastus --cluster-id dev-azure \
-  --access private --profile tier-small@1.0.0 \
+  --access private \
   --spot --github-org "$GITHUB_ORG"
 ```
 

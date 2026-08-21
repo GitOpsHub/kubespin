@@ -328,7 +328,7 @@ func testSpec() core.ClusterSpec {
 		NodePools: []core.NodePool{{
 			Name: "default", InstanceType: "Standard_D4s_v5", MinSize: 1, MaxSize: 5, DesiredSize: 3,
 		}},
-		Profile: core.ProfileRef{Name: "tier-small", Version: "1.0.0"},
+		Size: core.SizeSmall,
 	}
 }
 

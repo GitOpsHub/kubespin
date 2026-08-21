@@ -14,9 +14,9 @@ import (
 // same resolved addon set for a given cluster rather than each reimplementing
 // the resolve-merge-template sequence and risking the two diverging.
 func ResolveForCluster(ctx context.Context, resolver Resolver, spec core.ClusterSpec) (core.Profile, error) {
-	profile, err := resolver.Resolve(ctx, spec.Profile)
+	profile, err := resolver.Resolve(ctx, spec.Size)
 	if err != nil {
-		return core.Profile{}, fmt.Errorf("resolving profile %s for %s: %w", spec.Profile, spec.ID, err)
+		return core.Profile{}, fmt.Errorf("resolving size %s for %s: %w", spec.Size, spec.ID, err)
 	}
 	profile = profile.ForProvider(spec.Provider)
 	profile = withArgoCDAddon(profile)
@@ -30,10 +30,10 @@ func ResolveForCluster(ctx context.Context, resolver Resolver, spec core.Cluster
 }
 
 // withArgoCDAddon ensures profile always carries an "argocd" catalog entry,
-// defaulting to argocd.DefaultAddon when the tier doesn't track one of its
-// own (true below tier-standard). Argo CD is installed on every tier
-// regardless of whether the catalog tracks it, so without this a
-// cluster.yaml override naming "argocd" on a tier that doesn't carry it
+// defaulting to argocd.DefaultAddon on the rare chance a size's catalog entry
+// doesn't (every builtin size does, via baseAddons). Argo CD is installed on
+// every cluster regardless of whether the catalog tracks it, so without this
+// a cluster.yaml override naming "argocd" on a profile that doesn't carry it
 // would fail Merge with ErrUnknownOverride even though the addon is always
 // installed.
 func withArgoCDAddon(profile core.Profile) core.Profile {

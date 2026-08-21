@@ -11,8 +11,7 @@ import (
 
 func testProfile() core.Profile {
 	return core.Profile{
-		Name:    "tier-small",
-		Version: "1.0.0",
+		Name: "small",
 		Addons: []core.AddonRef{
 			{
 				Name: "cert-manager", Chart: "cert-manager",

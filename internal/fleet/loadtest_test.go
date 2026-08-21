@@ -47,7 +47,7 @@ func seedFleet(t *testing.T, n int) (registry.Registry, repo.Provisioner) {
 	reg := registry.NewMemory()
 	repoProv := repo.NewMemory()
 	resolver := catalog.NewBuiltinResolver()
-	profile, err := resolver.Resolve(context.Background(), core.ProfileRef{Name: "tier-small", Version: "1.0.0"})
+	profile, err := resolver.Resolve(context.Background(), core.SizeSmall)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -60,7 +60,7 @@ func seedFleet(t *testing.T, n int) (registry.Registry, repo.Provisioner) {
 			NodePools: []core.NodePool{
 				{Name: "default", InstanceType: "m6i.large", MinSize: 1, MaxSize: 5, DesiredSize: 3},
 			},
-			Profile: core.ProfileRef{Name: "tier-small", Version: "1.0.0"},
+			Size: core.SizeSmall,
 		}
 		if _, err := reg.Create(context.Background(), registry.NewRecord(spec, time.Now())); err != nil {
 			t.Fatalf("seeding registry for %s: %v", spec.ID, err)

@@ -169,7 +169,7 @@ func seedRepoStep(
 			return fmt.Errorf("seeding repository for %s: %w", spec.ID, err)
 		}
 
-		logger.Info("seeded cluster repository", "cluster", spec.ID, "profile", spec.Profile)
+		logger.Info("seeded cluster repository", "cluster", spec.ID, "size", spec.Size)
 		return nil
 	}
 }
@@ -226,7 +226,7 @@ func ReadyReconcile(
 			return fmt.Errorf("reconciling addons for %s: %w", spec.ID, err)
 		}
 		if committed {
-			logger.Info("committed addon changes", "cluster", spec.ID, "profile", spec.Profile)
+			logger.Info("committed addon changes", "cluster", spec.ID, "size", spec.Size)
 		}
 
 		// addons.yaml above is the informational record of the resolved
@@ -242,7 +242,7 @@ func ReadyReconcile(
 			return fmt.Errorf("reconciling app-of-apps for %s: %w", spec.ID, err)
 		}
 		if appsCommitted {
-			logger.Info("committed app-of-apps changes", "cluster", spec.ID, "profile", spec.Profile)
+			logger.Info("committed app-of-apps changes", "cluster", spec.ID, "size", spec.Size)
 		}
 		return nil
 	}

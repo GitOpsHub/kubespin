@@ -26,8 +26,7 @@ CREATE TABLE IF NOT EXISTS fleet_registry (
 	provider          TEXT NOT NULL,
 	region            TEXT NOT NULL,
 	access            TEXT NOT NULL,
-	profile_name      TEXT NOT NULL,
-	profile_version   TEXT NOT NULL,
+	size              TEXT NOT NULL DEFAULT '',
 	oidc_issuer       TEXT NOT NULL DEFAULT '',
 	version           BIGINT NOT NULL,
 	last_reported_at  TIMESTAMPTZ,
@@ -39,6 +38,9 @@ CREATE TABLE IF NOT EXISTS fleet_registry (
 	lease_expires_at  TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS fleet_registry_provider_phase_idx ON fleet_registry (provider, phase);
+ALTER TABLE fleet_registry ADD COLUMN IF NOT EXISTS size TEXT NOT NULL DEFAULT '';
+ALTER TABLE fleet_registry DROP COLUMN IF EXISTS profile_name;
+ALTER TABLE fleet_registry DROP COLUMN IF EXISTS profile_version;
 `
 
 // argoCDDetailsDDL creates the cluster_argocd_details table, a child of
@@ -62,7 +64,7 @@ CREATE TABLE IF NOT EXISTS cluster_argocd_details (
 // selectColumns is shared by every read (Get, List, and UpdatePhase's
 // RETURNING) so a column can't drift between them.
 const selectColumns = `
-	cluster_id, phase, provider, region, access, profile_name, profile_version,
+	cluster_id, phase, provider, region, access, size,
 	oidc_issuer, version, last_reported_at, findings, findings_at, created_at,
 	updated_at, lease_holder, lease_expires_at
 `
@@ -151,13 +153,13 @@ func (p *Postgres) Create(ctx context.Context, rec Record) (Record, error) {
 
 	res, err := p.db.ExecContext(ctx, `
 		INSERT INTO fleet_registry (
-			cluster_id, phase, provider, region, access, profile_name, profile_version,
+			cluster_id, phase, provider, region, access, size,
 			oidc_issuer, version, last_reported_at, findings, findings_at, created_at,
 			updated_at, lease_holder, lease_expires_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		ON CONFLICT (cluster_id) DO NOTHING`,
 		rec.ClusterID.String(), rec.Phase.String(), rec.Provider.String(), rec.Region, rec.Access.String(),
-		rec.Profile.Name, rec.Profile.Version, rec.OIDCIssuer, rec.Version,
+		rec.Size.String(), rec.OIDCIssuer, rec.Version,
 		nullTime(rec.LastReportedAt), findings, nullTime(rec.FindingsAt),
 		rec.CreatedAt.UTC(), rec.UpdatedAt.UTC(), leaseHolder(rec.Lease), leaseExpiry(rec.Lease))
 	if err != nil {
@@ -475,16 +477,16 @@ type rowScanner interface {
 
 func scanRecord(s rowScanner) (Record, error) {
 	var (
-		clusterID, phase, provider, region, access, profileName, profileVersion, oidcIssuer string
-		version                                                                             int64
-		lastReportedAt, findingsAt, leaseExpiresAt                                          sql.NullTime
-		findingsRaw                                                                         []byte
-		createdAt, updatedAt                                                                time.Time
-		leaseHolder                                                                         sql.NullString
+		clusterID, phase, provider, region, access, size, oidcIssuer string
+		version                                                      int64
+		lastReportedAt, findingsAt, leaseExpiresAt                   sql.NullTime
+		findingsRaw                                                  []byte
+		createdAt, updatedAt                                         time.Time
+		leaseHolder                                                  sql.NullString
 	)
 
 	err := s.Scan(
-		&clusterID, &phase, &provider, &region, &access, &profileName, &profileVersion,
+		&clusterID, &phase, &provider, &region, &access, &size,
 		&oidcIssuer, &version, &lastReportedAt, &findingsRaw, &findingsAt, &createdAt,
 		&updatedAt, &leaseHolder, &leaseExpiresAt,
 	)
@@ -498,7 +500,7 @@ func scanRecord(s rowScanner) (Record, error) {
 		Provider:   core.Provider(provider),
 		Region:     region,
 		Access:     core.Access(access),
-		Profile:    core.ProfileRef{Name: profileName, Version: profileVersion},
+		Size:       core.ClusterSize(size),
 		OIDCIssuer: oidcIssuer,
 		Version:    version,
 		CreatedAt:  createdAt.UTC(),

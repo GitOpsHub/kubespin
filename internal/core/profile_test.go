@@ -53,18 +53,15 @@ func TestAddonRefValidate(t *testing.T) {
 }
 
 func TestProfileValidate(t *testing.T) {
-	p := Profile{Name: "tier-small", Version: "1.0.0", Addons: []AddonRef{validAddon()}}
+	p := Profile{Name: "small", Addons: []AddonRef{validAddon()}}
 	if err := p.Validate(); err != nil {
 		t.Fatalf("valid profile rejected: %v", err)
-	}
-	if p.Ref().String() != "tier-small@1.0.0" {
-		t.Errorf("Ref().String() = %q", p.Ref().String())
 	}
 
 	t.Run("rejects duplicate addons", func(t *testing.T) {
 		// Two Argo CD Applications cannot share a name, so this has to fail at
 		// resolution time rather than at sync time on the cluster.
-		dup := Profile{Name: "tier-small", Version: "1.0.0", Addons: []AddonRef{validAddon(), validAddon()}}
+		dup := Profile{Name: "small", Addons: []AddonRef{validAddon(), validAddon()}}
 		err := dup.Validate()
 		if err == nil || !strings.Contains(err.Error(), "duplicate addon name") {
 			t.Fatalf("duplicate addons not rejected: %v", err)
@@ -72,9 +69,16 @@ func TestProfileValidate(t *testing.T) {
 	})
 
 	t.Run("rejects empty addon set", func(t *testing.T) {
-		empty := Profile{Name: "tier-small", Version: "1.0.0"}
+		empty := Profile{Name: "small"}
 		if err := empty.Validate(); err == nil {
 			t.Fatal("expected an error for a profile with no addons")
+		}
+	})
+
+	t.Run("rejects empty name", func(t *testing.T) {
+		unnamed := Profile{Addons: []AddonRef{validAddon()}}
+		if err := unnamed.Validate(); err == nil {
+			t.Fatal("expected an error for a profile with no name")
 		}
 	})
 }
@@ -101,7 +105,7 @@ func TestProfileForProvider(t *testing.T) {
 		Name: "karpenter", Chart: "karpenter", Repository: "oci://example",
 		Version: "1.0.0", Namespace: "karpenter", Providers: []Provider{ProviderAWS},
 	}
-	p := Profile{Name: "tier-standard", Version: "1.0.0", Addons: []AddonRef{agnostic, awsOnly}}
+	p := Profile{Name: "medium", Addons: []AddonRef{agnostic, awsOnly}}
 
 	forAWS := p.ForProvider(ProviderAWS)
 	if len(forAWS.Addons) != 2 {
@@ -128,22 +132,22 @@ func TestAddonOverrideValidate(t *testing.T) {
 	}
 }
 
-func TestProfileRefValidate(t *testing.T) {
+func TestClusterSizeValid(t *testing.T) {
 	tests := map[string]struct {
-		ref     ProfileRef
-		wantErr bool
+		size  ClusterSize
+		valid bool
 	}{
-		"valid":       {ProfileRef{Name: "tier-regulated", Version: "2.1.0"}, false},
-		"no name":     {ProfileRef{Version: "1.0.0"}, true},
-		"bad name":    {ProfileRef{Name: "Tier Small", Version: "1.0.0"}, true},
-		"no version":  {ProfileRef{Name: "tier-small"}, true},
-		"all missing": {ProfileRef{}, true},
+		"small":   {SizeSmall, true},
+		"medium":  {SizeMedium, true},
+		"large":   {SizeLarge, true},
+		"empty":   {"", false},
+		"unknown": {"extra-large", false},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			if err := tc.ref.Validate(); (err != nil) != tc.wantErr {
-				t.Fatalf("Validate() = %v, wantErr %v", err, tc.wantErr)
+			if got := tc.size.Valid(); got != tc.valid {
+				t.Fatalf("Valid() = %v, want %v", got, tc.valid)
 			}
 		})
 	}

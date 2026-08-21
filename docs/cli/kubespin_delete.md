@@ -31,11 +31,11 @@ kubespin delete [flags]
 ```bash
   # AWS, prompts to type the cluster ID to confirm
   kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
-    --profile tier-small@1.0.0 --github-org GitOpsHub
+    --github-org GitOpsHub
 
   # GCP, scripted (no interactive confirmation)
   kubespin delete --provider gcp --gcp-project kubernetes-dev-502710 --region us-central1 \
-    --cluster-id demo-gcp --profile tier-small@1.0.0 \
+    --cluster-id demo-gcp \
     --github-org GitOpsHub --yes
 
   # Using the same cluster.yaml apply was run with
@@ -62,9 +62,9 @@ kubespin delete [flags]
       --kubernetes-version string   Kubernetes minor version, e.g. 1.34 (unused by delete, kept for spec compatibility)
       --max-size int32              maximum size of the default node pool (unused by delete, kept for spec compatibility) (default 5)
       --min-size int32              minimum size of the default node pool (unused by delete, kept for spec compatibility) (default 1)
-      --profile string              profile reference from platform-profiles, e.g. tier-small@1.0.0
       --provider string             cloud provider: aws, gcp, or azure
       --region string               cloud region
+      --size string                 unused by delete, kept for spec compatibility (default "small")
       --spec string                 path to a cluster.yaml describing the cluster
       --spot                        unused by delete, kept for spec compatibility
       --subnet-cidr string          unused by delete, kept for spec compatibility

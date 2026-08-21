@@ -33,7 +33,7 @@ reporter to the Fleet Registry.`,
   make lambda
   kubespin fleet bootstrap --account-id 465532803838 --region us-east-1
   kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
-    --access private --profile tier-small@1.0.0 \
+    --access private \
     --github-org GitOpsHub
   kubespin fleet status
 

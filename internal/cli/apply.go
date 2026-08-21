@@ -60,24 +60,23 @@ manifests to be accepted, so it takes a few minutes on a fresh cluster while
 images are pulled. An Argo CD that never becomes ready — pods that cannot be
 scheduled or cannot pull — fails the step there rather than looking like
 addons that silently never sync.`,
-		Example: `  # AWS, private API server, default node pool
+		Example: `  # AWS, private API server, default node pool, default size (small)
   kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
-    --access private --profile tier-small@1.0.0 \
+    --access private \
     --github-org GitOpsHub
 
   # GCP, public API server, larger node pool — authorized-cidrs is required on GCP
   # for the operator's own machine to reach the endpoint and install Argo CD
   kubespin apply --provider gcp --gcp-project kubernetes-dev-502710 --region us-central1 \
     --cluster-id demo-gcp --access public --authorized-cidrs 203.0.113.4/32 \
-    --profile tier-small@1.0.0 \
+    --size small \
     --instance-type e2-standard-4 --desired-size 3 \
     --github-org GitOpsHub
 
-  # Azure, resolving addons from a platform-profiles repo instead of the builtin catalog
+  # Azure, medium size (adds Velero + Falco onto the default addon set)
   kubespin apply --provider azure --azure-subscription 3df9adbd-ea55-4c92-964c-0252031979de --region eastus \
-    --cluster-id demo-azure --access private --profile tier-standard@1.0.0 \
+    --cluster-id demo-azure --access private --size medium \
     --instance-type Standard_D4s_v7 \
-    --profiles-repo platform-profiles \
     --github-org GitOpsHub
 
   # Preview what apply would do without touching any cloud
@@ -92,7 +91,7 @@ addons that silently never sync.`,
 	fs.String("provider", "", "cloud provider: aws, gcp, or azure")
 	fs.String("region", "", "cloud region")
 	fs.String("access", string(core.AccessPrivate), "API server exposure: private or public")
-	fs.String("profile", "", "profile reference from platform-profiles, e.g. tier-small@1.0.0")
+	fs.String("size", "small", "cluster size: small, medium, or large — determines the default addon set. Argo CD and an autoscaler (Karpenter on AWS, cluster-autoscaler on GCP/Azure) ship at every size; medium adds Velero+Falco, large adds strict Kyverno policies + audit logging + OTel")
 	fs.String("kubernetes-version", "", "Kubernetes minor version, e.g. 1.34")
 	fs.StringSlice("subnets", nil, "existing subnets to place the cluster in")
 	fs.StringSlice("authorized-cidrs", nil, "CIDR blocks allowed to reach the API server when --access public (GCP: required to reach the endpoint at all, since GKE enables master-authorized-networks with an empty allowlist by default; AWS/Azure: public endpoints are open to 0.0.0.0/0 unless this is set)")
@@ -105,14 +104,13 @@ addons that silently never sync.`,
 	fs.String("github-org", "", "GitHub organization cluster repositories are created in")
 	fs.String("github-base-url", "", "GitHub Enterprise API base URL (leave empty for github.com)")
 	fs.String("github-upload-url", "", "GitHub Enterprise upload URL (leave empty for github.com)")
-	fs.String("profiles-repo", "", "platform-profiles repository name to resolve profiles from (uses the builtin catalog if empty)")
 
 	fs.String("instance-type", "m6i.large", "instance type for the default node pool (defaults to a cloud-appropriate value per --provider when unset: m6i.large on aws, e2-standard-4 on gcp, Standard_D4s_v7 on azure; --spot picks a smaller cloud-appropriate default instead, see --spot)")
 	fs.Int32("min-size", 1, "minimum size of the default node pool (--spot defaults this lower, see --spot)")
 	fs.Int32("max-size", 5, "maximum size of the default node pool (--spot defaults this lower, see --spot)")
 	fs.Int32("desired-size", 2, "desired size of the default node pool (--spot defaults this lower, see --spot)")
 	fs.Int32("disk-size", 0, "boot disk size in GB for the default node pool's nodes (0 = cloud default; GKE regional clusters multiply this by the number of zones, so it is worth setting explicitly on quota-constrained projects; --spot picks a smaller default, see --spot)")
-	fs.Bool("spot", false, "one flag for the cheapest dev/learning cluster on any cloud: spot/preemptible instances (AWS/GCP; AKS's default pool must stay on-demand, so this part is a no-op on --provider azure), plus a smaller default --instance-type/--min-size/--max-size/--desired-size/--disk-size sized to still run the tier-small addon set (t3.medium/e2-medium/Standard_B2s, 1/2/1 nodes) — pass any of those flags explicitly to override just that piece. On GCP this also switches to a zonal cluster (eligible for GCP's free zonal-cluster tier) and gives nodes public IPs instead of provisioning Cloud NAT, unless --zone/--gcp-public-nodes override it.")
+	fs.Bool("spot", false, "one flag for the cheapest dev/learning cluster on any cloud: spot/preemptible instances (AWS/GCP; AKS's default pool must stay on-demand, so this part is a no-op on --provider azure), plus a smaller default --instance-type/--min-size/--max-size/--desired-size/--disk-size sized to still run the default (--size small) addon set (t3.medium/e2-medium/Standard_B2s, 1/2/1 nodes) — pass any of those flags explicitly to override just that piece. On GCP this also switches to a zonal cluster (eligible for GCP's free zonal-cluster tier) and gives nodes public IPs instead of provisioning Cloud NAT, unless --zone/--gcp-public-nodes override it.")
 	fs.String("zone", "", "GCP zone (e.g. us-central1-a) requesting a zonal GKE cluster instead of the default regional one (GCP only). --spot already sets this; only needed to pick a specific zone, or to go zonal without spot.")
 	fs.Bool("gcp-public-nodes", false, "give GKE nodes public IPs instead of provisioning a Cloud Router + Cloud NAT for them (GCP only). --spot already enables this; only needed to use it without spot.")
 
@@ -162,10 +160,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	}
 	repoProv := repo.NewProvisioner(repoClients, repo.WithLogger(logger))
 
-	resolver, err := buildResolver(cmd, repoClients)
-	if err != nil {
-		return err
-	}
+	resolver := catalog.NewBuiltinResolver()
 
 	installer := argocd.NewHelmInstaller(logger)
 	o := orchestrator.New(reg,
@@ -522,13 +517,9 @@ func buildCloud(ctx context.Context, cmd *cobra.Command, spec core.ClusterSpec) 
 	}
 }
 
-// buildRepoClients assembles the GitHub clients every provider shares:
-// unlike ClusterProvisioner and IdentityProvisioner, a cluster's repository
-// always lives on the same GitHub Enterprise instance regardless of which
-// cloud the cluster itself runs on. runApply builds both the repository
-// Provisioner and buildResolver's platform-profiles Resolver on top of this,
-// so the platform-profiles repo (M4) is read through the same credentials the
-// cluster's own repo (M3) is written through.
+// buildRepoClients assembles the GitHub clients every provider shares: a
+// cluster's repository always lives on the same GitHub Enterprise instance
+// regardless of which cloud the cluster itself runs on.
 //
 // The token comes from GITHUB_TOKEN rather than a flag: flag values land in
 // shell history, and every other secret this CLI touches (cloud credentials)
@@ -563,21 +554,6 @@ func buildRepoClients(cmd *cobra.Command) (*repo.Clients, error) {
 	return clients, nil
 }
 
-// buildResolver picks the profile catalog: the real platform-profiles-repo
-// resolver when --profiles-repo names one, the builtin placeholder set
-// otherwise. Falling back rather than requiring the flag keeps `apply`
-// usable before that repo has been stood up (M4's first, still-open item).
-func buildResolver(cmd *cobra.Command, clients *repo.Clients) (catalog.Resolver, error) {
-	profilesRepo, err := cmd.Flags().GetString("profiles-repo")
-	if err != nil {
-		return nil, fmt.Errorf("reading --profiles-repo: %w", err)
-	}
-	if profilesRepo == "" {
-		return catalog.NewBuiltinResolver(), nil
-	}
-	return catalog.NewRepoResolver(clients, profilesRepo), nil
-}
-
 func newDeleteCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete",
@@ -601,11 +577,11 @@ this command a preview. Use --yes to skip the confirmation prompt only when
 you mean it.`,
 		Example: `  # AWS, prompts to type the cluster ID to confirm
   kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
-    --profile tier-small@1.0.0 --github-org GitOpsHub
+    --github-org GitOpsHub
 
   # GCP, scripted (no interactive confirmation)
   kubespin delete --provider gcp --gcp-project kubernetes-dev-502710 --region us-central1 \
-    --cluster-id demo-gcp --profile tier-small@1.0.0 \
+    --cluster-id demo-gcp \
     --github-org GitOpsHub --yes
 
   # Using the same cluster.yaml apply was run with
@@ -621,7 +597,7 @@ you mean it.`,
 	fs.String("provider", "", "cloud provider: aws, gcp, or azure")
 	fs.String("region", "", "cloud region")
 	fs.String("access", string(core.AccessPrivate), "API server exposure: private or public (must match the cluster's spec)")
-	fs.String("profile", "", "profile reference from platform-profiles, e.g. tier-small@1.0.0")
+	fs.String("size", "small", "unused by delete, kept for spec compatibility")
 	fs.String("kubernetes-version", "", "Kubernetes minor version, e.g. 1.34 (unused by delete, kept for spec compatibility)")
 	fs.StringSlice("subnets", nil, "existing subnets the cluster was placed in")
 	fs.StringSlice("authorized-cidrs", nil, "unused by delete, kept for spec compatibility")

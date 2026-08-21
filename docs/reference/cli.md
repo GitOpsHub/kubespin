@@ -175,7 +175,7 @@ Backs both `apply` (`newApplyCommand`/`runApply`) and `delete`
         2. Resolve config and connect to the Fleet Registry (`registryPrereqs`, shared with `runDelete` and every `fleet` subcommand — errors if `cfg.Registry.DSN` is empty).
         3. Pick which cloud auth providers to preflight: a **dry run** preflights `aws` alone, unconditionally, regardless of `spec.Provider` — not because the Fleet Registry is AWS-hosted (it is a Postgres database that can be hosted anywhere, reached only via `KUBESPIN_REGISTRY_DSN`, no IAM involved), but because this code path predates that migration and has not been revisited; a real (non-dry-run) run instead calls `cloudAuthProviders`, which preflights `aws` plus the cluster's own provider (skipped if the cluster's own provider is already `aws`, to avoid checking it twice) — again unconditionally including `aws` regardless of `spec.Provider`.
         4. Dry-run branch: call `reportPlan` and return.
-        5. Otherwise: `buildCloud` (provisioner set), `buildRepoClients` + `repo.NewProvisioner`, `buildResolver` (profile catalog), then construct an `orchestrator.Orchestrator` with `orchestrator.ProvisioningSteps` and `orchestrator.ReadyReconcile`, and call `o.Apply(ctx, spec)`.
+        5. Otherwise: `buildCloud` (provisioner set), `buildRepoClients` + `repo.NewProvisioner`, `catalog.NewBuiltinResolver()` (size catalog), then construct an `orchestrator.Orchestrator` with `orchestrator.ProvisioningSteps` and `orchestrator.ReadyReconcile`, and call `o.Apply(ctx, spec)`.
         6. On error, print the phase the run stopped at (so the operator knows where a retry resumes from) before wrapping and returning the error.
     - **Calls into:** `internal/registry`, `internal/orchestrator`, `internal/provisioner/{aws,gcp,azure}`, `internal/repo`, `internal/catalog`, `internal/auth` (via preflight).
     - **Non-obvious control flow:** dry-run branch is a pure registry read (step 4) — it never calls `buildCloud`, so no cloud SDK is touched at all on `--dry-run`. Error path still reports last-known phase before returning, so a failed apply is resumable.
@@ -199,7 +199,6 @@ Backs both `apply` (`newApplyCommand`/`runApply`) and `delete`
     func cloudAuthProviders(spec core.ClusterSpec) []string
     func buildCloud(ctx context.Context, cmd *cobra.Command, spec core.ClusterSpec) (orchestrator.Cloud, error)
     func buildRepoClients(cmd *cobra.Command) (*repo.Clients, error)
-    func buildResolver(cmd *cobra.Command, clients *repo.Clients) (catalog.Resolver, error)
     func confirmDelete(cmd *cobra.Command, spec core.ClusterSpec) (bool, error)
     ```
 
@@ -208,7 +207,6 @@ Backs both `apply` (`newApplyCommand`/`runApply`) and `delete`
         - `cloudAuthProviders` — see above; shared by `runApply` (non-dry-run path) and `runDelete`.
         - `buildCloud` — switches on `spec.Provider` (`core.ProviderAWS`/`GCP`/`Azure`) to build the matching `awsprov`/`gcpprov`/`azureprov` clients and assemble an `orchestrator.Cloud{Cluster, Identity, Network, IngestionEndpoint, Wait}`. GCP requires `--gcp-project`, Azure requires `--azure-subscription` (both returned as `core.ErrInvalidSpec` if empty). `--ingestion-endpoint` is looked up rather than required — `delete` and `fleet audit` share `buildCloud` but never use `IngestionEndpoint` (`delete` doesn't open egress; `audit` only Describes), so requiring the flag there would fail those commands before they do any work. Also shared with `fleet.go`'s `clusterProvisionerFactory`.
         - `buildRepoClients` — builds `*repo.Clients` from `--github-org` (required), `GITHUB_TOKEN` env var (required — not a flag, so it never lands in shell history, matching how every other cloud credential in this CLI is sourced from the ambient environment), and `--github-base-url`/`--github-upload-url` for GitHub Enterprise. Shared by `apply`, `delete`, `fleet update`, and `fleet audit`.
-        - `buildResolver` — returns `catalog.NewRepoResolver(clients, profilesRepo)` if `--profiles-repo` is set, else `catalog.NewBuiltinResolver()`. Falling back rather than requiring the flag keeps `apply`/`fleet update` usable before a platform-profiles repo exists.
         - `confirmDelete` — prompts on stdin for the cluster ID; reads a full line (`bufio.Reader.ReadString('\n')`) rather than a whitespace-delimited token so that pressing Enter or piping EOF is treated as "decline" (returns `false, nil`) instead of erroring with "unexpected newline" — an intentional abort must not look like a command failure.
     - **Calls into:** `internal/registry`, `internal/orchestrator`, `internal/provisioner/{aws,gcp,azure}`, `internal/repo`, `internal/catalog`, `internal/core`.
     - **Non-obvious control flow:** `buildCloud` is intentionally reused by `delete` and `fleet audit`, both of which ignore `IngestionEndpoint` — that's why the flag is optional rather than required at the `buildCloud` level.
@@ -267,7 +265,7 @@ help when called with no subcommand) and attaches
     func reportUpdateResults(cmd *cobra.Command, results []fleet.UpdateResult, _ *Config) error
     ```
 
-    - **Behavior:** `runFleetUpdate` resolves prereqs (`registryPrereqs`), requires `--component` and `--version`, builds a `registry.Filter` (`fleetFilter`, `--provider` only — there is no `--profile` filter; the registry's query filter has no profile dimension to select on), builds repo clients/provisioner and a catalog resolver, then calls `fleet.Update(...)` with `--concurrency` and `--canary-count`. `reportUpdateResults` prints per-cluster outcomes (`updated` / `already up to date` / `FAILED: ...` / `skipped (canary wave failed)`).
+    - **Behavior:** `runFleetUpdate` resolves prereqs (`registryPrereqs`), requires `--component` and `--version`, builds a `registry.Filter` (`fleetFilter`, `--provider` only — there is no `--size` filter; the registry's query filter has no size dimension to select on), builds repo clients/provisioner and a `catalog.NewBuiltinResolver()`, then calls `fleet.Update(...)` with `--concurrency` and `--canary-count`. `reportUpdateResults` prints per-cluster outcomes (`updated` / `already up to date` / `FAILED: ...` / `skipped (canary wave failed)`).
     - **Calls into:** `internal/fleet` (`Update`), `internal/registry`, `internal/repo`, `internal/catalog`.
     - **Non-obvious control flow:** `reportUpdateResults` returns a non-nil error if any cluster failed, so the process exit code reflects a partial failure. `fleet update` does not honor global `--dry-run` — it always commits.
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/GitOpsHub/kubespin/internal/catalog"
 	"github.com/GitOpsHub/kubespin/internal/core"
 	"github.com/GitOpsHub/kubespin/internal/fleet"
 	"github.com/GitOpsHub/kubespin/internal/provisioner"
@@ -87,7 +88,6 @@ failed wave is safe.`,
 	fs.String("github-org", "", "GitHub organization cluster repositories live in")
 	fs.String("github-base-url", "", "GitHub Enterprise API base URL (leave empty for github.com)")
 	fs.String("github-upload-url", "", "GitHub Enterprise upload URL (leave empty for github.com)")
-	fs.String("profiles-repo", "", "platform-profiles repository name to resolve profiles from (uses the builtin catalog if empty)")
 
 	return cmd
 }
@@ -123,10 +123,7 @@ func runFleetUpdate(cmd *cobra.Command, _ []string) error {
 	}
 	repoProv := repo.NewProvisioner(repoClients, repo.WithLogger(LoggerFrom(ctx)))
 
-	resolver, err := buildResolver(cmd, repoClients)
-	if err != nil {
-		return err
-	}
+	resolver := catalog.NewBuiltinResolver()
 
 	concurrency, err := cmd.Flags().GetInt("concurrency")
 	if err != nil {

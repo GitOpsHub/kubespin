@@ -173,7 +173,7 @@ func updateRecord(
 	ctx context.Context, rec registry.Record, resolver catalog.Resolver, repoProv repo.Provisioner, component, version string,
 	logger *slog.Logger,
 ) UpdateResult {
-	minimal := core.ClusterSpec{ID: rec.ClusterID, Provider: rec.Provider, Region: rec.Region, Profile: rec.Profile}
+	minimal := core.ClusterSpec{ID: rec.ClusterID, Provider: rec.Provider, Region: rec.Region, Size: rec.Size}
 
 	spec, err := desiredSpec(ctx, repoProv, minimal)
 	if err != nil {

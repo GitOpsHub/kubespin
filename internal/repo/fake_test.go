@@ -243,14 +243,13 @@ func testSpec() core.ClusterSpec {
 		NodePools: []core.NodePool{{
 			Name: "default", InstanceType: "m6i.large", MinSize: 1, MaxSize: 5, DesiredSize: 3,
 		}},
-		Profile: core.ProfileRef{Name: "tier-small", Version: "1.0.0"},
+		Size: core.SizeSmall,
 	}
 }
 
 func testProfile() core.Profile {
 	return core.Profile{
-		Name:    "tier-small",
-		Version: "1.0.0",
+		Name: "small",
 		Addons: []core.AddonRef{{
 			Name: "cert-manager", Chart: "cert-manager",
 			Repository: "https://charts.jetstack.io", Version: "1.15.3", Namespace: "cert-manager",

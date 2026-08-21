@@ -20,7 +20,7 @@ func validSpec() ClusterSpec {
 			MaxSize:      10,
 			DesiredSize:  3,
 		}},
-		Profile: ProfileRef{Name: "tier-small", Version: "1.0.0"},
+		Size:    SizeSmall,
 		Subnets: []string{"subnet-aaa", "subnet-bbb"},
 	}
 }
@@ -43,17 +43,17 @@ func TestClusterSpecValidate_Invalid(t *testing.T) {
 		mutate  func(*ClusterSpec)
 		wantMsg string
 	}{
-		"empty id":            {func(s *ClusterSpec) { s.ID = "" }, "cluster id is required"},
-		"uppercase id":        {func(s *ClusterSpec) { s.ID = "Team-Prod" }, "cluster id"},
-		"id with underscore":  {func(s *ClusterSpec) { s.ID = "team_prod" }, "cluster id"},
-		"id starting digit":   {func(s *ClusterSpec) { s.ID = "1team" }, "cluster id"},
-		"id too short":        {func(s *ClusterSpec) { s.ID = "ab" }, "cluster id"},
-		"unknown provider":    {func(s *ClusterSpec) { s.Provider = "oracle" }, "provider"},
-		"empty region":        {func(s *ClusterSpec) { s.Region = "" }, "region is required"},
-		"unknown access":      {func(s *ClusterSpec) { s.Access = "semi-private" }, "access"},
-		"bad k8s version":     {func(s *ClusterSpec) { s.KubernetesVersion = "v1.34.2" }, "kubernetesVersion"},
-		"no node pools":       {func(s *ClusterSpec) { s.NodePools = nil }, "at least one node pool"},
-		"invalid profile ref": {func(s *ClusterSpec) { s.Profile.Version = "" }, "version is required"},
+		"empty id":           {func(s *ClusterSpec) { s.ID = "" }, "cluster id is required"},
+		"uppercase id":       {func(s *ClusterSpec) { s.ID = "Team-Prod" }, "cluster id"},
+		"id with underscore": {func(s *ClusterSpec) { s.ID = "team_prod" }, "cluster id"},
+		"id starting digit":  {func(s *ClusterSpec) { s.ID = "1team" }, "cluster id"},
+		"id too short":       {func(s *ClusterSpec) { s.ID = "ab" }, "cluster id"},
+		"unknown provider":   {func(s *ClusterSpec) { s.Provider = "oracle" }, "provider"},
+		"empty region":       {func(s *ClusterSpec) { s.Region = "" }, "region is required"},
+		"unknown access":     {func(s *ClusterSpec) { s.Access = "semi-private" }, "access"},
+		"bad k8s version":    {func(s *ClusterSpec) { s.KubernetesVersion = "v1.34.2" }, "kubernetesVersion"},
+		"no node pools":      {func(s *ClusterSpec) { s.NodePools = nil }, "at least one node pool"},
+		"invalid size":       {func(s *ClusterSpec) { s.Size = "extra-large" }, "size"},
 		"private with cidrs": {
 			func(s *ClusterSpec) { s.AuthorizedCIDRs = []string{"10.0.0.0/8"} },
 			"meaningless for a private cluster",

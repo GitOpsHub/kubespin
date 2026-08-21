@@ -53,7 +53,6 @@ kubespin fleet update [flags]
       --github-org string          GitHub organization cluster repositories live in
       --github-upload-url string   GitHub Enterprise upload URL (leave empty for github.com)
   -h, --help                       help for update
-      --profiles-repo string       platform-profiles repository name to resolve profiles from (uses the builtin catalog if empty)
       --provider string            restrict to one cloud provider
       --version string             target version
 ```

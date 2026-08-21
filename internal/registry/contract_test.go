@@ -52,7 +52,7 @@ func testRecord(id core.ClusterID, provider core.Provider, clock *fakeClock) Rec
 		Provider:  provider,
 		Region:    "us-east-1",
 		Access:    core.AccessPrivate,
-		Profile:   core.ProfileRef{Name: "tier-small", Version: "1.0.0"},
+		Size:      core.SizeSmall,
 		Version:   1,
 		CreatedAt: clock.Now(),
 		UpdatedAt: clock.Now(),
@@ -99,7 +99,7 @@ func runContract(t *testing.T, newRegistry factory) {
 
 		if got.ClusterID != want.ClusterID || got.Phase != want.Phase ||
 			got.Provider != want.Provider || got.Region != want.Region ||
-			got.Access != want.Access || got.Profile != want.Profile ||
+			got.Access != want.Access || got.Size != want.Size ||
 			got.Version != want.Version {
 			t.Errorf("round-trip mismatch:\n got %+v\nwant %+v", got, want)
 		}

@@ -32,7 +32,7 @@ func auditTestSpec(id core.ClusterID) core.ClusterSpec {
 		NodePools: []core.NodePool{
 			{Name: "default", InstanceType: "m6i.large", MinSize: 1, MaxSize: 5, DesiredSize: 3},
 		},
-		Profile: core.ProfileRef{Name: "tier-small", Version: "1.0.0"},
+		Size: core.SizeSmall,
 	}
 }
 
@@ -48,7 +48,7 @@ func seedRepoWithClusterYAML(t *testing.T, spec core.ClusterSpec) repo.Provision
 		t.Fatalf("Clone: %v", err)
 	}
 	clusterYAML, _, err := repo.Render(spec, core.Profile{
-		Name: "tier-small", Version: "1.0.0",
+		Name:   "small",
 		Addons: []core.AddonRef{{Name: "x", Chart: "x", Repository: "https://x", Version: "1.0.0", Namespace: "x"}},
 	})
 	if err != nil {

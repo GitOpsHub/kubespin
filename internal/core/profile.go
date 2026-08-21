@@ -11,28 +11,6 @@ import (
 // both surface as Argo CD Application names.
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,61}[a-z0-9]$`)
 
-// ProfileRef points at a versioned profile in the platform-profiles repository.
-// Pinning the version is what makes `fleet update` a deliberate, staged action
-// rather than an implicit consequence of someone merging to the catalog.
-type ProfileRef struct {
-	Name    string `yaml:"name" json:"name"`
-	Version string `yaml:"version" json:"version"`
-}
-
-// Validate reports whether the reference is well formed.
-func (r ProfileRef) Validate() error {
-	var errs []error
-	if !namePattern.MatchString(r.Name) {
-		errs = append(errs, fmt.Errorf("%w: profile name %q is not a valid name", ErrInvalidSpec, r.Name))
-	}
-	if r.Version == "" {
-		errs = append(errs, fmt.Errorf("%w: profile %q: version is required", ErrInvalidSpec, r.Name))
-	}
-	return errors.Join(errs...)
-}
-
-func (r ProfileRef) String() string { return r.Name + "@" + r.Version }
-
 // AddonRef is one Helm chart delivered to a cluster. Each addon becomes its own
 // Argo CD Application, so addons sync and fail independently of one another.
 type AddonRef struct {
@@ -115,16 +93,12 @@ func (o AddonOverride) Validate() error {
 	return nil
 }
 
-// Profile is a resolved tier from the platform-profiles catalog: the addon set
-// a cluster gets before any per-cluster override patch is applied.
+// Profile is a resolved size tier from the builtin catalog: the addon set a
+// cluster gets before any per-cluster override patch is applied.
 type Profile struct {
-	Name    string     `yaml:"name" json:"name"`
-	Version string     `yaml:"version" json:"version"`
-	Addons  []AddonRef `yaml:"addons" json:"addons"`
+	Name   string     `yaml:"name" json:"name"`
+	Addons []AddonRef `yaml:"addons" json:"addons"`
 }
-
-// Ref returns the reference identifying this profile.
-func (p Profile) Ref() ProfileRef { return ProfileRef{Name: p.Name, Version: p.Version} }
 
 // ForProvider returns a copy of p with every addon that does not support
 // provider dropped (see AddonRef.SupportsProvider). Callers resolve a profile
@@ -157,8 +131,8 @@ func (p Profile) Addon(name string) (AddonRef, bool) {
 // addon names — two Argo CD Applications cannot share a name.
 func (p Profile) Validate() error {
 	var errs []error
-	if err := p.Ref().Validate(); err != nil {
-		errs = append(errs, err)
+	if p.Name == "" {
+		errs = append(errs, fmt.Errorf("%w: profile name is required", ErrInvalidSpec))
 	}
 	if len(p.Addons) == 0 {
 		errs = append(errs, fmt.Errorf("%w: profile %q: at least one addon is required", ErrInvalidSpec, p.Name))

@@ -64,7 +64,7 @@ func TestVersionFlag(t *testing.T) {
 func TestCommandsRequireRegistryDSN(t *testing.T) {
 	for _, args := range [][]string{
 		{"delete", "--cluster-id", "team-payments-prod", "--provider", "aws", "--region", "us-east-1",
-			"--profile", "tier-small@1.0.0", "--subnets", "subnet-a", "--yes"},
+			"--subnets", "subnet-a", "--yes"},
 		{"fleet", "update", "--component", "cert-manager", "--version", "1.16.0"},
 		{"fleet", "audit"},
 		{"fleet", "status"},

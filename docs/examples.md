@@ -51,13 +51,14 @@ export KUBESPIN_REGISTRY_DSN=postgres://user:pass@host:5432/dbname?sslmode=requi
 for the ingestion Lambda/IAM/API Gateway it provisions, unrelated to the
 registry DSN.
 
-### `--profile`, on `apply` and `delete`
+### `--size`, on `apply` and `delete`
 
-Both commands build and validate a full `ClusterSpec`, and a spec without a
-`name@version` profile reference is rejected before any cloud call. Either
-pass `--profile tier-small@1.0.0` or supply a `--spec` file whose `profile:`
-block is filled in. The builtin catalog ships `tier-small@1.0.0`,
-`tier-standard@1.0.0`, and `tier-regulated@1.0.0`.
+Both commands build and validate a full `ClusterSpec`. `--size` picks the
+cluster's addon footprint from the builtin catalog — `small`, `medium`, or
+`large` — and defaults to `small` when omitted, so no flag is required for
+the common case. Argo CD and a cloud-appropriate autoscaler (Karpenter on
+AWS, cluster-autoscaler on GCP/Azure) ship at every size; `medium` adds
+Velero + Falco, `large` adds strict Kyverno policies + audit logging + OTel.
 
 ### GitHub, on everything that touches a cluster repository
 
@@ -130,7 +131,6 @@ kubespin apply \
   --region us-east-1 \
   --cluster-id demo-aws \
   --access private \
-  --profile tier-small@1.0.0 \
   --github-org "$GITHUB_ORG"
 
 kubespin fleet status --phase ready
@@ -147,7 +147,6 @@ kubespin apply \
   --region us-central1 \
   --cluster-id demo-gcp \
   --access public \
-  --profile tier-small@1.0.0 \
   --instance-type e2-standard-4 \
   --min-size 2 --max-size 6 --desired-size 3 \
   --github-org "$GITHUB_ORG"
@@ -183,7 +182,6 @@ kubespin apply \
   --region us-central1 \
   --cluster-id demo-gcp \
   --access private \
-  --profile tier-small@1.0.0 \
   --instance-type e2-standard-2 \
   --min-size 1 --max-size 3 --desired-size 1 \
   --disk-size 30 \
@@ -209,18 +207,17 @@ kubespin apply \
   --region eastus \
   --cluster-id demo-azure \
   --access private \
-  --profile tier-standard@1.0.0 \
+  --size medium \
   --instance-type Standard_D4s_v7 \
-  --profiles-repo platform-profiles \
   --subnets "/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/my-rg/providers/Microsoft.Network/virtualNetworks/my-vnet/subnets/my-subnet" \
   --github-org "$GITHUB_ORG"
 
 kubespin fleet status --phase ready
 ```
 
-`--profile` with no `--profiles-repo` resolves against the builtin catalog —
-useful before `platform-profiles` exists yet. Drop `--subnets` and kubespin
-creates the resource group, VNet, and subnet itself.
+`--size medium` resolves against the builtin catalog — small, medium, and
+large are all fully code-defined, no external repo involved. Drop `--subnets`
+and kubespin creates the resource group, VNet, and subnet itself.
 
 Pin `--instance-type` explicitly on repeat `apply` runs against an existing
 cluster: leaving it unset falls back to a per-provider default baked into the
@@ -242,7 +239,6 @@ kubespin apply \
   --region us-east-1 \
   --cluster-id demo-aws \
   --access private \
-  --profile tier-small@1.0.0 \
   --ingestion-endpoint abc123.execute-api.us-east-1.amazonaws.com \
   --github-org "$GITHUB_ORG"
 ```
@@ -286,7 +282,7 @@ kubespin apply --spec ./cluster.yaml --cluster-id demo-aws-2 \
 ```
 
 Overridable this way: `--cluster-id`, `--provider`, `--region`, `--access`,
-`--kubernetes-version`, `--profile`, `--subnets`, and the three CIDR flags.
+`--kubernetes-version`, `--size`, `--subnets`, and the three CIDR flags.
 The node pool flags (`--instance-type`, `--min-size`, `--max-size`,
 `--desired-size`, `--disk-size`) are **not** — they only build the single
 `default` pool when the spec has no `nodePools` at all, so a file's pools
@@ -306,7 +302,6 @@ kubespin apply \
   --region us-east-1 \
   --cluster-id demo-aws \
   --access private \
-  --profile tier-small@1.0.0 \
   --dry-run
 ```
 
@@ -344,7 +339,6 @@ kubespin apply \
   --cluster-id smoke-test-aws \
   --access public \
   --authorized-cidrs "$MY_IP/32" \
-  --profile tier-small@1.0.0 \
   --spot \
   --github-org "$GITHUB_ORG"
 
@@ -355,7 +349,6 @@ kubespin apply \
   --cluster-id smoke-test-gcp \
   --access public \
   --authorized-cidrs "$MY_IP/32" \
-  --profile tier-small@1.0.0 \
   --spot \
   --github-org "$GITHUB_ORG"
 
@@ -366,10 +359,10 @@ Once both clusters show `ready`, tear them down:
 
 ```bash
 kubespin delete --provider aws --region us-east-1 --cluster-id smoke-test-aws \
-  --profile tier-small@1.0.0 --github-org "$GITHUB_ORG" --yes
+  --github-org "$GITHUB_ORG" --yes
 
 kubespin delete --provider gcp --gcp-project kubernetes-dev-502710 --region us-central1 \
-  --cluster-id smoke-test-gcp --profile tier-small@1.0.0 --github-org "$GITHUB_ORG" --yes
+  --cluster-id smoke-test-gcp --github-org "$GITHUB_ORG" --yes
 ```
 
 A GCP project with several prior test clusters can hit the account-level
@@ -407,7 +400,7 @@ kubespin fleet bootstrap --account-id 465532803838 --region us-east-1 --dry-run
 ```bash
 # 5. Spin up clusters (repeat per cluster; see "Spin up a single cluster")
 kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
-  --access private --profile tier-small@1.0.0 \
+  --access private \
   --github-org "$GITHUB_ORG"
 ```
 
@@ -459,7 +452,6 @@ kubespin delete \
   --provider aws \
   --region us-east-1 \
   --cluster-id demo-aws \
-  --profile tier-small@1.0.0 \
   --github-org "$GITHUB_ORG"
 ```
 
@@ -470,7 +462,6 @@ kubespin delete \
   --gcp-project kubernetes-dev-502710 \
   --region us-central1 \
   --cluster-id demo-gcp \
-  --profile tier-small@1.0.0 \
   --github-org "$GITHUB_ORG" \
   --yes
 ```
@@ -481,8 +472,9 @@ kubespin delete --spec ./cluster.yaml \
   --github-org "$GITHUB_ORG" --yes
 ```
 
-`delete` validates a full spec exactly like `apply`, which is why
-`--profile` appears here too even though teardown never resolves addons.
+`delete` validates a full spec exactly like `apply`, which is why `--size`
+is accepted here too (defaulting to `small`) even though teardown never
+resolves addons.
 Several other flags (`--instance-type`, `--min-size`, `--max-size`,
 `--desired-size`, `--disk-size`, `--kubernetes-version`, the CIDR flags) are
 accepted for spec compatibility and ignored.

@@ -140,7 +140,7 @@ func nodeConfig(pool core.NodePool) *containerpb.NodeConfig {
 // A regional GKE control plane otherwise defaults an unzoned node pool's
 // Locations to every zone in the region, which silently multiplies
 // InitialNodeCount/DesiredSize per zone instead of treating it as the pool's
-// total node count — a tier-small pool asking for 2 nodes in a 3-zone region
+// total node count — a small pool asking for 2 nodes in a 3-zone region
 // gets 6, blowing through regional disk/CPU quota for no operator-visible
 // reason. Pinning to one zone keeps DesiredSize meaning what it says; the
 // control plane itself stays regional (multi-zone) regardless.

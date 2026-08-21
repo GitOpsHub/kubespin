@@ -21,7 +21,7 @@ func seedClusterRepo(t *testing.T, rp repo.Provisioner, spec core.ClusterSpec, p
 
 func builtinTierSmallSpec(id core.ClusterID) core.ClusterSpec {
 	spec := auditTestSpec(id)
-	spec.Profile = core.ProfileRef{Name: "tier-small", Version: "1.0.0"}
+	spec.Size = core.SizeSmall
 	return spec
 }
 
@@ -30,7 +30,7 @@ func TestUpdateOne_PinsComponentVersion(t *testing.T) {
 	resolver := catalog.NewBuiltinResolver()
 	spec := builtinTierSmallSpec("team-a")
 
-	profile, err := resolver.Resolve(context.Background(), spec.Profile)
+	profile, err := resolver.Resolve(context.Background(), spec.Size)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestUpdateOne_Idempotent(t *testing.T) {
 	resolver := catalog.NewBuiltinResolver()
 	spec := builtinTierSmallSpec("team-a")
 
-	profile, err := resolver.Resolve(context.Background(), spec.Profile)
+	profile, err := resolver.Resolve(context.Background(), spec.Size)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestUpdateOne_UnknownComponentErrors(t *testing.T) {
 	resolver := catalog.NewBuiltinResolver()
 	spec := builtinTierSmallSpec("team-a")
 
-	profile, err := resolver.Resolve(context.Background(), spec.Profile)
+	profile, err := resolver.Resolve(context.Background(), spec.Size)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestUpdate_RunsAcrossEveryMatchingCluster(t *testing.T) {
 	resolver := catalog.NewBuiltinResolver()
 
 	specs := []core.ClusterSpec{builtinTierSmallSpec("team-a"), builtinTierSmallSpec("team-b")}
-	profile, err := resolver.Resolve(context.Background(), specs[0].Profile)
+	profile, err := resolver.Resolve(context.Background(), specs[0].Size)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestUpdate_CanaryWaveFailureSkipsTheRest(t *testing.T) {
 	// team-a sorts first (canary), but its repository is never seeded, so its
 	// update fails. team-b is fully seeded and would otherwise succeed.
 	specs := []core.ClusterSpec{builtinTierSmallSpec("team-a"), builtinTierSmallSpec("team-b")}
-	profile, err := resolver.Resolve(context.Background(), specs[0].Profile)
+	profile, err := resolver.Resolve(context.Background(), specs[0].Size)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestUpdate_CleanCanaryWaveRollsToTheRest(t *testing.T) {
 	resolver := catalog.NewBuiltinResolver()
 
 	specs := []core.ClusterSpec{builtinTierSmallSpec("team-a"), builtinTierSmallSpec("team-b")}
-	profile, err := resolver.Resolve(context.Background(), specs[0].Profile)
+	profile, err := resolver.Resolve(context.Background(), specs[0].Size)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestUpdate_PreservesExistingOverrides(t *testing.T) {
 
 	spec := builtinTierSmallSpec("team-a")
 	spec.Overrides = []core.AddonOverride{{Name: "fleet-status-reporter", Version: "0.2.0"}}
-	profile, err := resolver.Resolve(context.Background(), spec.Profile)
+	profile, err := resolver.Resolve(context.Background(), spec.Size)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}

@@ -25,7 +25,7 @@ func testSpec() core.ClusterSpec {
 		NodePools: []core.NodePool{{
 			Name: "default", InstanceType: "m6i.large", MinSize: 1, MaxSize: 3, DesiredSize: 2,
 		}},
-		Profile: core.ProfileRef{Name: "tier-small", Version: "1.0.0"},
+		Size:    core.SizeSmall,
 		Subnets: []string{"subnet-aaa", "subnet-bbb"},
 	}
 }

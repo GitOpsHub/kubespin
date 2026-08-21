@@ -157,13 +157,13 @@ func (np NodePool) Validate() error {
 // ClusterSpec is the desired state of one cluster: the contents of the
 // cluster.yaml in that cluster's repository.
 type ClusterSpec struct {
-	ID                ClusterID  `yaml:"id" json:"id"`
-	Provider          Provider   `yaml:"provider" json:"provider"`
-	Region            string     `yaml:"region" json:"region"`
-	Access            Access     `yaml:"access" json:"access"`
-	KubernetesVersion string     `yaml:"kubernetesVersion,omitempty" json:"kubernetesVersion,omitempty"`
-	NodePools         []NodePool `yaml:"nodePools" json:"nodePools"`
-	Profile           ProfileRef `yaml:"profile" json:"profile"`
+	ID                ClusterID   `yaml:"id" json:"id"`
+	Provider          Provider    `yaml:"provider" json:"provider"`
+	Region            string      `yaml:"region" json:"region"`
+	Access            Access      `yaml:"access" json:"access"`
+	KubernetesVersion string      `yaml:"kubernetesVersion,omitempty" json:"kubernetesVersion,omitempty"`
+	NodePools         []NodePool  `yaml:"nodePools" json:"nodePools"`
+	Size              ClusterSize `yaml:"size" json:"size"`
 
 	// Zone, when set, requests a zonal GKE cluster (control plane in a single
 	// zone) instead of the default regional cluster. GCP-only; ignored on
@@ -288,8 +288,8 @@ func (s ClusterSpec) Validate() error {
 		seen[np.Name] = struct{}{}
 	}
 
-	if err := s.Profile.Validate(); err != nil {
-		errs = append(errs, err)
+	if !s.Size.Valid() {
+		errs = append(errs, fmt.Errorf("%w: size %q must be one of small, medium, large", ErrInvalidSpec, s.Size))
 	}
 
 	seenOverride := make(map[string]struct{}, len(s.Overrides))

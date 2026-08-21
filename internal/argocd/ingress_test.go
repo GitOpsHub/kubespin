@@ -106,7 +106,7 @@ func TestApplyIngressDefaults_PreservesOtherValues(t *testing.T) {
 
 func TestApplyProfileIngressDefaults_OnlyPatchesIngressAddons(t *testing.T) {
 	profile := core.Profile{
-		Name: "tier-small", Version: "1.0.0",
+		Name: "small",
 		Addons: []core.AddonRef{
 			{Name: "ingress-nginx", Values: map[string]any{"ingress": map[string]any{"exposure": "external"}}},
 			{Name: "cert-manager"},

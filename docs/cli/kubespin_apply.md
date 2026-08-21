@@ -39,24 +39,23 @@ kubespin apply [flags]
 ## Examples
 
 ```bash
-  # AWS, private API server, default node pool
+  # AWS, private API server, default node pool, default size (small)
   kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
-    --access private --profile tier-small@1.0.0 \
+    --access private \
     --github-org GitOpsHub
 
   # GCP, public API server, larger node pool — authorized-cidrs is required on GCP
   # for the operator's own machine to reach the endpoint and install Argo CD
   kubespin apply --provider gcp --gcp-project kubernetes-dev-502710 --region us-central1 \
     --cluster-id demo-gcp --access public --authorized-cidrs 203.0.113.4/32 \
-    --profile tier-small@1.0.0 \
+    --size small \
     --instance-type e2-standard-4 --desired-size 3 \
     --github-org GitOpsHub
 
-  # Azure, resolving addons from a platform-profiles repo instead of the builtin catalog
+  # Azure, medium size (adds Velero + Falco onto the default addon set)
   kubespin apply --provider azure --azure-subscription 3df9adbd-ea55-4c92-964c-0252031979de --region eastus \
-    --cluster-id demo-azure --access private --profile tier-standard@1.0.0 \
+    --cluster-id demo-azure --access private --size medium \
     --instance-type Standard_D4s_v7 \
-    --profiles-repo platform-profiles \
     --github-org GitOpsHub
 
   # Preview what apply would do without touching any cloud
@@ -84,12 +83,11 @@ kubespin apply [flags]
       --kubernetes-version string   Kubernetes minor version, e.g. 1.34
       --max-size int32              maximum size of the default node pool (--spot defaults this lower, see --spot) (default 5)
       --min-size int32              minimum size of the default node pool (--spot defaults this lower, see --spot) (default 1)
-      --profile string              profile reference from platform-profiles, e.g. tier-small@1.0.0
-      --profiles-repo string        platform-profiles repository name to resolve profiles from (uses the builtin catalog if empty)
       --provider string             cloud provider: aws, gcp, or azure
       --region string               cloud region
+      --size string                 cluster size: small, medium, or large — determines the default addon set. Argo CD and an autoscaler (Karpenter on AWS, cluster-autoscaler on GCP/Azure) ship at every size; medium adds Velero+Falco, large adds strict Kyverno policies + audit logging + OTel (default "small")
       --spec string                 path to a cluster.yaml describing the cluster
-      --spot                        one flag for the cheapest dev/learning cluster on any cloud: spot/preemptible instances (AWS/GCP; AKS's default pool must stay on-demand, so this part is a no-op on --provider azure), plus a smaller default --instance-type/--min-size/--max-size/--desired-size/--disk-size sized to still run the tier-small addon set (t3.medium/e2-medium/Standard_B2s, 1/2/1 nodes) — pass any of those flags explicitly to override just that piece. On GCP this also switches to a zonal cluster (eligible for GCP's free zonal-cluster tier) and gives nodes public IPs instead of provisioning Cloud NAT, unless --zone/--gcp-public-nodes override it.
+      --spot                        one flag for the cheapest dev/learning cluster on any cloud: spot/preemptible instances (AWS/GCP; AKS's default pool must stay on-demand, so this part is a no-op on --provider azure), plus a smaller default --instance-type/--min-size/--max-size/--desired-size/--disk-size sized to still run the default (--size small) addon set (t3.medium/e2-medium/Standard_B2s, 1/2/1 nodes) — pass any of those flags explicitly to override just that piece. On GCP this also switches to a zonal cluster (eligible for GCP's free zonal-cluster tier) and gives nodes public IPs instead of provisioning Cloud NAT, unless --zone/--gcp-public-nodes override it.
       --subnet-cidr string          address prefix for the subnet kubespin creates when --subnets is omitted (Azure default 10.0.1.0/24, GCP default 10.0.0.0/20)
       --subnets strings             existing subnets to place the cluster in
       --update-kubeconfig           update the local kubeconfig with a context for this cluster once apply succeeds, by shelling out to aws/gcloud/az (disable with --update-kubeconfig=false) (default true)

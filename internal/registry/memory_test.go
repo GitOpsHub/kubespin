@@ -107,7 +107,7 @@ func TestNewRecord(t *testing.T) {
 		Provider: core.ProviderAWS,
 		Region:   "us-east-1",
 		Access:   core.AccessPrivate,
-		Profile:  core.ProfileRef{Name: "tier-small", Version: "1.0.0"},
+		Size:     core.SizeSmall,
 	}
 
 	rec := NewRecord(spec, now)

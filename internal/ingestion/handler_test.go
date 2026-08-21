@@ -17,7 +17,7 @@ func seedClusterWithIssuer(t *testing.T, reg registry.Registry, id core.ClusterI
 	t.Helper()
 	spec := core.ClusterSpec{
 		ID: id, Provider: core.ProviderAWS, Region: "us-east-1", Access: core.AccessPrivate,
-		Profile: core.ProfileRef{Name: "tier-small", Version: "1.0.0"},
+		Size: core.SizeSmall,
 	}
 	if _, err := reg.Create(context.Background(), registry.NewRecord(spec, time.Now())); err != nil {
 		t.Fatalf("seeding %s: %v", id, err)

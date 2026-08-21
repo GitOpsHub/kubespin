@@ -35,7 +35,7 @@ func Merge(profile core.Profile, overrides []core.AddonOverride) (core.Profile, 
 	for _, o := range overrides {
 		idx, ok := byName[o.Name]
 		if !ok {
-			return core.Profile{}, fmt.Errorf("%w: %q in profile %s", ErrUnknownOverride, o.Name, profile.Ref())
+			return core.Profile{}, fmt.Errorf("%w: %q in profile %s", ErrUnknownOverride, o.Name, profile.Name)
 		}
 
 		addon := merged.Addons[idx]

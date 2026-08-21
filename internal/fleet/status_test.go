@@ -13,7 +13,7 @@ func seedRecord(t *testing.T, reg registry.Registry, id core.ClusterID, provider
 
 	spec := core.ClusterSpec{
 		ID: id, Provider: provider, Region: "us-east-1", Access: core.AccessPrivate,
-		Profile: core.ProfileRef{Name: "tier-small", Version: "1.0.0"},
+		Size: core.SizeSmall,
 	}
 	rec, err := reg.Create(t.Context(), registry.NewRecord(spec, now))
 	if err != nil {

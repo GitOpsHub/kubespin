@@ -33,12 +33,10 @@ const (
 	installNamespace = Namespace
 )
 
-// DefaultAddon is what Install uses when a cluster's resolved profile carries
-// no "argocd" catalog entry of its own — true of tier-small today (M4's
-// catalog only tracks Argo CD's version starting at tier-standard, so `fleet
-// audit`/`fleet update` can pin it there). Argo CD still has to be installed
-// on every tier regardless: app-of-apps cannot sync into a cluster that
-// doesn't have it yet.
+// DefaultAddon is the catalog entry every size includes (internal/catalog's
+// baseAddons), and what Install falls back to on the rare chance a resolved
+// profile carries none — Argo CD has to be installed on every cluster
+// regardless: app-of-apps cannot sync into a cluster that doesn't have it yet.
 var DefaultAddon = core.AddonRef{
 	Name:       "argocd",
 	Chart:      "argo-cd",

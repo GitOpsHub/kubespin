@@ -16,7 +16,7 @@ func timeNow() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 func minimalProfile() core.Profile {
 	return core.Profile{
-		Name: "tier-small", Version: "1.0.0",
+		Name:   "small",
 		Addons: []core.AddonRef{{Name: "x", Chart: "x", Repository: "https://x", Version: "1.0.0", Namespace: "x"}},
 	}
 }

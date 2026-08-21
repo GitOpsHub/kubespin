@@ -193,7 +193,7 @@ churn the output on every run.
 A command's `Example` block is the *only* place the reference gets examples
 from, so it has to be runnable as written: every flag the command actually
 requires, spelled out. `apply` and `delete` validate a whole `ClusterSpec`,
-which means an example missing `--profile` fails before doing anything; every
+which means an example missing `--cluster-id` fails before doing anything; every
 registry-touching command needs the Fleet Registry DSN, which has no default
 and — deliberately — no flag, so it must come from `KUBESPIN_REGISTRY_DSN` (or
 a `.env` file); `fleet bootstrap` is the one exception, needing its own

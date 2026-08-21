@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository state
 
-Past greenfield — `apply`/`delete`/`fleet bootstrap|update|audit|status`/`login`/`status`/`logout` are all implemented and wired into the CLI, on all three clouds. [IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md](IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md) is still the authoritative source for scope and milestone sequencing; check its boxes as work lands rather than tracking status elsewhere.
+Past greenfield — `apply`/`delete`/`fleet bootstrap|update|audit|status`/`login`/`status`/`logout` are all implemented and wired into the CLI, on all three clouds.
 
 Build/test/lint commands (see [Makefile](Makefile) for the exact targets):
 
@@ -22,8 +22,6 @@ make docs                     # regenerates docs/cli/*.md from the command tree;
 ## What is being built
 
 A Go CLI (cobra + viper) that provisions and manages Kubernetes clusters across EKS, GKE, and AKS, in both private and public access modes. Each cluster gets its own GitHub repo and its own **local** Argo CD instance that syncs from that repo — there is no central Argo CD hub and **no inbound network access to any cluster**. State flows the other direction: an in-cluster `fleet-status-reporter` CronJob pushes signed status to a central ingestion API.
-
-Read the implementation plan before making architectural decisions; it is a companion to ADR-001 (not in this repo) and is the authoritative source for scope, sequencing, and acceptance criteria.
 
 ## Architecture invariants
 
@@ -47,13 +45,13 @@ cmd/kubespin/                 main() — delegates entirely to internal/cli.NewR
 cmd/ingestion/                Central Ingestion API handler (Go, deployed to Lambda)
 cmd/fleet-status-reporter/    in-cluster CronJob: queries local Argo CD, pushes signed status
 internal/cli/                 cobra command tree: apply, delete, fleet bootstrap|update|audit|status, login, status, logout
-internal/core/                shared domain types: ClusterID, ClusterSpec, Profile, AddonRef, Access, NodePool
+internal/core/                shared domain types: ClusterID, ClusterSpec, ClusterSize, Profile, AddonRef, Access, NodePool
 internal/auth/                operator-facing cloud auth: shells out to aws/gcloud/az, backs `login`/`status`/`logout` and the apply/delete preflight
 internal/fleetinfra/          SDK converge engine behind `fleet bootstrap`; provisions the Central Ingestion API (Lambda/IAM/API Gateway) only — the Postgres Fleet Registry self-migrates its own schema, not provisioned here
 internal/provisioner/{aws,gcp,azure}   ClusterProvisioner + IdentityProvisioner + NetworkProvisioner impls (EKS/GKE/AKS)
 internal/repo/                RepoProvisioner over GitHub Enterprise (go-github): Exists/Create/Clone/Push/Archive
 internal/registry/            Fleet Registry client + lease/locking
-internal/catalog/             profile resolution (tier-small/standard/regulated + per-cluster override patches)
+internal/catalog/             size resolution (small/medium/large, fully builtin) + per-cluster override patches
 internal/argocd/              app-of-apps manifest rendering, ingress/Gateway access-mode templating, Argo CD install
 internal/orchestrator/        per-cluster phase state machine (apply) and reverse teardown (delete)
 internal/fleet/               fleet-wide operations: audit, update, status, all read/write through internal/registry
@@ -68,16 +66,16 @@ internal/tools/docsgen/       regenerates docs/cli/*.md from the cobra command t
 cloud's `ClusterProvisioner` reads better than a same-named type spread
 across two directories per cloud.
 
-Shared domain types (`ClusterID`, `ClusterSpec`, `Profile`, `AddonRef`) live in `internal/core` and are consumed by all of the above.
+Shared domain types (`ClusterID`, `ClusterSpec`, `ClusterSize`, `Profile`, `AddonRef`) live in `internal/core` and are consumed by all of the above.
 
-M4's real `platform-profiles` repo now exists (`GitOpsHub/platform-profiles`, private, one YAML per `profiles/<name>/<version>.yaml`) — `apply`/`fleet` pick it up automatically via `--profiles-repo platform-profiles` (`internal/cli/apply.go` `buildResolver`; empty flag falls back to `catalog.NewBuiltinResolver()`, which still hardcodes `tier-small`/`tier-standard`/`tier-regulated` at `1.0.0` for that fallback path only). The real repo's tier names differ from the builtin catalog's — it has `tier-small`/`tier-medium`/`tier-large`, not `tier-standard`/`tier-regulated` — and versions advance independently per tier (`tier-small` is at `1.2.0`; `tier-medium`/`tier-large` are still at `1.1.0`). There is no "latest" keyword anywhere in profile resolution (`internal/cli/spec.go` `parseProfileRef` requires the literal `name@version`); callers must always name an exact version that exists in whichever resolver is active.
+There is no external profiles repository — the `GitOpsHub/platform-profiles` repo this project depended on for a time is decommissioned and no longer consulted. `--size small|medium|large` (defaulting to `small`) is fully resolved from the builtin catalog (`internal/catalog`, `catalog.NewBuiltinResolver()`); changing what a size includes means shipping a new kubespin build, not editing an external repo or pinning a version. Every size carries Argo CD and a cloud-appropriate autoscaler — Karpenter on AWS (EKS-only technology, no GCP/Azure port exists), `cluster-autoscaler` on GCP/Azure — never both on the same cluster. `medium` adds Velero + Falco onto `small`'s set; `large` adds strict Kyverno policies + audit logging + OTel onto `medium`'s. A cluster needing an addon outside its size's set uses the per-cluster override patch (`core.AddonOverride` in its own `cluster.yaml`, `internal/catalog/merge.go`), not a separate repo.
 
 ## Cluster repo contract
 
 Each provisioned cluster's GitHub repo holds three files, and their roles must stay distinct:
 
 - `cluster.yaml` — desired infra (provider, region, access mode, node pools). Drives cloud SDK calls; `fleet audit` diffs live infra against it.
-- `addons.yaml` — resolved addon set (profile + override patch, flattened without duplicating the base). Argo CD syncs from this.
+- `addons.yaml` — resolved addon set (size tier + override patch, flattened without duplicating the base). Argo CD syncs from this.
 - `.state.yaml` — last-applied hash used for idempotent diffing. Not user-authored.
 
 Addons are delivered app-of-apps: one root Argo CD Application discovers one Application per addon, so addons sync and fail independently. Argo CD itself is installed via the Helm Go library (`helm.sh/helm/v3/pkg/action`), never by shelling out to `helm` or `kubectl`. The cluster's own repository is always created private, so `apply` also applies a `repo-creds` Secret (`argocd.argoproj.io/secret-type: repository`) alongside the root Application — without it Argo CD's first reconcile fails with "authentication required" and never discovers a single addon.
@@ -100,20 +98,19 @@ make lambda
 kubespin fleet bootstrap --account-id <12-digit-id> --region us-east-1 --dry-run
 kubespin fleet bootstrap --account-id <12-digit-id> --region us-east-1
 
-# Apply — AWS, letting kubespin create the VPC/subnets
+# Apply — AWS, letting kubespin create the VPC/subnets, default size (small)
 kubespin apply --provider aws --cluster-id eks-demo-01 --region us-east-1 \
-  --access private --github-org GitOpsHub --profile tier-small@1.0.0 --dry-run
+  --access private --github-org GitOpsHub --dry-run
 
 # Apply — GCP, same idea (subnetwork auto-created if --subnets is omitted)
 kubespin apply --provider gcp --gcp-project kubernetes-dev-502710 --cluster-id gke-demo-01 \
-  --region us-central1 --access private --github-org GitOpsHub \
-  --profile tier-small@1.0.0
+  --region us-central1 --access private --github-org GitOpsHub
 
-# Apply — Azure, with an operator-supplied subnet instead of an auto-created one
+# Apply — Azure, with an operator-supplied subnet instead of an auto-created one, medium size
 kubespin apply --provider azure --azure-subscription 3df9adbd-ea55-4c92-964c-0252031979de \
-  --cluster-id aks-demo-01 --region eastus --access private \
+  --cluster-id aks-demo-01 --region eastus --access private --size medium \
   --subnets /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet> \
-  --github-org GitOpsHub --profile tier-small@1.0.0
+  --github-org GitOpsHub
 
 # Fleet-wide (operate across clusters, filtered rather than single-cluster)
 kubespin fleet status --stale-only
@@ -127,6 +124,3 @@ kubespin delete --cluster-id eks-demo-01
 
 `KUBESPIN_REGISTRY_DSN` has no default and is never a flag (a flag would leak the database password into shell history/process listings) — it must come from the environment, a `.env` file (auto-loaded), or the config file's `registry-dsn` key, since silently defaulting risks splitting a fleet across two registries with no error. See [.env.example](.env.example) for the env vars real (non-dry-run) `apply`/`delete` need (`GITHUB_TOKEN`, `GITHUB_ORG`, `KUBESPIN_REGISTRY_DSN`).
 
-## Working with the plan
-
-Milestones are gates — the plan explicitly says not to start the next until the current one's acceptance criteria pass **on all three clouds**. M2 (cluster + identity provisioning) is the hard gate before any addon work. When completing work, check off the relevant boxes in the plan rather than tracking status elsewhere.

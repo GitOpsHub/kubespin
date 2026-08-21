@@ -54,7 +54,7 @@ type Record struct {
 	Provider core.Provider
 	Region   string
 	Access   core.Access
-	Profile  core.ProfileRef
+	Size     core.ClusterSize
 
 	// OIDCIssuer is the cluster's own workload identity issuer URL, recorded
 	// once identity binding (M2) succeeds. The Central Ingestion API (M6)
@@ -144,7 +144,7 @@ func NewRecord(spec core.ClusterSpec, now time.Time) Record {
 		Provider:  spec.Provider,
 		Region:    spec.Region,
 		Access:    spec.Access,
-		Profile:   spec.Profile,
+		Size:      spec.Size,
 		Version:   1,
 		CreatedAt: now,
 		UpdatedAt: now,

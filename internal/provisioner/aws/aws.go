@@ -170,6 +170,6 @@ func tags(spec core.ClusterSpec) map[string]string {
 	return map[string]string{
 		"ManagedBy":        "kubespin",
 		"kubespin/cluster": spec.ID.String(),
-		"kubespin/profile": spec.Profile.String(),
+		"kubespin/size":    spec.Size.String(),
 	}
 }

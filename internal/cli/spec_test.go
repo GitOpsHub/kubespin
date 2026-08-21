@@ -53,9 +53,7 @@ kubernetesVersion: "1.34"
 subnets:
   - subnet-aaa
   - subnet-bbb
-profile:
-  name: tier-small
-  version: 1.0.0
+size: small
 nodePools:
   - name: default
     instanceType: m6i.large
@@ -84,8 +82,8 @@ func TestLoadSpec_FromFile(t *testing.T) {
 	if len(spec.Subnets) != 2 {
 		t.Errorf("Subnets = %v, want both from the file", spec.Subnets)
 	}
-	if spec.Profile.Name != "tier-small" || spec.Profile.Version != "1.0.0" {
-		t.Errorf("Profile = %+v, want tier-small@1.0.0", spec.Profile)
+	if spec.Size != core.SizeSmall {
+		t.Errorf("Size = %+v, want small", spec.Size)
 	}
 }
 
@@ -94,7 +92,6 @@ func TestLoadSpec_FromFlags(t *testing.T) {
 		"--cluster-id", "team-alpha",
 		"--provider", "aws",
 		"--region", "eu-west-1",
-		"--profile", "tier-small@1.0.0",
 		"--subnets", "subnet-aaa,subnet-bbb",
 	))
 	if err != nil {
@@ -130,7 +127,6 @@ func TestLoadSpec_Spot_PicksCheapDefaultsPerProvider(t *testing.T) {
 				"--cluster-id", "team-alpha",
 				"--provider", tc.provider,
 				"--region", tc.region,
-				"--profile", "tier-small@1.0.0",
 				"--spot",
 			}
 			if tc.provider == "gcp" {
@@ -160,7 +156,6 @@ func TestLoadSpec_Spot_ExplicitFlagsOverrideTheCheapDefault(t *testing.T) {
 		"--cluster-id", "team-alpha",
 		"--provider", "aws",
 		"--region", "us-east-1",
-		"--profile", "tier-small@1.0.0",
 		"--spot",
 		"--instance-type", "t3.large",
 		"--max-size", "4",
@@ -188,7 +183,6 @@ func TestLoadSpec_Spot_GCPImpliesZonalAndPublicNodes(t *testing.T) {
 		"--cluster-id", "team-alpha",
 		"--provider", "gcp",
 		"--region", "us-central1",
-		"--profile", "tier-small@1.0.0",
 		"--subnets", "projects/p/regions/us-central1/subnetworks/default",
 		"--spot",
 	))
@@ -209,7 +203,6 @@ func TestLoadSpec_Spot_GCPOverridesRespected(t *testing.T) {
 		"--cluster-id", "team-alpha",
 		"--provider", "gcp",
 		"--region", "us-central1",
-		"--profile", "tier-small@1.0.0",
 		"--subnets", "projects/p/regions/us-central1/subnetworks/default",
 		"--spot",
 		"--gcp-public-nodes=false",
@@ -277,12 +270,12 @@ func TestLoadSpec_Invalid(t *testing.T) {
 		wantMsg string
 	}{
 		"no cluster id": {
-			[]string{"--provider", "aws", "--region", "us-east-1", "--subnets", "a,b", "--profile", "tier-small@1.0.0"},
+			[]string{"--provider", "aws", "--region", "us-east-1", "--subnets", "a,b"},
 			"cluster id",
 		},
-		"bad profile reference": {
-			[]string{"--cluster-id", "team-alpha", "--provider", "aws", "--region", "us-east-1", "--subnets", "a,b", "--profile", "tier-small"},
-			"name@version",
+		"bad size": {
+			[]string{"--cluster-id", "team-alpha", "--provider", "aws", "--region", "us-east-1", "--subnets", "a,b", "--size", "extra-large"},
+			"size",
 		},
 		"missing file": {
 			[]string{"--spec", "/nonexistent/cluster.yaml"},
@@ -300,20 +293,6 @@ func TestLoadSpec_Invalid(t *testing.T) {
 				t.Errorf("error %q does not mention %q", err, tc.wantMsg)
 			}
 		})
-	}
-}
-
-func TestParseProfileRef(t *testing.T) {
-	ref, err := parseProfileRef("tier-regulated@2.1.0")
-	if err != nil {
-		t.Fatalf("parseProfileRef: %v", err)
-	}
-	if ref.Name != "tier-regulated" || ref.Version != "2.1.0" {
-		t.Errorf("ref = %+v, want tier-regulated@2.1.0", ref)
-	}
-
-	if _, err := parseProfileRef("tier-small"); !errors.Is(err, core.ErrInvalidSpec) {
-		t.Errorf("error = %v, want one wrapping ErrInvalidSpec", err)
 	}
 }
 
@@ -336,7 +315,6 @@ func TestDelete_LoadSpecFromFlags(t *testing.T) {
 		"--cluster-id", "team-payments-prod",
 		"--provider", "aws",
 		"--region", "us-east-1",
-		"--profile", "tier-small@1.0.0",
 		"--subnets", "subnet-aaa,subnet-bbb",
 	))
 	if err != nil {
@@ -356,7 +334,6 @@ func TestLoadSpec_AllowsOmittedSubnets(t *testing.T) {
 				"--cluster-id", "team-alpha",
 				"--provider", provider,
 				"--region", "eastus2",
-				"--profile", "tier-small@1.0.0",
 			))
 			if err != nil {
 				t.Fatalf("loadSpec: %v", err)
@@ -375,7 +352,6 @@ func TestLoadSpec_NetworkCIDRFlags(t *testing.T) {
 		"--cluster-id", "team-alpha",
 		"--provider", "aws",
 		"--region", "us-east-1",
-		"--profile", "tier-small@1.0.0",
 		"--vpc-cidr", "172.16.0.0/16",
 	))
 	if err != nil {
@@ -389,7 +365,6 @@ func TestLoadSpec_NetworkCIDRFlags(t *testing.T) {
 		"--cluster-id", "team-alpha",
 		"--provider", "aws",
 		"--region", "us-east-1",
-		"--profile", "tier-small@1.0.0",
 		"--vpc-cidr", "not-a-cidr",
 	))
 	if !errors.Is(err, core.ErrInvalidSpec) {
@@ -400,7 +375,6 @@ func TestLoadSpec_NetworkCIDRFlags(t *testing.T) {
 		"--cluster-id", "team-alpha",
 		"--provider", "gcp",
 		"--region", "us-central1",
-		"--profile", "tier-small@1.0.0",
 		"--subnet-cidr", "10.1.0.0/20",
 	))
 	if err != nil {

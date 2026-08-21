@@ -439,10 +439,10 @@ func (n names) vnet() string                           { return "kubespin-" + n.
 func (n names) subnet() string                         { return "kubespin-" + n.spec.ID.String() + "-subnet" }
 
 func tags(spec core.ClusterSpec) map[string]*string {
-	managedBy, cluster, profile := "kubespin", spec.ID.String(), spec.Profile.String()
+	managedBy, cluster, size := "kubespin", spec.ID.String(), spec.Size.String()
 	return map[string]*string{
 		"ManagedBy":        &managedBy,
 		"kubespin-cluster": &cluster,
-		"kubespin-profile": &profile,
+		"kubespin-size":    &size,
 	}
 }

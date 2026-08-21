@@ -33,7 +33,7 @@ type fakeAWS struct {
 	nodeGroups map[string]*ekstypes.Nodegroup
 	addons     map[string]*ekstypes.Addon // name -> addon
 	roles      map[string]string          // name -> arn
-	rolePolicy map[string]string // name -> assume role policy document
+	rolePolicy map[string]string          // name -> assume role policy document
 	attached   map[string][]string
 	oidc       map[string]string // arn -> url host
 	sgRules    []ec2types.SecurityGroupRule
@@ -661,7 +661,7 @@ func testSpec() core.ClusterSpec {
 		NodePools: []core.NodePool{{
 			Name: "default", InstanceType: "m6i.large", MinSize: 1, MaxSize: 5, DesiredSize: 3,
 		}},
-		Profile: core.ProfileRef{Name: "tier-small", Version: "1.0.0"},
+		Size: core.SizeSmall,
 	}
 }
 

@@ -478,12 +478,12 @@ func labels(spec core.ClusterSpec) map[string]string {
 	return map[string]string{
 		"managed-by":       "kubespin",
 		"kubespin-cluster": spec.ID.String(),
-		"kubespin-profile": sanitizeLabelValue(spec.Profile.String()),
+		"kubespin-size":    sanitizeLabelValue(spec.Size.String()),
 	}
 }
 
-// sanitizeLabelValue keeps a profile ref ("tier-small@1.0.0") within GCP
-// label value rules: lowercase letters, digits, hyphens, underscores.
+// sanitizeLabelValue keeps a value ("tier-small") within GCP label value
+// rules: lowercase letters, digits, hyphens, underscores.
 func sanitizeLabelValue(s string) string {
 	out := make([]byte, 0, len(s))
 	for i := 0; i < len(s); i++ {

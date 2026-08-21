@@ -28,8 +28,8 @@ var defaultInstanceType = map[core.Provider]string{
 }
 
 // spotNodePoolDefault is the node pool shape --spot implies unless the
-// operator overrides a piece of it explicitly. tier-small's addon set
-// (cilium, kube-prometheus-stack, ingress-nginx, kyverno, ...) needs more
+// operator overrides a piece of it explicitly. The default (size=small)
+// addon set (cilium, kube-prometheus-stack, ingress-nginx, kyverno, ...) needs more
 // headroom than a free-tier micro instance provides — these are the
 // smallest instance types that reliably schedule it, not each cloud's
 // absolute cheapest SKU, plus a small node count and disk size to match.
@@ -132,17 +132,16 @@ func applySpecFlags(cmd *cobra.Command, spec *core.ClusterSpec) error {
 		}
 	}
 
-	if flags.Changed("profile") || spec.Profile.Name == "" {
-		profile, err := flags.GetString("profile")
+	if flags.Changed("size") || spec.Size == "" {
+		size, err := flags.GetString("size")
 		if err != nil {
-			return fmt.Errorf("reading --profile: %w", err)
+			return fmt.Errorf("reading --size: %w", err)
 		}
-		if profile != "" {
-			ref, err := parseProfileRef(profile)
-			if err != nil {
-				return err
+		if size != "" {
+			if !core.ClusterSize(size).Valid() {
+				return fmt.Errorf("%w: size %q must be one of small, medium, large", core.ErrInvalidSpec, size)
 			}
-			spec.Profile = ref
+			spec.Size = core.ClusterSize(size)
 		}
 	}
 
@@ -270,15 +269,4 @@ func applyNodePoolFlags(cmd *cobra.Command, spec *core.ClusterSpec) error {
 		CapacityType: capacityType,
 	}}
 	return nil
-}
-
-// parseProfileRef splits a name@version reference.
-func parseProfileRef(raw string) (core.ProfileRef, error) {
-	for i := len(raw) - 1; i >= 0; i-- {
-		if raw[i] == '@' {
-			return core.ProfileRef{Name: raw[:i], Version: raw[i+1:]}, nil
-		}
-	}
-	return core.ProfileRef{}, fmt.Errorf(
-		"%w: profile %q must be name@version, for example tier-small@1.0.0", core.ErrInvalidSpec, raw)
 }

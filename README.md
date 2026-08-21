@@ -53,14 +53,14 @@ authenticate, `apply`, confirm with `fleet status`.
 
 The Fleet Registry DSN has no usable default, so it is never a flag —
 `apply`/`delete`/`fleet` read it only from `KUBESPIN_REGISTRY_DSN` (or a
-`.env` file). `--profile` recurs instead because `apply`/`delete` validate a
-full spec, and a profile reference is part of one.
+`.env` file). `--size` recurs instead — it defaults to `small`, but every
+example below sets it explicitly to show where a bigger cluster changes.
 
 ```bash
-# AWS, private cluster
+# AWS, private cluster, default size (small)
 kubespin login --only aws
 kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
-  --access private --profile tier-small@1.0.0 \
+  --access private \
   --github-org "$GITHUB_ORG"
 kubespin fleet status --phase ready
 ```
@@ -68,7 +68,7 @@ kubespin fleet status --phase ready
 ```bash
 # GCP, public cluster, custom node pool
 kubespin apply --provider gcp --gcp-project kubernetes-dev-502710 --region us-central1 \
-  --cluster-id demo-gcp --access public --profile tier-small@1.0.0 \
+  --cluster-id demo-gcp --access public --size small \
   --instance-type e2-standard-4 --desired-size 3 \
   --github-org "$GITHUB_ORG"
 ```
@@ -84,10 +84,10 @@ kubespin apply --provider gcp --gcp-project kubernetes-dev-502710 --region us-ce
 > [docs/examples.md](docs/examples.md#gcp-public-cluster-with-a-larger-node-pool).
 
 ```bash
-# Azure, resolving addons from a platform-profiles repo
+# Azure, medium size (adds Velero + Falco onto the default addon set)
 kubespin apply --provider azure --azure-subscription "$AZURE_SUBSCRIPTION_ID" \
   --region eastus --cluster-id demo-azure --access private \
-  --profile tier-standard@1.0.0 --profiles-repo platform-profiles \
+  --size medium \
   --github-org "$GITHUB_ORG"
 ```
 
@@ -105,7 +105,6 @@ kubespin fleet audit \
 ```bash
 # Tear down
 kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
-  --profile tier-small@1.0.0 \
   --github-org "$GITHUB_ORG" --yes
 ```
 
