@@ -31,6 +31,7 @@ here is cloud-specific to that pair.
 | [AWS-managed policy / OIDC constants](#aws-managed-policy-oidc-constants) | constants | aws.go | policy ARNs, OIDC thumbprint |
 | [`names`](#names-deterministic-resource-naming) | struct | aws.go | deterministic resource naming from cluster ID |
 | [`ClusterProvisioner`](#clusterprovisioner_1) | struct | cluster.go | EKS cluster + node group lifecycle |
+| [EKS-managed CSI addons](#eks-managed-csi-addons-ebsefs) | functions | cluster.go | `ensureCSIAddons`, `ensureAddon` — EBS/EFS CSI drivers via the EKS addon API |
 | [Role helpers](#role-helpers) | functions | cluster.go | `ensureRole`, `attachPolicies`, `eksServiceTrust` |
 | [Validation and misc](#validation-and-misc) | functions | cluster.go | `validateForEKS`, `findPool`, `record` |
 | [`IdentityProvisioner`](#identityprovisioner_1) | struct | identity.go | IRSA role + OIDC provider management |
@@ -329,7 +330,7 @@ Implements `provisioner.ClusterProvisioner` and (via `kubeauth.go`) `provisioner
         - Validates the spec (`validateForEKS`).
         - Ensures the EKS cluster service role exists with `AmazonEKSClusterPolicy` attached.
         - `Describe`s the cluster. If absent, calls `createCluster` and returns — node groups cannot attach until the control plane is active, so they are deferred to `Reconcile` once the caller has polled to active.
-        - If already active, calls `ensureNodeGroups` directly (covers a resumed run that crashed after cluster creation but before node groups).
+        - If already active, calls `ensureNodeGroups` then `ensureCSIAddons` directly (covers a resumed run that crashed after cluster creation but before node groups/addons).
     - `createCluster` issues `eks.CreateCluster` with:
 
     ```go
@@ -387,7 +388,7 @@ Implements `provisioner.ClusterProvisioner` and (via `kubeauth.go`) `provisioner
 
 ??? note "`Reconcile(ctx, spec) (provisioner.Change, error)`"
 
-    - **Behavior:** `Describe`s the cluster (errors if `StatusAbsent`, wrapping `provisioner.ErrNotFound`), then merges the `Change` from `reconcileAccess` and `ensureNodeGroups`.
+    - **Behavior:** `Describe`s the cluster (errors if `StatusAbsent`, wrapping `provisioner.ErrNotFound`), then merges the `Change` from `reconcileAccess`, `ensureNodeGroups`, and `ensureCSIAddons`.
     - `reconcileAccess`: compares `state.Access` to `spec.Access`; if they differ, calls `eks.UpdateClusterConfig` with the same `vpcConfig(spec)` used at creation, and reports a `Change` detail `"access <old> -> <new>"`.
     - `ensureNodeGroups`:
         - First ensures the node IAM role (`AmazonEKSWorkerNodePolicy`, `AmazonEKS_CNI_Policy`, `AmazonEC2ContainerRegistryReadOnly`) exists.
@@ -400,12 +401,50 @@ Implements `provisioner.ClusterProvisioner` and (via `kubeauth.go`) `provisioner
 
     - **Behavior:** tears down everything `Create` provisioned, not just the cluster resource itself — EKS's own `DeleteCluster` removes only the cluster, so nothing else here is cleaned up on its own:
         - `Describe`s first. If the cluster is not already `StatusAbsent`/`StatusDeleting`: lists node groups and deletes each (`DeleteNodegroup`) — node groups must go first because EKS refuses to delete a cluster with any attached; calls `waitForNodeGroupsGone` if any existed; deletes the `nodeRole` (nodes are fully terminated by this point, so its instance-profile job is done); requests `eks.DeleteCluster`.
-        - Unconditionally, regardless of which branch above ran: deletes the `clusterRole`, then — if `Describe` reported an `OIDCIssuer` — deletes the matching IAM OIDC provider via `deleteOIDCProvider` (found by issuer host, the same lookup `ensureOIDCProvider` uses, since nothing persists the ARN from creation time).
+        - Unconditionally, regardless of which branch above ran: deletes the `clusterRole` and the two CSI IRSA roles (`ebsCSIRole()`/`efsCSIRole()`), then — if `Describe` reported an `OIDCIssuer` — deletes the matching IAM OIDC provider via `deleteOIDCProvider` (found by issuer host, the same lookup `ensureOIDCProvider` uses, since nothing persists the ARN from creation time).
         - `NoSuchEntityException`/`ResourceNotFoundException` at any step converges rather than erroring, so a retried teardown resumes cleanly — including a retry against a cluster an earlier, interrupted run already left `StatusDeleting`, which still reaches the role/OIDC cleanup rather than short-circuiting past it.
         - **Known gap:** if a cluster finishes deleting entirely between one `Delete` call and the next, `Describe` can no longer report its OIDC issuer (EKS drops it once the cluster is gone), so a delete resumed only after that point cannot find the OIDC provider by issuer host and leaves it behind. Narrow — deletion takes minutes — but real.
     - `waitForNodeGroupsGone` polls `ListNodegroups` on `p.wait.Interval`/`p.wait.Timeout` (falling back to `provisioner.DefaultWaitOptions()` values if unset) until the list is empty, because `DeleteNodegroup` only accepts the request — draining and terminating nodes takes minutes, and `DeleteCluster` fails with `ResourceInUseException` the whole time.
     - `deleteRole(ctx, name)` — lists attached policies, detaches each (IAM refuses to delete a role with any still attached), then `DeleteRole`; `NoSuchEntityException` at either step converges.
     - `deleteOIDCProvider(ctx, issuer)` — `ListOpenIDConnectProviders`, `GetOpenIDConnectProvider`s each to compare its `Url` against the issuer host, and `DeleteOpenIDConnectProvider`s the match; no match found is a no-op, not an error.
+
+### EKS-managed CSI addons (EBS/EFS)
+
+The EBS and EFS CSI drivers are installed as **EKS-managed addons** — via
+the EKS addon API (`eks.CreateAddon`/`UpdateAddon`), not Helm. EKS owns
+their lifecycle once requested; this package only has to provision the IRSA
+role each one assumes and request/update the addon by name — the same
+division of labor `eksctl create addon` uses. Both are AWS-only by
+construction (they're EKS addon names), so unlike Karpenter/cluster-autoscaler
+in `internal/catalog`, there's no `Providers` gate to reason about here.
+
+??? note "`ensureCSIAddons(ctx, spec, state, change) error`"
+
+    ```go
+    func (p *ClusterProvisioner) ensureCSIAddons(
+        ctx context.Context, spec core.ClusterSpec, state provisioner.ClusterState, change *provisioner.Change,
+    ) error
+    ```
+
+    - **Behavior:** called from `Create` once the cluster is active, and from every `Reconcile`. Requires `state.OIDCIssuer` to be set (errors otherwise — the OIDC provider must exist before an IRSA role can trust it). Registers the cluster's OIDC provider (`IdentityProvisioner.ensureOIDCProvider`), then for each of `aws-ebs-csi-driver` and `aws-efs-csi-driver`: builds an IRSA trust policy scoped to `kube-system:ebs-csi-controller-sa`/`efs-csi-controller-sa`, calls `ensureRole` with the matching AWS-managed policy (`AmazonEBSCSIDriverPolicy`/`AmazonEFSCSIDriverPolicy`) attached, then `ensureAddon` to request/update the EKS addon with that role's ARN.
+    - **Invariant:** IRSA roles are named `kubespin-<cluster>-ebs-csi`/`kubespin-<cluster>-efs-csi` (`names{spec}.ebsCSIRole()`/`.efsCSIRole()`), matching the naming convention every other IRSA role in this package follows.
+
+??? note "`ensureAddon(ctx, spec, addonName, roleARN) (bool, error)`"
+
+    ```go
+    func (p *ClusterProvisioner) ensureAddon(
+        ctx context.Context, spec core.ClusterSpec, addonName, roleARN string,
+    ) (bool, error)
+    ```
+
+    - **Behavior:** `DescribeAddon` first; if found and its `ServiceAccountRoleArn` differs from `roleARN`, calls `UpdateAddon` to converge it (reports no installation, just a role-drift fix). If not found (`ekstypes.ResourceNotFoundException`), calls `CreateAddon` with `ResolveConflicts: ekstypes.ResolveConflictsOverwrite`.
+    - **Returns:** `true` only when the addon was newly created — this is what lets `ensureCSIAddons` record an accurate `Change` detail (`"install addon <name>"`) rather than reporting a change on every no-op reconcile.
+    - **Invariant:** `ekstypes.ResourceInUseException` on create (a concurrent run got there first) converges rather than erroring, matching every other create-or-adopt call in this package.
+
+Cleanup: `Delete` deletes both IRSA roles (`ebsCSIRole()`/`efsCSIRole()`)
+alongside the cluster/node roles it already tore down — the EKS addons
+themselves are removed automatically as part of `DeleteCluster`, so only
+the roles need explicit cleanup.
 
 ### Role helpers
 

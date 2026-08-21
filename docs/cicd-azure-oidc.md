@@ -133,7 +133,6 @@ stay private):
 | `CLUSTER_REPO_GITHUB_ORG` | Org cluster repositories are created in (`--github-org`) |
 | `GITHUB_ENTERPRISE_BASE_URL` | Only if on GitHub Enterprise Server; leave unset for github.com |
 | `GITHUB_ENTERPRISE_UPLOAD_URL` | Same, paired with the base URL |
-| `PROFILES_REPO` | Only if resolving profiles from a `platform-profiles` repo rather than the builtin catalog |
 
 Add these as environment **secrets** — the exception to "no stored
 credentials" above, because neither is authenticated by the Azure OIDC

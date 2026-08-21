@@ -52,7 +52,7 @@
         Provider core.Provider
         Region   string
         Access   core.Access
-        Profile  core.ProfileRef
+        Size     core.ClusterSize
 
         OIDCIssuer string
 
@@ -181,8 +181,7 @@
         provider          TEXT NOT NULL,
         region            TEXT NOT NULL,
         access            TEXT NOT NULL,
-        profile_name      TEXT NOT NULL,
-        profile_version   TEXT NOT NULL,
+        size              TEXT NOT NULL DEFAULT '',
         oidc_issuer       TEXT NOT NULL DEFAULT '',
         version           BIGINT NOT NULL,
         last_reported_at  TIMESTAMPTZ,
@@ -194,10 +193,13 @@
         lease_expires_at  TIMESTAMPTZ
     );
     CREATE INDEX IF NOT EXISTS fleet_registry_provider_phase_idx ON fleet_registry (provider, phase);
+    ALTER TABLE fleet_registry ADD COLUMN IF NOT EXISTS size TEXT NOT NULL DEFAULT '';
+    ALTER TABLE fleet_registry DROP COLUMN IF EXISTS profile_name;
+    ALTER TABLE fleet_registry DROP COLUMN IF EXISTS profile_version;
     `
     ```
 
-    - **Behavior:** run by `NewPostgres` on every connect, via `CREATE TABLE IF NOT EXISTS`/`CREATE INDEX IF NOT EXISTS`, so a fresh database is ready without a separate migration step and a run against an already-provisioned one is a no-op. It only ever adds — there is no `DROP`/`ALTER` anywhere in this package.
+    - **Behavior:** run by `NewPostgres` on every connect, via `CREATE TABLE IF NOT EXISTS`/`CREATE INDEX IF NOT EXISTS`, so a fresh database is ready without a separate migration step and a run against an already-provisioned one is a no-op. The `ALTER TABLE` statements are the one exception to "only ever adds": they're the one-time cutover from the old `profile_name`/`profile_version` columns to a single `size` column when `--profile` was replaced with `--size`, written idempotently (`IF NOT EXISTS`/`IF EXISTS`) so they're safe to run against both a pre- and post-cutover database.
     - **Invariant:** `cluster_id` alone is the primary key, deliberately — this is what makes `AcquireLease` (a conditional `UPDATE` on that same row) actually serialize a status report against a concurrent phase transition; a composite key would let them proceed independently and the lock would protect nothing.
     - `selectColumns` is a single shared column list used by every read (`Get`, `List`, and `UpdatePhase`'s `RETURNING`), so a column can't drift between them.
 

@@ -103,6 +103,64 @@ If a retry doesn't help:
 
    Or read the cluster's own repository for `.state.yaml` and `addons.yaml`.
 
+## Troubleshooting a stuck delete
+
+`delete` is idempotent and resumable exactly like `apply`: a retried `delete`
+picks up from `decommissioning` and every step it re-runs (role deletion,
+OIDC provider lookup, network teardown) converges rather than erroring on
+something already gone. So the first response to a failed `delete` is the
+same as for `apply` — **run it again**:
+
+```bash
+kubespin delete --provider aws --cluster-id my-cluster --region us-east-1 \
+  --access public --github-org "$GITHUB_ORG" --yes
+```
+
+If it fails the same way twice, the blocker is usually a resource kubespin
+didn't create itself — its deterministic teardown only knows how to remove
+what its own deterministic-naming `Create`/`EnsureNetwork` provisioned, not
+anything added by hand afterward. Two real examples:
+
+1. **IAM `DeleteConflict: Cannot delete entity, must delete policies first`
+   on a node role.** `deleteRole` only detaches *attached* (managed)
+   policies before deleting a role — it does not know about inline
+   policies, since kubespin itself never attaches one. Someone adding
+   `aws iam put-role-policy` to a node role by hand (e.g. to grant an
+   addon extra permissions ad hoc) leaves an inline policy that blocks
+   `DeleteRole`. Find and remove it, then retry:
+
+   ```bash
+   aws iam list-role-policies --role-name kubespin-my-cluster-node
+   aws iam delete-role-policy --role-name kubespin-my-cluster-node \
+     --policy-name <name-from-above>
+   ```
+
+2. **EC2 `DependencyViolation: The vpc '...' has dependencies and cannot be
+   deleted`, after node groups and the cluster itself are already gone.**
+   `EnsureNetwork`/`DeleteNetwork` only track what they themselves created —
+   a VPC/subnet, an Internet Gateway, a route table. A manually-created VPC
+   Peering Connection (e.g. to reach an EFS filesystem in another VPC) is
+   invisible to that teardown and blocks `DeleteVpc`. List what's actually
+   attached to the VPC and remove anything kubespin didn't create:
+
+   ```bash
+   aws ec2 describe-vpc-peering-connections \
+     --filters "Name=requester-vpc-info.vpc-id,Values=<vpc-id>"
+   aws ec2 delete-vpc-peering-connection \
+     --vpc-peering-connection-id <pcx-id-from-above>
+   ```
+
+   A leftover ENI (still detaching from a just-deleted node) produces the
+   same error but clears on its own within a minute or two — check
+   `aws ec2 describe-network-interfaces --filters Name=vpc-id,Values=<vpc-id>`
+   returns empty before assuming it's a manually-added dependency rather
+   than ordinary AWS eventual consistency.
+
+In both cases: the fix is always "identify the resource kubespin's
+deterministic teardown doesn't know about, remove it by hand, then retry
+`kubespin delete`" — never a reason to force-delete the cluster's registry
+record out from under a resource that's still real.
+
 ## The Central Ingestion API is down or rejecting pushes
 
 The ingestion API ([cmd/ingestion](https://github.com/GitOpsHub/kubespin/tree/main/cmd/ingestion),

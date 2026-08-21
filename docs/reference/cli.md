@@ -142,16 +142,14 @@ while tweaking one value from the command line.
     func readSpecFile(path string) (core.ClusterSpec, error)
     func applySpecFlags(cmd *cobra.Command, spec *core.ClusterSpec) error
     func applyNodePoolFlags(cmd *cobra.Command, spec *core.ClusterSpec) error
-    func parseProfileRef(raw string) (core.ProfileRef, error)
     ```
 
     - **Behavior:**
         - `loadSpec` — reads `--spec` if set (`readSpecFile`), overlays flags (`applySpecFlags`), then calls `spec.Validate()`. This is the single entry point `apply.go`'s `runApply`/`runDelete` both call.
         - `readSpecFile` — decodes YAML with `decoder.KnownFields(true)` (strict): an unknown field is treated as a likely typo rather than a deliberate extension, so it errors instead of silently no-op-ing.
-        - `applySpecFlags` — for each of a fixed field table (`cluster-id`, `provider`, `region`, `access`, `kubernetes-version`, `vpc-cidr`, `vnet-cidr`, `subnet-cidr`), an explicitly-set flag (`flags.Changed(name)`) always wins; a flag left at its default only applies when the file didn't already set that field. `profile`, `subnets`, and `authorized-cidrs` follow the same changed-or-unset-in-file precedence pattern individually. Delegates node pool construction to `applyNodePoolFlags`.
+        - `applySpecFlags` — for each of a fixed field table (`cluster-id`, `provider`, `region`, `access`, `kubernetes-version`, `vpc-cidr`, `vnet-cidr`, `subnet-cidr`), an explicitly-set flag (`flags.Changed(name)`) always wins; a flag left at its default only applies when the file didn't already set that field. `size`, `subnets`, and `authorized-cidrs` follow the same changed-or-unset-in-file precedence pattern individually — `--size` validates against `core.Sizes()` (`small`/`medium`/`large`) and defaults to `small`, so omitting it entirely still produces a valid spec. Delegates node pool construction to `applyNodePoolFlags`.
         - `applyNodePoolFlags` — builds a single default `core.NodePool` named `"default"` from `--instance-type`/`--min-size`/`--max-size`/`--desired-size`/`--disk-size`, but only if `spec.NodePools` is empty (i.e., the file didn't already define pools — richer topologies belong in the file, not flags). If `--instance-type` was left at its registered default, it's swapped for the provider-specific default in `defaultInstanceType` (`m6i.large` AWS / `e2-standard-4` GCP / `Standard_D4s_v7` Azure) once `spec.Provider` is known.
-        - `parseProfileRef` — splits a `name@version` string (e.g. `tier-small@1.0.0`) into a `core.ProfileRef`, scanning from the right so a name containing `@` still splits on the last one.
-    - **Calls into:** `internal/core` (`ClusterSpec`, `NodePool`, `ProfileRef`, `Validate()`).
+    - **Calls into:** `internal/core` (`ClusterSpec`, `NodePool`, `ClusterSize`, `Validate()`).
     - **Non-obvious control flow:** file-vs-flag precedence is "explicitly-changed flag always wins; unset flag only fills a gap the file left empty" — not a simple file-then-flags overlay.
 
 `defaultPoolName = "default"` and `defaultInstanceType map[core.Provider]string`

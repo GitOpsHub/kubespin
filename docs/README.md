@@ -57,10 +57,10 @@ milestone. In short:
   install/upgrade itself has no test coverage — that needs a reachable API
   server, the same live-infra gap as every cloud SDK call in this codebase —
   but everything else is unit tested.
-- **M7 (`tier-standard`/`tier-regulated`) is data-complete, verification-
-  incomplete.** Both profiles resolve and validate; whether Kyverno actually
-  denies what it's supposed to, whether Velero actually restores a PVC —
-  those need a live cluster with those addons running, same as M5.
+- **M7 (`--size medium`/`large`) is data-complete, verification-incomplete.**
+  Both sizes resolve and validate; whether Kyverno actually denies what it's
+  supposed to, whether Velero actually restores a PVC — those need a live
+  cluster with those addons running, same as M5.
 - **M10's load test and runbook are done**
   ([internal/fleet/loadtest_test.go](https://github.com/GitOpsHub/kubespin/blob/main/internal/fleet/loadtest_test.go),
   [runbook.md](runbook.md)); pilot team onboarding is an organizational

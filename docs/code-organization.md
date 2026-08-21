@@ -13,13 +13,13 @@ cmd/ingestion/                Central Ingestion API handler (Go, deployed to Lam
 cmd/fleet-status-reporter/    in-cluster CronJob: queries local Argo CD, pushes signed status
 
 internal/cli/                 cobra command tree: apply, delete, fleet bootstrap|update|audit|status, login, status, logout
-internal/core/                shared domain types: ClusterID, ClusterSpec, Profile, AddonRef, Access, NodePool
+internal/core/                shared domain types: ClusterID, ClusterSpec, ClusterSize, Profile, AddonRef, Access, NodePool
 internal/auth/                operator-facing cloud auth: shells out to aws/gcloud/az
 internal/fleetinfra/          SDK converge engine behind `fleet bootstrap`
 internal/provisioner/{aws,gcp,azure}   ClusterProvisioner + IdentityProvisioner + NetworkProvisioner impls (EKS/GKE/AKS)
 internal/repo/                RepoProvisioner over GitHub Enterprise (go-github): Exists/Create/Clone/Push/Archive
 internal/registry/            Fleet Registry client + lease/locking
-internal/catalog/             profile resolution (tier-small/standard/regulated + per-cluster override patches)
+internal/catalog/             size resolution (small/medium/large, fully builtin) + per-cluster override patches
 internal/argocd/              app-of-apps manifest rendering, ingress/Gateway access-mode templating, Argo CD install
 internal/orchestrator/        per-cluster phase state machine (apply) and reverse teardown (delete)
 internal/fleet/               fleet-wide operations: audit, update, status, dashboard
@@ -38,8 +38,9 @@ across two directories per cloud.
 ## How a package finds another package
 
 `internal/core` sits at the bottom: it defines `ClusterID`, `ClusterSpec`,
-`Profile`, `AddonRef`, and the phase enum, and nothing in `internal/core`
-imports anything else in the repo. Every other package imports it.
+`ClusterSize`, `Profile`, `AddonRef`, and the phase enum, and nothing in
+`internal/core` imports anything else in the repo. Every other package
+imports it.
 
 Above that, packages split into two groups that don't import each other
 directly — they're connected only through `internal/orchestrator`, which is

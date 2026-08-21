@@ -27,7 +27,6 @@ on.
 | [`Clients`](#clients) | Struct | repo.go | Bundles go-github clients scoped to one org |
 | [`NewClients`](#newclients) | Function | repo.go | Builds a real GitHub client |
 | [`ClusterFile` / `AddonsFile` / `StateFile`](#constants) | Constants | repo.go | File paths inside every cluster repository |
-| [`ReadFile`](#readfile) | Method | read.go | Reads one file off a repo's default branch (non-cluster repos) |
 | [`Render`](#render) | Function | seed.go | Marshals `cluster.yaml`/`addons.yaml` YAML |
 | [`Seed`](#seed) | Function | seed.go | Creates and seeds a cluster's repo on first `apply` |
 | [`ReconcileAddons`](#reconcileaddons) | Function | seed.go | Brings `addons.yaml` in line with the resolved profile |
@@ -121,8 +120,8 @@ on.
     func notFound(resp *github.Response) bool
     ```
     - True when a go-github response is a 404 — the shared way `Exists`,
-      `Clone`, `Archive`, and `ReadFile` distinguish "genuinely absent" from
-      a real API error.
+      `Clone`, and `Archive` distinguish "genuinely absent" from a real API
+      error.
 
 ## provisioner.go
 
@@ -337,24 +336,6 @@ on.
     ```
     - **Behavior** — builds an in-memory `Provisioner` with empty `repos`
       and `archived` maps.
-
-## read.go
-
-### `ReadFile`
-
-??? note "Signature"
-    ```go
-    func (c *Clients) ReadFile(ctx context.Context, repoName, path string) ([]byte, bool, error)
-    ```
-    - **Scope** — *not* scoped to a cluster's own repository:
-      `internal/catalog`'s repo-backed `Resolver` uses it to read profile
-      definitions out of the platform-profiles repository — a different
-      repo in the same org.
-    - **Behavior** — reads one file off a repository's default branch in
-      this package's configured organization.
-    - **Invariant** — like `Checkout.File`, reports `ok=false` rather than
-      an error when the file is absent, so a missing profile version is an
-      ordinary "not found" rather than a surprise.
 
 ## seed.go
 

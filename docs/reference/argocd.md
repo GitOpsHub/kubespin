@@ -196,14 +196,15 @@ exposure.
         Repository: "https://argoproj.github.io/argo-helm",
         Version:    "7.7.11",
         Namespace:  installNamespace,
+        Values:     ServerLoadBalancerValues,
     }
     ```
 
-    - Used by callers when a cluster's resolved profile carries no
-      `"argocd"` catalog entry of its own (true of `tier-small` today — the
-      catalog only tracks Argo CD's version starting at `tier-standard`).
-    - Argo CD still must be installed on every tier: app-of-apps cannot sync
-      into a cluster that doesn't have it yet.
+    - This is the catalog entry every size includes (`internal/catalog`'s
+      `baseAddons`), and what `Install` falls back to on the rare chance a
+      resolved profile carries none of its own.
+    - Argo CD still must be installed on every cluster regardless: app-of-apps
+      cannot sync into a cluster that doesn't have it yet.
 
 ??? note "`releaseExists` (unexported)"
 

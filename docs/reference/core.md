@@ -1,6 +1,6 @@
 # internal/core
 
-`internal/core` holds the domain types shared by every other package in kubespin: `ClusterID`, `ClusterSpec`, `Profile`, `AddonRef`, `Access`, `NodePool`, and the provisioning phase state machine. It is deliberately dependency-free — no cloud SDKs, no I/O, no imports of other internal packages — making it a leaf every other package can import without risking an import cycle. These types flow through `internal/catalog`, `internal/orchestrator`, `internal/registry`, and the cluster repo's `cluster.yaml`/`addons.yaml` contract described in the root [CLAUDE.md](https://github.com/GitOpsHub/kubespin/blob/main/CLAUDE.md).
+`internal/core` holds the domain types shared by every other package in kubespin: `ClusterID`, `ClusterSpec`, `ClusterSize`, `Profile`, `AddonRef`, `Access`, `NodePool`, and the provisioning phase state machine. It is deliberately dependency-free — no cloud SDKs, no I/O, no imports of other internal packages — making it a leaf every other package can import without risking an import cycle. These types flow through `internal/catalog`, `internal/orchestrator`, `internal/registry`, and the cluster repo's `cluster.yaml`/`addons.yaml` contract described in the root [CLAUDE.md](https://github.com/GitOpsHub/kubespin/blob/main/CLAUDE.md).
 
 ## Quick reference
 
@@ -18,10 +18,10 @@
 | [PhaseOrder](#phaseorder) | var | phase.go | Every phase, in state machine order. |
 | [CanTransition](#cantransition) | func | phase.go | Reports whether `from -> to` is a legal phase transition. |
 | [ValidateTransition](#validatetransition) | func | phase.go | `CanTransition`, wrapped with a descriptive error. |
-| [ProfileRef](#profileref) | struct | profile.go | Pointer to a versioned profile in the platform-profiles repo. |
+| [ClusterSize](#clustersize) | const-block | size.go | A cluster's addon footprint from the builtin catalog: small/medium/large. |
 | [AddonRef](#addonref) | struct | profile.go | One Helm chart delivered to a cluster. |
 | [AddonOverride](#addonoverride) | struct | profile.go | Per-cluster patch onto one addon of a resolved profile. |
-| [Profile](#profile) | struct | profile.go | A resolved tier from the platform-profiles catalog. |
+| [Profile](#profile) | struct | profile.go | A resolved size tier from the builtin catalog. |
 
 ## cluster.go
 
@@ -148,7 +148,7 @@
         Access            Access
         KubernetesVersion string          // optional, "MAJOR.MINOR"
         NodePools         []NodePool
-        Profile           ProfileRef
+        Size              ClusterSize
         AuthorizedCIDRs   []string        // optional
         Subnets           []string
         VPCCIDR           string          // optional, AWS only
@@ -165,7 +165,7 @@
         - `VPCCIDR` — sizes the VPC kubespin creates on AWS when `Subnets` is empty; AWS-only, ignored otherwise; empty means kubespin's default.
         - `VNetCIDR` — sizes the VNet kubespin creates on Azure when `Subnets` is empty; Azure-only, ignored otherwise.
         - `SubnetCIDR` — sizes the single subnet/subnetwork kubespin creates when `Subnets` is empty, on Azure or GCP; ignored on AWS (which derives two subnets from `VPCCIDR` instead).
-        - `Overrides` — per-cluster patch onto `Profile`'s resolved addon set; lives in the user-authored `cluster.yaml` rather than a separate file, since the derived `addons.yaml` is not user-edited.
+        - `Overrides` — per-cluster patch onto `Size`'s resolved addon set; lives in the user-authored `cluster.yaml` rather than a separate file, since the derived `addons.yaml` is not user-edited.
 
 ??? note "Signature: `(ClusterSpec) Validate`"
 
@@ -174,7 +174,7 @@
     ```
 
     - **Behavior:** joins every problem found rather than stopping at the first, so a user fixing a spec sees the full list in one run.
-    - **Invariants:** `ID.Validate()`; `Provider.Valid()`; `Region` non-empty; `Access.Valid()`; `KubernetesVersion`, if set, matches `^\d+\.\d+$`; `AuthorizedCIDRs` must be empty when `Access == AccessPrivate`; at least one `NodePool`; `VPCCIDR`/`VNetCIDR`/`SubnetCIDR`, if set, must each parse as a valid CIDR; each `NodePool.Validate()` plus rejection of duplicate node pool names; `Profile.Validate()`; each `Overrides[i].Validate()` plus rejection of duplicate override addon names. Subnets themselves are not required to be non-empty — every provider is allowed to omit them, since `EnsureNetwork` creates a network when none is supplied.
+    - **Invariants:** `ID.Validate()`; `Provider.Valid()`; `Region` non-empty; `Access.Valid()`; `KubernetesVersion`, if set, matches `^\d+\.\d+$`; `AuthorizedCIDRs` must be empty when `Access == AccessPrivate`; at least one `NodePool`; `VPCCIDR`/`VNetCIDR`/`SubnetCIDR`, if set, must each parse as a valid CIDR; each `NodePool.Validate()` plus rejection of duplicate node pool names; `Size.Valid()`; each `Overrides[i].Validate()` plus rejection of duplicate override addon names. Subnets themselves are not required to be non-empty — every provider is allowed to omit them, since `EnsureNetwork` creates a network when none is supplied.
 
 ## Phase state machine (phase.go)
 
@@ -259,32 +259,31 @@ A cluster's position in the provisioning state machine. The orchestrator resumes
 
     - **Behavior:** wraps `CanTransition` with a descriptive, `ErrInvalidTransition`-wrapped error — reports unknown phases by name, or `from -> to` when both are known but the move isn't allowed; returns `nil` when the transition is legal.
 
+## size.go
+
+#### ClusterSize
+
+??? abstract "Signature: `ClusterSize`"
+
+    ```go
+    type ClusterSize string
+
+    const (
+        SizeSmall  ClusterSize = "small"
+        SizeMedium ClusterSize = "medium"
+        SizeLarge  ClusterSize = "large"
+    )
+
+    func Sizes() []ClusterSize
+    func (s ClusterSize) Valid() bool
+    func (s ClusterSize) String() string
+    ```
+
+    - **Behavior:** picks a cluster's default addon footprint from the builtin catalog (`internal/catalog`) — no external profile repository, no version to pin. Changing what a size includes means shipping a new kubespin build.
+    - **Behavior:** `Sizes()` lists every supported size in help-text order; `Valid()` reports whether a value is one of the three consts; `String()` is the identity conversion.
+    - **Invariants:** there is no "latest" or unpinned concept here — every size is a fixed, named entry in the builtin catalog, not a moving target.
+
 ## profile.go
-
-#### ProfileRef
-
-??? abstract "Signature: `ProfileRef`"
-
-    ```go
-    type ProfileRef struct {
-        Name    string
-        Version string
-    }
-    ```
-
-    - **Behavior:** points at a versioned profile in the platform-profiles repository.
-    - **Invariants:** pinning the version is what makes `fleet update` a deliberate, staged action rather than an implicit consequence of someone merging to the catalog.
-
-#### Profile
-
-??? note "Signature: `(ProfileRef) Validate`, `(ProfileRef) String`"
-
-    ```go
-    func (r ProfileRef) Validate() error
-    func (r ProfileRef) String() string
-    ```
-
-    - **Behavior:** `Validate` requires `Name` to match the shared name pattern (`^[a-z][a-z0-9-]{1,61}[a-z0-9]$`) and `Version` to be set; `String` renders as `"name@version"`.
 
 #### AddonRef
 
@@ -340,30 +339,30 @@ A cluster's position in the provisioning state machine. The orchestrator resumes
     - **Behavior:** checks only that `Name` matches the shared name pattern.
     - **Invariants:** it cannot check that `Name` matches an addon in the profile being overridden, since that is a property of a `(profile, override)` pair, not of the override alone.
 
+#### Profile
+
 ??? abstract "Signature: `Profile`"
 
     ```go
     type Profile struct {
-        Name    string
-        Version string
-        Addons  []AddonRef
+        Name   string
+        Addons []AddonRef
     }
     ```
 
-    - **Behavior:** a resolved tier from the platform-profiles catalog — the addon set a cluster gets before any per-cluster override patch is applied.
+    - **Behavior:** a resolved size tier from the builtin catalog (`internal/catalog`) — the addon set a cluster gets before any per-cluster override patch is applied. `Name` holds the size string (e.g. `"small"`).
 
-??? note "Signature: `(Profile) Ref`, `(Profile) ForProvider`, `(Profile) Addon`, `(Profile) Validate`"
+??? note "Signature: `(Profile) ForProvider`, `(Profile) Addon`, `(Profile) Validate`"
 
     ```go
-    func (p Profile) Ref() ProfileRef
     func (p Profile) ForProvider(provider Provider) Profile
     func (p Profile) Addon(name string) (AddonRef, bool)
     func (p Profile) Validate() error
     ```
 
-    - **Behavior:** `Ref` returns `ProfileRef{Name, Version}`; `ForProvider` returns a copy of `p` with every addon that does not support `provider` dropped (via `AddonRef.SupportsProvider`); `Addon` looks up an addon by name, reporting whether it was found; `Validate` validates `Ref()`, requires at least one addon, validates each `AddonRef`, and rejects duplicate addon names (two Argo CD Applications cannot share a name).
+    - **Behavior:** `ForProvider` returns a copy of `p` with every addon that does not support `provider` dropped (via `AddonRef.SupportsProvider`); `Addon` looks up an addon by name, reporting whether it was found; `Validate` requires a non-empty `Name`, requires at least one addon, validates each `AddonRef`, and rejects duplicate addon names (two Argo CD Applications cannot share a name).
     - **Invariants:** callers resolve a profile for a specific cluster's provider through `ForProvider` before applying override patches, so e.g. Karpenter never renders into a GCP or Azure cluster's `addons.yaml`, and an override naming it on those clouds correctly fails as unknown rather than silently applying.
     - **Behavior:** `Addon` is what `internal/orchestrator.installArgoCDStep` uses to pull the `"argocd"` entry `catalog.ResolveForCluster` guarantees is always present, instead of a caller-side loop.
 
 !!! note
-    `namePattern` (`^[a-z][a-z0-9-]{1,61}[a-z0-9]$`) is shared by `ProfileRef`, `AddonRef`, and `AddonOverride` name validation, since all three surface as Argo CD Application names.
+    `namePattern` (`^[a-z][a-z0-9-]{1,61}[a-z0-9]$`) is shared by `AddonRef` and `AddonOverride` name validation, since both surface as Argo CD Application names.

@@ -152,8 +152,8 @@ operator must grant.
 ??? note "Package-level helpers"
     - `sanitizeLabelValue(s string) string` / `labels(spec) map[string]string`
       — build GKE resource labels (`managed-by`, `kubespin-cluster`,
-      `kubespin-profile`), lowercasing and replacing disallowed characters so
-      a profile ref like `tier-small@1.0.0` fits GCP's label-value character
+      `kubespin-size`), lowercasing and replacing disallowed characters so
+      a size string like `"small"` fits GCP's label-value character
       rules.
 
 ## cluster.go

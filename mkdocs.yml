@@ -82,6 +82,7 @@ nav:
   - Architecture: architecture.md
   - Guides:
       - Examples: examples.md
+      - Low-cost dev clusters: low-cost-dev-clusters.md
       - Fleet bootstrap: fleet-bootstrap.md
       - On-call runbook: runbook.md
       - CI/CD with Azure OIDC: cicd-azure-oidc.md

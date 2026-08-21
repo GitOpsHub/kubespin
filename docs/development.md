@@ -45,7 +45,7 @@ internal/registry/         Fleet Registry client (Postgres), lease primitive, in
 internal/orchestrator/     sequences one cluster's provisioning through the phases
 internal/provisioner/      cloud-facing interfaces; one subpackage per cloud
 internal/repo/             cluster repositories over GitHub
-internal/catalog/          profile resolution: builtin tiers and platform-profiles
+internal/catalog/          size resolution: small/medium/large, fully builtin
 internal/argocd/           app-of-apps rendering, access-mode templating, install
 internal/fleet/            fleet-wide audit, update, and status
 internal/fleetinfra/       SDK converge engine behind `fleet bootstrap`

@@ -39,7 +39,7 @@ method-level reference.
 | Package | Covers |
 |---|---|
 | [internal/repo](repo.md) | GitHub-backed `RepoProvisioner`: Exists/Create/Clone/Push/Archive, `cluster.yaml`/`addons.yaml`/`.state.yaml` |
-| [internal/catalog](catalog.md) | Profile resolution: tier-small/standard/regulated + per-cluster override patches |
+| [internal/catalog](catalog.md) | Size resolution: small/medium/large, fully builtin, + per-cluster override patches |
 | [internal/argocd](argocd.md) | App-of-apps rendering, ingress/Gateway access-mode templating, Helm-SDK Argo CD install |
 | [internal/orchestrator](orchestrator.md) | Per-cluster phase state machine driving `apply` (split-diff) and `delete` (reverse teardown) |
 

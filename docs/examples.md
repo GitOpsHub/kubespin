@@ -255,9 +255,7 @@ id: demo-aws
 provider: aws
 region: us-east-1
 access: private
-profile:
-  name: tier-small
-  version: 1.0.0
+size: small
 nodePools:
   - name: default
     instanceType: m6i.large
@@ -288,6 +286,59 @@ The node pool flags (`--instance-type`, `--min-size`, `--max-size`,
 `default` pool when the spec has no `nodePools` at all, so a file's pools
 are never partially overwritten from the command line. Edit the file to
 resize a pool or change its disk size.
+
+### Per-cluster override patch
+
+`--size` picks a cluster's addon set from the builtin catalog, but one
+cluster sometimes needs to deviate from it — pin a different chart version,
+tweak one addon's Helm values, or drop an addon it doesn't want. That's what
+`overrides:` in `cluster.yaml` is for (`core.AddonOverride`,
+[`internal/catalog.Merge`](reference/catalog.md#merge)). It patches addons
+the size already carries — it never introduces a new one, and a typo in the
+name fails at `apply` time rather than being silently ignored:
+
+```yaml
+# cluster.yaml
+id: demo-aws
+provider: aws
+region: us-east-1
+access: private
+size: medium
+nodePools:
+  - name: default
+    instanceType: m6i.large
+    minSize: 1
+    maxSize: 5
+    desiredSize: 2
+subnets: []
+overrides:
+  # Re-pin one addon to a version newer than the catalog's, e.g. to pick up
+  # a fix before the next kubespin release ships it.
+  - name: cert-manager
+    version: "1.16.2"
+  # Patch one addon's Helm values — merged one level deep onto the
+  # catalog's own values, so keys you don't mention are left alone.
+  - name: kube-prometheus-stack
+    values:
+      grafana:
+        adminPassword: "changeme"
+  # Drop an addon entirely, e.g. because this cluster already runs its own
+  # ExternalDNS and doesn't want the catalog's.
+  - name: external-dns
+    disable: true
+```
+
+```bash
+kubespin apply --spec ./cluster.yaml \
+  --github-org "$GITHUB_ORG"
+```
+
+This is the mechanism for "extra Helm deployments this one cluster needs" —
+it lives in the cluster's own `cluster.yaml`, survives every subsequent
+`apply`/`fleet update` (which re-render `addons.yaml` from size + overrides
+on every run), and requires no external repository. Naming an addon the
+cluster's size doesn't carry (e.g. `karpenter` on a GCP cluster, which only
+ever gets `cluster-autoscaler`) fails validation with `ErrUnknownOverride`.
 
 ### Preview before applying
 
