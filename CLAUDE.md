@@ -70,6 +70,8 @@ across two directories per cloud.
 
 Shared domain types (`ClusterID`, `ClusterSpec`, `Profile`, `AddonRef`) live in `internal/core` and are consumed by all of the above.
 
+M4's real `platform-profiles` repo now exists (`GitOpsHub/platform-profiles`, private, one YAML per `profiles/<name>/<version>.yaml`) — `apply`/`fleet` pick it up automatically via `--profiles-repo platform-profiles` (`internal/cli/apply.go` `buildResolver`; empty flag falls back to `catalog.NewBuiltinResolver()`, which still hardcodes `tier-small`/`tier-standard`/`tier-regulated` at `1.0.0` for that fallback path only). The real repo's tier names differ from the builtin catalog's — it has `tier-small`/`tier-medium`/`tier-large`, not `tier-standard`/`tier-regulated` — and versions advance independently per tier (`tier-small` is at `1.2.0`; `tier-medium`/`tier-large` are still at `1.1.0`). There is no "latest" keyword anywhere in profile resolution (`internal/cli/spec.go` `parseProfileRef` requires the literal `name@version`); callers must always name an exact version that exists in whichever resolver is active.
+
 ## Cluster repo contract
 
 Each provisioned cluster's GitHub repo holds three files, and their roles must stay distinct:
