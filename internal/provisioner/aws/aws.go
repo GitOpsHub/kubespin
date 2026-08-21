@@ -29,6 +29,9 @@ type eksAPI interface {
 	CreateNodegroup(context.Context, *eks.CreateNodegroupInput, ...func(*eks.Options)) (*eks.CreateNodegroupOutput, error)
 	UpdateNodegroupConfig(context.Context, *eks.UpdateNodegroupConfigInput, ...func(*eks.Options)) (*eks.UpdateNodegroupConfigOutput, error)
 	DeleteNodegroup(context.Context, *eks.DeleteNodegroupInput, ...func(*eks.Options)) (*eks.DeleteNodegroupOutput, error)
+	DescribeAddon(context.Context, *eks.DescribeAddonInput, ...func(*eks.Options)) (*eks.DescribeAddonOutput, error)
+	CreateAddon(context.Context, *eks.CreateAddonInput, ...func(*eks.Options)) (*eks.CreateAddonOutput, error)
+	UpdateAddon(context.Context, *eks.UpdateAddonInput, ...func(*eks.Options)) (*eks.UpdateAddonOutput, error)
 }
 
 // iamAPI covers both the service roles EKS needs and the IRSA role.
@@ -123,8 +126,17 @@ const (
 	policyEKSWorkerNode     = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
 	policyEKSCNI            = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
 	policyECRReadOnly       = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+	policyEBSCSIDriver      = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+	policyEFSCSIDriver      = "arn:aws:iam::aws:policy/service-role/AmazonEFSCSIDriverPolicy"
 	eksOIDCThumbprint       = "9e99a48a9960b14926bb7f3b02e22da2b0ab7280"
 	eksOIDCClientIDAudience = "sts.amazonaws.com"
+
+	// addonEBSCSIDriver and addonEFSCSIDriver are the EKS-managed addon names
+	// (not Helm charts): EKS installs and updates these itself, so kubespin
+	// only has to provision the IRSA role each one assumes and request the
+	// addon by name, the same way `eksctl create addon` would.
+	addonEBSCSIDriver = "aws-ebs-csi-driver"
+	addonEFSCSIDriver = "aws-efs-csi-driver"
 )
 
 // names derives every AWS resource name from the cluster ID, so a cluster's
@@ -143,6 +155,9 @@ func (n names) nodeGroup(pool string) string {
 func (n names) irsaRole(comp string) string {
 	return "kubespin-" + n.spec.ID.String() + "-" + comp
 }
+
+func (n names) ebsCSIRole() string { return n.irsaRole("ebs-csi") }
+func (n names) efsCSIRole() string { return n.irsaRole("efs-csi") }
 
 func (n names) vpcName() string { return "kubespin-" + n.spec.ID.String() }
 func (n names) subnetName(az string) string {

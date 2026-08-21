@@ -67,7 +67,10 @@ func (p *ClusterProvisioner) Create(ctx context.Context, spec core.ClusterSpec) 
 	}
 
 	if state.Status == provisioner.StatusActive {
-		return p.ensureNodeGroups(ctx, spec, nil)
+		if err := p.ensureNodeGroups(ctx, spec, nil); err != nil {
+			return err
+		}
+		return p.ensureCSIAddons(ctx, spec, state, nil)
 	}
 	return nil
 }
@@ -260,7 +263,115 @@ func (p *ClusterProvisioner) Reconcile(ctx context.Context, spec core.ClusterSpe
 	if err := p.ensureNodeGroups(ctx, spec, &change); err != nil {
 		return change, err
 	}
+	if err := p.ensureCSIAddons(ctx, spec, state, &change); err != nil {
+		return change, err
+	}
 	return change, nil
+}
+
+// ensureCSIAddons installs the EBS and EFS CSI drivers as EKS-managed
+// addons (not Helm charts): EKS owns their lifecycle once requested, so this
+// only has to provision the IRSA role each one assumes and request/update
+// the addon by name — the same division of labor `eksctl create addon` uses.
+//
+// Both are AWS-only by construction: they are EKS addon names, so there is
+// nothing to gate by provider the way catalog addons gate karpenter.
+func (p *ClusterProvisioner) ensureCSIAddons(
+	ctx context.Context, spec core.ClusterSpec, state provisioner.ClusterState, change *provisioner.Change,
+) error {
+	if state.OIDCIssuer == "" {
+		return fmt.Errorf("cluster %s reports no OIDC issuer", spec.ID)
+	}
+
+	idp := NewIdentityProvisioner(p.c)
+	providerARN, err := idp.ensureOIDCProvider(ctx, state.OIDCIssuer)
+	if err != nil {
+		return err
+	}
+
+	for _, d := range []struct {
+		addonName string
+		roleName  string
+		policy    string
+		comp      provisioner.Component
+	}{
+		{
+			addonName: addonEBSCSIDriver,
+			roleName:  names{spec}.ebsCSIRole(),
+			policy:    policyEBSCSIDriver,
+			comp:      provisioner.Component{Name: "ebs-csi", Namespace: "kube-system", ServiceAccount: "ebs-csi-controller-sa"},
+		},
+		{
+			addonName: addonEFSCSIDriver,
+			roleName:  names{spec}.efsCSIRole(),
+			policy:    policyEFSCSIDriver,
+			comp:      provisioner.Component{Name: "efs-csi", Namespace: "kube-system", ServiceAccount: "efs-csi-controller-sa"},
+		},
+	} {
+		trust := irsaTrustPolicy(providerARN, state.OIDCIssuer, d.comp)
+		roleARN, err := p.ensureRole(ctx, d.roleName, trust, []string{d.policy})
+		if err != nil {
+			return fmt.Errorf("ensuring role for %s: %w", d.addonName, err)
+		}
+
+		installed, err := p.ensureAddon(ctx, spec, d.addonName, roleARN)
+		if err != nil {
+			return err
+		}
+		if installed {
+			record(change, fmt.Sprintf("install addon %s", d.addonName))
+		}
+	}
+	return nil
+}
+
+// ensureAddon requests the named EKS-managed addon if absent, or converges
+// its IRSA role if it already exists and drifted. It reports whether it
+// created the addon, so callers collecting a Change only see something real.
+func (p *ClusterProvisioner) ensureAddon(
+	ctx context.Context, spec core.ClusterSpec, addonName, roleARN string,
+) (bool, error) {
+	clusterName := names{spec}.cluster()
+
+	desc, err := p.c.eks.DescribeAddon(ctx, &eks.DescribeAddonInput{
+		ClusterName: aws.String(clusterName),
+		AddonName:   aws.String(addonName),
+	})
+	if err == nil {
+		if desc.Addon != nil && aws.ToString(desc.Addon.ServiceAccountRoleArn) != roleARN {
+			if _, err := p.c.eks.UpdateAddon(ctx, &eks.UpdateAddonInput{
+				ClusterName:           aws.String(clusterName),
+				AddonName:             aws.String(addonName),
+				ServiceAccountRoleArn: aws.String(roleARN),
+				ResolveConflicts:      ekstypes.ResolveConflictsOverwrite,
+			}); err != nil {
+				return false, fmt.Errorf("updating addon %s role for %s: %w", addonName, spec.ID, err)
+			}
+			p.c.logger.Info("updated EKS addon role", "cluster", spec.ID, "addon", addonName)
+		}
+		return false, nil
+	}
+
+	var missing *ekstypes.ResourceNotFoundException
+	if !errors.As(err, &missing) {
+		return false, fmt.Errorf("describing addon %s for %s: %w", addonName, spec.ID, err)
+	}
+
+	if _, err := p.c.eks.CreateAddon(ctx, &eks.CreateAddonInput{
+		ClusterName:           aws.String(clusterName),
+		AddonName:             aws.String(addonName),
+		ServiceAccountRoleArn: aws.String(roleARN),
+		ResolveConflicts:      ekstypes.ResolveConflictsOverwrite,
+		Tags:                  tags(spec),
+	}); err != nil {
+		var exists *ekstypes.ResourceInUseException
+		if errors.As(err, &exists) {
+			return false, nil
+		}
+		return false, fmt.Errorf("creating addon %s for %s: %w", addonName, spec.ID, err)
+	}
+	p.c.logger.Info("installed EKS addon", "cluster", spec.ID, "addon", addonName)
+	return true, nil
 }
 
 func (p *ClusterProvisioner) reconcileAccess(
@@ -465,6 +576,12 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 	}
 
 	if err := p.deleteRole(ctx, names{spec}.clusterRole()); err != nil {
+		return err
+	}
+	if err := p.deleteRole(ctx, names{spec}.ebsCSIRole()); err != nil {
+		return err
+	}
+	if err := p.deleteRole(ctx, names{spec}.efsCSIRole()); err != nil {
 		return err
 	}
 	if state.OIDCIssuer != "" {

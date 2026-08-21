@@ -218,6 +218,23 @@ func TestReconcile_NoDriftMakesNoCalls(t *testing.T) {
 	f.withNodePool(spec, spec.NodePools[0])
 	f.roles[names{spec}.nodeRole()] = "arn:aws:iam::123456789012:role/" + names{spec}.nodeRole()
 	f.attached[names{spec}.nodeRole()] = []string{policyEKSWorkerNode, policyEKSCNI, policyECRReadOnly}
+
+	oidcArn := "arn:aws:iam::123456789012:oidc-provider/" + strings.TrimPrefix(testIssuer, "https://")
+	f.oidc[oidcArn] = strings.TrimPrefix(testIssuer, "https://")
+	for _, d := range []struct {
+		role, policy, addon string
+	}{
+		{names{spec}.ebsCSIRole(), policyEBSCSIDriver, addonEBSCSIDriver},
+		{names{spec}.efsCSIRole(), policyEFSCSIDriver, addonEFSCSIDriver},
+	} {
+		roleARN := "arn:aws:iam::123456789012:role/" + d.role
+		f.roles[d.role] = roleARN
+		f.attached[d.role] = []string{d.policy}
+		f.addons[d.addon] = &ekstypes.Addon{
+			AddonName:             aws.String(d.addon),
+			ServiceAccountRoleArn: aws.String(roleARN),
+		}
+	}
 	f.calls = nil
 
 	change, err := NewClusterProvisioner(f.clients()).Reconcile(t.Context(), spec)

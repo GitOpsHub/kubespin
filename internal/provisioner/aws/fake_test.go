@@ -31,7 +31,8 @@ type fakeAWS struct {
 
 	cluster    *ekstypes.Cluster
 	nodeGroups map[string]*ekstypes.Nodegroup
-	roles      map[string]string // name -> arn
+	addons     map[string]*ekstypes.Addon // name -> addon
+	roles      map[string]string          // name -> arn
 	rolePolicy map[string]string // name -> assume role policy document
 	attached   map[string][]string
 	oidc       map[string]string // arn -> url host
@@ -59,6 +60,7 @@ type fakeAWS struct {
 func newFakeAWS() *fakeAWS {
 	return &fakeAWS{
 		nodeGroups:         map[string]*ekstypes.Nodegroup{},
+		addons:             map[string]*ekstypes.Addon{},
 		deletingNodeGroups: map[string]int{},
 		roles:              map[string]string{},
 		rolePolicy:         map[string]string{},
@@ -91,6 +93,7 @@ var mutatingCalls = []string{
 	"CreateNodegroup", "UpdateNodegroupConfig", "DeleteNodegroup",
 	"CreateRole", "DeleteRole", "AttachRolePolicy", "DetachRolePolicy",
 	"UpdateAssumeRolePolicy", "CreateOpenIDConnectProvider",
+	"CreateAddon", "UpdateAddon",
 	"AuthorizeSecurityGroupEgress",
 	"CreateVpc", "ModifyVpcAttribute", "CreateSubnet", "ModifySubnetAttribute",
 	"CreateInternetGateway", "AttachInternetGateway",
@@ -220,6 +223,40 @@ func (f *fakeAWS) DeleteNodegroup(_ context.Context, in *eks.DeleteNodegroupInpu
 	}
 	delete(f.nodeGroups, name)
 	return &eks.DeleteNodegroupOutput{}, nil
+}
+
+func (f *fakeAWS) DescribeAddon(_ context.Context, in *eks.DescribeAddonInput, _ ...func(*eks.Options)) (*eks.DescribeAddonOutput, error) {
+	f.record("DescribeAddon")
+	a, ok := f.addons[aws.ToString(in.AddonName)]
+	if !ok {
+		return nil, &ekstypes.ResourceNotFoundException{}
+	}
+	return &eks.DescribeAddonOutput{Addon: a}, nil
+}
+
+func (f *fakeAWS) CreateAddon(_ context.Context, in *eks.CreateAddonInput, _ ...func(*eks.Options)) (*eks.CreateAddonOutput, error) {
+	f.record("CreateAddon")
+	name := aws.ToString(in.AddonName)
+	if _, ok := f.addons[name]; ok {
+		return nil, &ekstypes.ResourceInUseException{}
+	}
+	a := &ekstypes.Addon{
+		AddonName:             in.AddonName,
+		ServiceAccountRoleArn: in.ServiceAccountRoleArn,
+	}
+	f.addons[name] = a
+	return &eks.CreateAddonOutput{Addon: a}, nil
+}
+
+func (f *fakeAWS) UpdateAddon(_ context.Context, in *eks.UpdateAddonInput, _ ...func(*eks.Options)) (*eks.UpdateAddonOutput, error) {
+	f.record("UpdateAddon")
+	name := aws.ToString(in.AddonName)
+	a, ok := f.addons[name]
+	if !ok {
+		return nil, &ekstypes.ResourceNotFoundException{}
+	}
+	a.ServiceAccountRoleArn = in.ServiceAccountRoleArn
+	return &eks.UpdateAddonOutput{}, nil
 }
 
 // --- IAM ---
