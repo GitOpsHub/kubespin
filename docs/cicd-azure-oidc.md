@@ -146,7 +146,7 @@ exchange:
 ## Running it
 
 Actions → **Deploy AKS cluster** → Run workflow, fill in `cluster-id`,
-`region`, `access`, `profile`, `kubernetes-version`. Leave `dry-run` checked
+`region`, `access`, `size`, `kubernetes-version`. Leave `dry-run` checked
 for the first run against any new `cluster-id` — it reports the phase apply
 would resume from without touching either cloud, same as
 `kubespin apply --dry-run` locally (see

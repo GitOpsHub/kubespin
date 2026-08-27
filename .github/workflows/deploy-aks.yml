@@ -23,9 +23,12 @@ on:
         default: private
         type: choice
         options: [private, public]
-      profile:
-        description: "Profile reference, e.g. tier-small@1.0.0"
+      size:
+        description: "Cluster size tier"
         required: true
+        default: small
+        type: choice
+        options: [small, medium, large]
       kubernetes-version:
         description: "Kubernetes minor version, e.g. 1.34"
         required: true
@@ -81,7 +84,7 @@ jobs:
           CLUSTER_ID: ${{ inputs.cluster-id }}
           REGION: ${{ inputs.region }}
           ACCESS: ${{ inputs.access }}
-          PROFILE: ${{ inputs.profile }}
+          SIZE: ${{ inputs.size }}
           KUBERNETES_VERSION: ${{ inputs.kubernetes-version }}
           INGESTION_ENDPOINT: ${{ vars.INGESTION_ENDPOINT }}
           DRY_RUN: ${{ inputs.dry-run }}
@@ -89,7 +92,6 @@ jobs:
           GITHUB_ORG: ${{ vars.CLUSTER_REPO_GITHUB_ORG }}
           GITHUB_ENTERPRISE_BASE_URL: ${{ vars.GITHUB_ENTERPRISE_BASE_URL }}
           GITHUB_ENTERPRISE_UPLOAD_URL: ${{ vars.GITHUB_ENTERPRISE_UPLOAD_URL }}
-          PROFILES_REPO: ${{ vars.PROFILES_REPO }}
           # Repo API auth is a GitHub PAT/App token, not OIDC — GitHub Actions'
           # federated identity covers cloud provider auth (above), not GitHub's
           # own REST API. This must be a distinct secret with repo-create scope
@@ -103,7 +105,7 @@ jobs:
             --cluster-id "$CLUSTER_ID"
             --region "$REGION"
             --access "$ACCESS"
-            --profile "$PROFILE"
+            --size "$SIZE"
             --kubernetes-version "$KUBERNETES_VERSION"
             --ingestion-endpoint "$INGESTION_ENDPOINT"
             --azure-subscription "$AZURE_SUBSCRIPTION_ID"
@@ -111,7 +113,6 @@ jobs:
           )
           [ -n "$GITHUB_ENTERPRISE_BASE_URL" ] && args+=(--github-base-url "$GITHUB_ENTERPRISE_BASE_URL")
           [ -n "$GITHUB_ENTERPRISE_UPLOAD_URL" ] && args+=(--github-upload-url "$GITHUB_ENTERPRISE_UPLOAD_URL")
-          [ -n "$PROFILES_REPO" ] && args+=(--profiles-repo "$PROFILES_REPO")
           if [ "$DRY_RUN" = "true" ]; then
             args+=(--dry-run)
           fi

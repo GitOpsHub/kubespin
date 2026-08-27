@@ -10,7 +10,7 @@ import (
 
 // The documentation promises that every example runs as written. That promise
 // is only worth something if it is checked: the examples used to omit
-// --profile and --registry-region, which meant a copy-pasted apply failed
+// --size and --registry-region, which meant a copy-pasted apply failed
 // before making a single cloud call.
 //
 // This walks every prose document and every generated reference page,
@@ -99,7 +99,7 @@ func assertInvocationParses(t *testing.T, inv invocation) {
 	}
 
 	// apply and delete build and validate a ClusterSpec before touching
-	// anything, so an example missing --profile fails there rather than in
+	// anything, so an example missing --size fails there rather than in
 	// the cloud. --spec points at a file that only exists in the reader's
 	// checkout, so those lines can only be flag-checked.
 	switch cmd.Name() {
