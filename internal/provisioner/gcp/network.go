@@ -305,7 +305,7 @@ func (p *NetworkProvisioner) deleteNetwork(ctx context.Context, n names) error {
 
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("deleting network %s: %w", name, ctx.Err())
 		case <-time.After(p.retryInterval):
 		}
 	}

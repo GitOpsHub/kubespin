@@ -115,3 +115,61 @@ func TestReconcileAppOfApps_PreservesAddonsHash(t *testing.T) {
 		t.Error("expected ReconcileAppOfApps to still be a no-op after a ReconcileAddons no-op")
 	}
 }
+
+func TestReconcileAppOfApps_RemovesDeletedAddon(t *testing.T) {
+	mem := NewMemory()
+	spec := testSpec()
+	profile := core.Profile{
+		Name: "test",
+		Addons: []core.AddonRef{
+			{Name: "addon-one", Chart: "addon-one", Repository: "https://example.com", Version: "1.0.0", Namespace: "ns"},
+			{Name: "addon-two", Chart: "addon-two", Repository: "https://example.com", Version: "1.0.0", Namespace: "ns"},
+		},
+	}
+
+	if err := Seed(context.Background(), mem, spec, profile); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	if _, err := ReconcileAppOfApps(context.Background(), mem, spec, profile); err != nil {
+		t.Fatalf("first ReconcileAppOfApps: %v", err)
+	}
+
+	// Verify both apps exist in repo
+	checkout, err := mem.Clone(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if _, ok := checkout.File("apps/addon-one.yaml"); !ok {
+		t.Fatal("expected apps/addon-one.yaml to exist")
+	}
+	if _, ok := checkout.File("apps/addon-two.yaml"); !ok {
+		t.Fatal("expected apps/addon-two.yaml to exist")
+	}
+
+	// Now remove addon-two from profile
+	profileReduced := core.Profile{
+		Name: "test",
+		Addons: []core.AddonRef{
+			{Name: "addon-one", Chart: "addon-one", Repository: "https://example.com", Version: "1.0.0", Namespace: "ns"},
+		},
+	}
+	changed, err := ReconcileAppOfApps(context.Background(), mem, spec, profileReduced)
+	if err != nil {
+		t.Fatalf("second ReconcileAppOfApps: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected ReconcileAppOfApps to report change when an addon is removed")
+	}
+
+	// Verify addon-two was purged from the repository
+	checkoutAfter, err := mem.Clone(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Clone after removal: %v", err)
+	}
+	if _, ok := checkoutAfter.File("apps/addon-two.yaml"); ok {
+		t.Fatal("expected apps/addon-two.yaml to have been deleted from the repository")
+	}
+	if _, ok := checkoutAfter.File("apps/addon-one.yaml"); !ok {
+		t.Fatal("expected apps/addon-one.yaml to still exist")
+	}
+}

@@ -57,10 +57,15 @@ in this file.
     func newHandler(ctx context.Context) (*ingestion.Handler, error)
     ```
 
-    - **Behavior:** Reads `REGISTRY_DSN` from the environment, builds a
-      `registry.NewPostgres` client (which pings the connection and
-      idempotently ensures the `fleet_registry` table and its index exist)
-      and an `ingestion.NewVerifier` wrapping
+    - **Behavior:** Reads `REGISTRY_DSN` from the environment and builds a
+      `registry.NewPostgres` client with two options:
+        - `registry.WithoutMigration()` — skips schema DDL on cold start to
+          prevent table lock contention when many Lambda instances burst in
+          parallel. The CLI is the sole owner of schema migrations.
+        - `registry.WithConnectionPool(2, 1, 15*time.Minute)` — caps each
+          Lambda instance to 2 open connections to prevent Postgres
+          exhaustion across Lambda's high-concurrency invocation model.
+      Also builds an `ingestion.NewVerifier` wrapping
       `ingestion.NewJWKSResolver(nil)`, and returns an
       `ingestion.NewHandler`. Returns an error if the registry connection
       fails.

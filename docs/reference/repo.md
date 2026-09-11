@@ -162,7 +162,11 @@ on.
       `Checkout` read, as one atomic commit, and advances the default
       branch. Reports whether it made a commit; a `files` argument that
       already matches the checkout is a no-op API-call-wise, which is what
-      makes a no-change `apply` produce zero commits.
+      makes a no-change `apply` produce zero commits. **A `nil` value for
+      a path in `files` signals deletion:** the file is removed from the
+      Git tree (via a `TreeEntry` with a `nil` SHA) and from the
+      in-memory `Checkout`. Paths not mentioned in `files` are left
+      untouched.
     - **`Archive`** — archives the repository rather than deleting it, so
       its history survives teardown. Idempotent: archiving an
       already-archived or never-created repository is a no-op, so a retried
@@ -268,7 +272,10 @@ on.
     - **`changedEntries`** — returns tree entries only for files that differ
       from `checkout`, so `Push` never rewrites an unchanged file into the
       commit and an empty diff yields zero tree entries (and thus no commit
-      at all).
+      at all). **A `nil` content in `files` produces a deletion entry**
+      (`SHA: nil`, standard GitHub Git Data API tombstone) when the path
+      currently exists in `checkout`; if the path is already absent, it is
+      silently skipped (idempotent).
 
 ## appofapps.go
 
@@ -285,6 +292,14 @@ on.
       and commits only when that hash differs from `.state.yaml`'s
       `AppsHash`, using commit message
       `"kubespin: sync app-of-apps Applications"`.
+    - **Addon orphan cleanup** — after building the desired `apps/` file set,
+      `ReconcileAppOfApps` walks every path currently tracked in `Checkout`
+      under `argocd.AppsDir+"/"` and marks any path **absent from the new
+      desired set** as `nil` (deletion). This ensures that removing an addon
+      from a profile causes its Application manifest to be deleted from the
+      repo — and therefore purged from Argo CD — on the very next
+      `apply`, with no manual cleanup. Covered by
+      `TestReconcileAppOfApps_RemovesDeletedAddon`.
     - **Invariant** — never touches the root Application itself — that one
       is applied straight to the cluster via `internal/argocd.KubeApplier`,
       not committed to the repository it manages.
@@ -327,6 +342,11 @@ on.
     - **`Archived`** — test-only visibility into archive state that
       `Archive` itself doesn't expose, mirroring how this codebase's other
       fakes expose their calls for assertions.
+    - **Deletion via nil content** — `Push` honours the same nil-as-deletion
+      convention as `githubProvisioner`: a `nil` value in `files` deletes
+      the path from the in-memory store and reports `changed = true` if the
+      path existed, so tests that exercise `ReconcileAppOfApps`'s orphan
+      cleanup work against `Memory` without needing a real GitHub client.
 
 ### `NewMemory`
 

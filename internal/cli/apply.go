@@ -321,7 +321,7 @@ func waitForArgoCDEndpoint(ctx context.Context, clientset kubernetes.Interface) 
 
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return "", fmt.Errorf("waiting for load balancer endpoint: %w", ctx.Err())
 		case <-time.After(argoCDAccessPollInterval):
 		}
 	}

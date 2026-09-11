@@ -71,9 +71,10 @@ const selectColumns = `
 
 // Postgres is the production Registry, backed by a Postgres database.
 type Postgres struct {
-	db     *sql.DB
-	now    func() time.Time
-	logger *slog.Logger
+	db            *sql.DB
+	now           func() time.Time
+	logger        *slog.Logger
+	skipMigration bool
 }
 
 // Option configures a Postgres registry client.
@@ -90,6 +91,30 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
+// WithoutMigration skips running schema DDL on connect. Meant for ephemeral
+// runtimes like the Central Ingestion API Lambda handler, where the schema is
+// managed out-of-band and running DDL on cold start causes table lock contention.
+func WithoutMigration() Option {
+	return func(p *Postgres) {
+		p.skipMigration = true
+	}
+}
+
+// WithConnectionPool configures max open/idle connections and connection lifetime.
+func WithConnectionPool(maxOpen, maxIdle int, maxLifetime time.Duration) Option {
+	return func(p *Postgres) {
+		if maxOpen > 0 {
+			p.db.SetMaxOpenConns(maxOpen)
+		}
+		if maxIdle > 0 {
+			p.db.SetMaxIdleConns(maxIdle)
+		}
+		if maxLifetime > 0 {
+			p.db.SetConnMaxLifetime(maxLifetime)
+		}
+	}
+}
+
 // NewPostgres opens a connection pool against dsn, verifies it, and
 // idempotently ensures the fleet_registry table and its index exist.
 func NewPostgres(ctx context.Context, dsn string, opts ...Option) (*Postgres, error) {
@@ -97,20 +122,31 @@ func NewPostgres(ctx context.Context, dsn string, opts ...Option) (*Postgres, er
 	if err != nil {
 		return nil, fmt.Errorf("opening postgres connection: %w", err)
 	}
+
+	// Default connection pool bounds to protect Postgres from connection exhaustion.
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(10)
+	db.SetConnMaxLifetime(15 * time.Minute)
+	db.SetConnMaxIdleTime(5 * time.Minute)
+
 	if err := db.PingContext(ctx); err != nil {
 		return nil, fmt.Errorf("connecting to postgres: %w", err)
-	}
-	if _, err := db.ExecContext(ctx, schemaDDL); err != nil {
-		return nil, fmt.Errorf("migrating fleet registry schema: %w", err)
-	}
-	if _, err := db.ExecContext(ctx, argoCDDetailsDDL); err != nil {
-		return nil, fmt.Errorf("migrating cluster_argocd_details schema: %w", err)
 	}
 
 	p := &Postgres{db: db, now: time.Now, logger: slog.Default()}
 	for _, opt := range opts {
 		opt(p)
 	}
+
+	if !p.skipMigration {
+		if _, err := db.ExecContext(ctx, schemaDDL); err != nil {
+			return nil, fmt.Errorf("migrating fleet registry schema: %w", err)
+		}
+		if _, err := db.ExecContext(ctx, argoCDDetailsDDL); err != nil {
+			return nil, fmt.Errorf("migrating cluster_argocd_details schema: %w", err)
+		}
+	}
+
 	return p, nil
 }
 
@@ -351,7 +387,7 @@ func (p *Postgres) List(ctx context.Context, filter Filter) ([]Record, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing registry: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var records []Record
 	for rows.Next() {
@@ -491,7 +527,7 @@ func scanRecord(s rowScanner) (Record, error) {
 		&updatedAt, &leaseHolder, &leaseExpiresAt,
 	)
 	if err != nil {
-		return Record{}, err
+		return Record{}, fmt.Errorf("scanning record: %w", err)
 	}
 
 	rec := Record{
@@ -543,7 +579,7 @@ func findingsJSON(rec Record) (any, error) {
 	}
 	b, err := json.Marshal(rec.Findings)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshaling findings: %w", err)
 	}
 	return b, nil
 }

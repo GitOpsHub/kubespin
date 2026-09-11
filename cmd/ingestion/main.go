@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -29,7 +30,13 @@ import (
 func newHandler(ctx context.Context) (*ingestion.Handler, error) {
 	dsn := os.Getenv("REGISTRY_DSN")
 
-	reg, err := registry.NewPostgres(ctx, dsn)
+	// Ingestion Lambda instances are ephemeral and burst-driven: skip running
+	// DDL migrations on cold start to prevent table lock contention, and bound
+	// connections per instance to avoid Postgres connection exhaustion.
+	reg, err := registry.NewPostgres(ctx, dsn,
+		registry.WithoutMigration(),
+		registry.WithConnectionPool(2, 1, 15*time.Minute),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to the Fleet Registry: %w", err)
 	}

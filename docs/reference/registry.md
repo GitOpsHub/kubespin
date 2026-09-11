@@ -16,7 +16,9 @@
 | [`Postgres`](#postgres) | struct | postgres.go | Production `Registry`, backed by a Postgres `fleet_registry` table it creates and migrates itself. |
 | [`Option`](#option-and-withlogger) | type (func) | postgres.go | Functional option for `NewPostgres`. |
 | [`WithLogger`](#option-and-withlogger) | func | postgres.go | `Option` that overrides the logger used by `Postgres`. |
-| [`NewPostgres`](#newpostgres) | func | postgres.go | Opens a connection pool against a DSN, pings it, and idempotently ensures the schema exists. |
+| [`WithoutMigration`](#withoutmigration) | func | postgres.go | `Option` that skips schema DDL on connect — for ephemeral/burst runtimes like the ingestion Lambda. |
+| [`WithConnectionPool`](#withconnectionpool) | func | postgres.go | `Option` that overrides the default connection-pool bounds (max open/idle conns and lifetime). |
+| [`NewPostgres`](#newpostgres) | func | postgres.go | Opens a connection pool against a DSN, sets pool defaults, pings it, and (unless `WithoutMigration`) idempotently ensures the schema exists. |
 | [`Memory`](#memory) | struct | memory.go | In-memory `Registry`, so components built on the registry are testable without credentials or a container. |
 | [`MemoryOption`](#memoryoption-and-withclock) | type (func) | memory.go | Functional option for `NewMemory`. |
 | [`WithClock`](#memoryoption-and-withclock) | func | memory.go | `MemoryOption` that replaces the time source, so lease expiry is testable without sleeping. |
@@ -230,9 +232,10 @@
 
     ```go
     type Postgres struct {
-        db     *sql.DB
-        now    func() time.Time
-        logger *slog.Logger
+        db            *sql.DB
+        now           func() time.Time
+        logger        *slog.Logger
+        skipMigration bool
     }
     ```
 
@@ -240,6 +243,7 @@
 - **Behavior:**
     - Uses `database/sql` over the `pgx` driver (`github.com/jackc/pgx/v5/stdlib`, imported for its side-effecting driver registration), not a Postgres-specific client library — so the registry is testable against any `database/sql`-compatible backend.
     - Registry logging is Debug-level diagnostic detail except a lease conflict, logged at Warn — that is the exact race the lease exists to catch.
+    - `skipMigration` is set by `WithoutMigration` and prevents `NewPostgres` from running the schema DDL — see `WithoutMigration` below for when this is appropriate.
 
 ### `Option` and `WithLogger`
 
@@ -254,6 +258,28 @@
 - **Params:** `logger *slog.Logger` — the logger `Postgres` should use.
 - **Behavior:** `Option` is a functional option for `NewPostgres`; `WithLogger` overrides the default logger (ignoring a nil logger, so passing one is optional).
 
+### `WithoutMigration`
+
+??? note "Signature"
+
+    ```go
+    func WithoutMigration() Option
+    ```
+
+- **Behavior:** Sets `skipMigration = true`, preventing `NewPostgres` from executing `schemaDDL` and `argoCDDetailsDDL` on connect. Intended for ephemeral, burst-driven runtimes like the Central Ingestion API Lambda handler, where the schema is managed out-of-band (either by the long-lived CLI process at first connect, or by a dedicated migration step) and running DDL on cold start causes table lock contention during bursts of parallel Lambda invocations.
+- **Invariant:** The schema must already exist before any `Postgres` client using this option runs. The CLI's `NewPostgres` call (without this option) self-migrates on first connect and is the natural owner of that migration.
+
+### `WithConnectionPool`
+
+??? note "Signature"
+
+    ```go
+    func WithConnectionPool(maxOpen, maxIdle int, maxLifetime time.Duration) Option
+    ```
+
+- **Params:** `maxOpen int` — maximum number of open connections; `maxIdle int` — maximum number of idle connections kept; `maxLifetime time.Duration` — maximum lifetime of a connection before it is recycled.
+- **Behavior:** Overrides the connection-pool bounds set by `NewPostgres`'s defaults. Zero values for any parameter are ignored (the corresponding bound is left at its default). Options are applied after the pool defaults are written, so `WithConnectionPool` can tighten them further for low-throughput callers — for example the ingestion Lambda uses `(2, 1, 15*time.Minute)` to cap per-instance connections and prevent Postgres exhaustion under Lambda concurrency.
+
 ### `NewPostgres`
 
 ??? note "Signature"
@@ -263,7 +289,13 @@
     ```
 
 - **Params:** `ctx context.Context`; `dsn string` — a `postgres://` connection string, read by callers only from `KUBESPIN_REGISTRY_DSN` (there is deliberately no flag for it, so a connection string carrying a password never lands in shell history); `opts ...Option`.
-- **Behavior:** `sql.Open("pgx", dsn)`, then `PingContext` to verify the connection actually works (rather than deferring the first error to whatever query happens to run first), then executes `schemaDDL`. `now` defaults to `time.Now` and `logger` to `slog.Default()`, both overridable via `Option`.
+- **Behavior:**
+    1. `sql.Open("pgx", dsn)` — registers the connection pool.
+    2. Sets **default connection pool bounds**: `SetMaxOpenConns(25)`, `SetMaxIdleConns(10)`, `SetConnMaxLifetime(15m)`, `SetConnMaxIdleTime(5m)` — conservative defaults that prevent a single CLI process from exhausting Postgres under concurrent apply/delete operations.
+    3. `PingContext` to verify the pool can actually reach the database (rather than deferring the first error to whatever query happens to run first).
+    4. Applies all `opts`, in order — including any `WithConnectionPool` call that tightens the bounds set in step 2.
+    5. Unless `skipMigration` is set (via `WithoutMigration`), executes `schemaDDL` then `argoCDDetailsDDL` to idempotently ensure the schema exists.
+    - `now` defaults to `time.Now` and `logger` to `slog.Default()`, both overridable via `Option`.
 
 ### Method behavior (Postgres)
 
@@ -311,6 +343,7 @@
 
     - One query, always: `SELECT <selectColumns> FROM fleet_registry WHERE ($1 = '' OR provider = $1) AND ($2 = '' OR phase = $2) ORDER BY cluster_id`, served by the `(provider, phase)` index whenever `Provider` is set.
     - Unlike a DynamoDB-backed registry's eventually-consistent scan-vs-GSI-query split, there is exactly one code path here — Postgres reads are always consistent, so there is nothing to choose between or paginate through beyond what the driver already does.
+    - `rows.Close()` is called via `defer func() { _ = rows.Close() }()` — the blank identifier suppresses the linter's "unhandled error" warning on a deferred close that cannot meaningfully be acted on.
 
 ??? note "`AcquireLease`"
 
@@ -347,7 +380,7 @@
     func scanRecord(s rowScanner) (Record, error)
     ```
 
-    - **Behavior:** `rowScanner` is satisfied by both `*sql.Row` and `*sql.Rows`, so this one function serves `Get`/`UpdatePhase` (one row) and `List` (many) alike. Builds a `Record` from the scanned columns, using `sql.NullTime`/`sql.NullString` for the optional ones (`LastReportedAt`, `FindingsAt`, lease fields) so "never reported"/"never audited" stays distinguishable from the zero time rather than colliding with it. `Findings` is only unmarshalled when `findings_at` is valid — an absent `FindingsAt` (never audited) must stay distinguishable from an empty `Findings` list (audited and clean). Returns an error if a lease holder is set but its expiry is `NULL` — a state the schema allows but the application logic must never produce.
+    - **Behavior:** `rowScanner` is satisfied by both `*sql.Row` and `*sql.Rows`, so this one function serves `Get`/`UpdatePhase` (one row) and `List` (many) alike. Builds a `Record` from the scanned columns, using `sql.NullTime`/`sql.NullString` for the optional ones (`LastReportedAt`, `FindingsAt`, lease fields) so "never reported"/"never audited" stays distinguishable from the zero time rather than colliding with it. `Findings` is only unmarshalled when `findings_at` is valid — an absent `FindingsAt` (never audited) must stay distinguishable from an empty `Findings` list (audited and clean). Returns an error if a lease holder is set but its expiry is `NULL` — a state the schema allows but the application logic must never produce. Scan errors are wrapped with `"scanning record: %w"` to give callers a useful call site in stack traces.
 
 ??? note "`findingsJSON` / `nullTime` / `leaseHolder` / `leaseExpiry`"
 
@@ -358,7 +391,7 @@
     func leaseExpiry(l *Lease) any
     ```
 
-    - **Behavior:** small helpers shared by `Create`, converting Go zero values into SQL `NULL` (rather than an empty/zero value that would collapse "never reported"/"never audited"/"unheld" into a real value) and a `*Lease` into its two column values.
+    - **Behavior:** small helpers shared by `Create`, converting Go zero values into SQL `NULL` (rather than an empty/zero value that would collapse "never reported"/"never audited"/"unheld" into a real value) and a `*Lease` into its two column values. `findingsJSON` wraps its marshal error with `"marshaling findings: %w"`.
 
 ## memory.go
 

@@ -175,7 +175,7 @@ internal/registry/          Fleet Registry client and lease
 internal/orchestrator/      per-cluster phase state machine and reverse teardown
 internal/provisioner/       cluster/identity/network interfaces, one impl per cloud
 internal/repo/              cluster repositories over GitHub
-internal/catalog/           profile resolution
+internal/catalog/           size resolution (small/medium/large, builtin) + per-cluster override patches
 internal/argocd/            app-of-apps rendering and Argo CD install
 internal/fleet/             fleet-wide audit, update, and status
 internal/fleetinfra/        SDK-driven converge engine for the fleet infrastructure
@@ -193,7 +193,3 @@ Start at [docs/](docs/README.md).
 - [Fleet bootstrap](docs/fleet-bootstrap.md) — operator runbook, including the IAM permissions needed to run it
 - [Development](docs/development.md) — toolchain, testing, and how to add a converge step
 - [CLI reference](docs/cli/kubespin.md) — generated from the command tree by `make docs`
-
-Planning documents:
-
-- [IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md](IMPLEMENTATION-PLAN-multicloud-k8s-platform-cli.md) — milestones and acceptance criteria

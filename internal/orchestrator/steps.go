@@ -399,7 +399,7 @@ func drainLoadBalancers(ctx context.Context, cloud Cloud, spec core.ClusterSpec,
 
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("draining load balancers: %w", ctx.Err())
 		case <-time.After(drainLoadBalancersPollInterval):
 		}
 	}

@@ -79,6 +79,12 @@ func (m *Memory) Push(_ context.Context, checkout *Checkout, files map[string][]
 
 	changed := false
 	for path, content := range files {
+		if content == nil {
+			if _, ok := store[path]; ok {
+				changed = true
+			}
+			continue
+		}
 		if existing, ok := store[path]; !ok || string(existing) != string(content) {
 			changed = true
 		}
@@ -88,8 +94,13 @@ func (m *Memory) Push(_ context.Context, checkout *Checkout, files map[string][]
 	}
 
 	for path, content := range files {
-		store[path] = content
-		checkout.files[path] = content
+		if content == nil {
+			delete(store, path)
+			delete(checkout.files, path)
+		} else {
+			store[path] = content
+			checkout.files[path] = content
+		}
 	}
 	return true, nil
 }

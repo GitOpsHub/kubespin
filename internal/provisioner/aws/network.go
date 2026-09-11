@@ -478,7 +478,7 @@ func (p *NetworkProvisioner) deleteVPC(ctx context.Context, vpcID string) error 
 
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("deleting VPC %s: %w", vpcID, ctx.Err())
 		case <-time.After(p.retryInterval):
 		}
 	}

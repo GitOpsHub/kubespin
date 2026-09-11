@@ -438,7 +438,11 @@ func (p *githubProvisioner) Push(
 
 	checkout.baseCommitSHA = commitSHA
 	for path, content := range files {
-		checkout.files[path] = content
+		if content == nil {
+			delete(checkout.files, path)
+		} else {
+			checkout.files[path] = content
+		}
 	}
 	return true, nil
 }
@@ -471,10 +475,22 @@ func (p *githubProvisioner) Archive(ctx context.Context, spec core.ClusterSpec) 
 }
 
 // changedEntries returns tree entries for exactly the files that differ from
-// checkout, so an unchanged file is never rewritten into the commit.
+// checkout, so an unchanged file is never rewritten into the commit. A nil
+// content indicates the file should be deleted from the Git tree.
 func changedEntries(checkout *Checkout, files map[string][]byte) []*github.TreeEntry {
 	var entries []*github.TreeEntry
 	for path, content := range files {
+		if content == nil {
+			if _, ok := checkout.File(path); ok {
+				entries = append(entries, &github.TreeEntry{
+					Path: github.Ptr(path),
+					Mode: github.Ptr("100644"),
+					Type: github.Ptr("blob"),
+					SHA:  nil,
+				})
+			}
+			continue
+		}
 		if existing, ok := checkout.File(path); ok && string(existing) == string(content) {
 			continue
 		}

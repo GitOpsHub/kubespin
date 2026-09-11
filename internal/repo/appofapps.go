@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 
@@ -71,6 +72,15 @@ func ReconcileAppOfApps(ctx context.Context, rp Provisioner, spec core.ClusterSp
 	files := make(map[string][]byte, len(apps)+1)
 	for path, content := range apps {
 		files[path] = content
+	}
+	// Mark any apps that existed in the repository but are absent from the
+	// newly resolved addon set as deleted (nil content).
+	for path := range checkout.files {
+		if strings.HasPrefix(path, argocd.AppsDir+"/") {
+			if _, ok := apps[path]; !ok {
+				files[path] = nil
+			}
+		}
 	}
 	files[StateFile] = stateYAML
 

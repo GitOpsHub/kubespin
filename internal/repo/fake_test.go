@@ -203,7 +203,11 @@ func (f *fakeGitHub) CreateTree(
 		merged[k] = v
 	}
 	for _, e := range entries {
-		merged[e.GetPath()] = e.GetContent()
+		if e.SHA == nil && e.Content == nil {
+			delete(merged, e.GetPath())
+		} else {
+			merged[e.GetPath()] = e.GetContent()
+		}
 	}
 
 	sha := f.genSHA()

@@ -217,8 +217,8 @@ type ClusterSpec struct {
 	// taking an explicit per-subnet size. Empty means "use kubespin's default."
 	SubnetCIDR string `yaml:"subnetCIDR,omitempty" json:"subnetCIDR,omitempty"`
 
-	// Overrides is this cluster's per-cluster patch onto Profile's resolved
-	// addon set. It lives here, in the user-authored cluster.yaml, rather than
+	// Overrides is this cluster's per-cluster patch onto the chosen ClusterSize's
+	// resolved addon Profile. It lives here, in the user-authored cluster.yaml, rather than
 	// in a separate file: the addons.yaml the catalog resolves to is derived
 	// state, not something a cluster owner edits directly.
 	Overrides []AddonOverride `yaml:"overrides,omitempty" json:"overrides,omitempty"`
