@@ -194,7 +194,7 @@ exposure.
         Name:       "argocd",
         Chart:      "argo-cd",
         Repository: "https://argoproj.github.io/argo-helm",
-        Version:    "7.7.11",
+        Version:    "10.9.2",
         Namespace:  installNamespace,
         Values:     ServerLoadBalancerValues,
     }

@@ -25,7 +25,7 @@ func newFleetCommand() *cobra.Command {
   # (in .env or the environment) for every one of these.
   kubespin fleet bootstrap --account-id 465532803838 --region us-east-1
   kubespin fleet status
-  kubespin fleet update --component argo-cd --version 2.11.0 --github-org GitOpsHub
+  kubespin fleet update --component argo-cd --version 3.5.3 --github-org GitOpsHub
   kubespin fleet audit --github-org GitOpsHub`,
 		Args: cobra.NoArgs,
 		// With no subcommand, print help rather than failing.
@@ -65,7 +65,7 @@ matching cluster's repository. A cluster already at the target version
 reports "already up to date" and commits nothing, so re-running a partially
 failed wave is safe.`,
 		Example: `  # Roll a new Argo CD version across every cluster, 8 at a time
-  kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8 \
+  kubespin fleet update --component argo-cd --version 3.5.3 --concurrency 8 \
     --github-org GitOpsHub
 
   # Canary the first 3 clusters before rolling to the rest of the fleet

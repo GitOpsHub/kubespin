@@ -96,7 +96,7 @@ kubespin apply --provider azure --azure-subscription "$AZURE_SUBSCRIPTION_ID" \
 make lambda
 kubespin fleet bootstrap --account-id 465532803838 --region us-east-1
 kubespin fleet status
-kubespin fleet update --component argo-cd --version 2.11.0 \
+kubespin fleet update --component argo-cd --version 3.5.3 \
   --github-org "$GITHUB_ORG"
 kubespin fleet audit \
   --github-org "$GITHUB_ORG"

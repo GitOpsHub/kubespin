@@ -31,7 +31,7 @@ kubespin fleet update [flags]
 
 ```bash
   # Roll a new Argo CD version across every cluster, 8 at a time
-  kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8 \
+  kubespin fleet update --component argo-cd --version 3.5.3 --concurrency 8 \
     --github-org GitOpsHub
 
   # Canary the first 3 clusters before rolling to the rest of the fleet

@@ -50,7 +50,7 @@ func TestInstall_MissingRepositoryIsAnError(t *testing.T) {
 	h := NewHelmInstaller(nil)
 
 	err := h.Install(t.Context(), &restConfigStub, core.AddonRef{
-		Name: "argocd", Chart: "argo-cd", Namespace: Namespace, Version: "7.7.11",
+		Name: "argocd", Chart: "argo-cd", Namespace: Namespace, Version: "10.9.2",
 	})
 	if err == nil {
 		t.Fatal("expected LocateChart to fail without a repository or network access to one")
