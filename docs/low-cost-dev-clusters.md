@@ -167,48 +167,8 @@ make spot AWS_REGION=us-west-2 AWS_CLUSTER_ID=my-aws-dev
 ## Manual multi-cloud smoke test
 
 `make spot` is the one-shot version. Running the same idea by hand — one
-`apply` per cloud (run each in its own terminal, or background it yourself
-with a trailing `&`), polling `fleet status`, then tearing both down — is
-useful when you want to watch each step, or only need two of the three
-clouds:
-
-```bash
-kubespin apply --provider aws --cluster-id spot-test-aws --region us-east-1 \
-  --access public --github-org "$GITHUB_ORG" --spot
-```
-
-```bash
-kubespin apply --provider gcp --gcp-project "$GCP_PROJECT" --cluster-id spot-test-gcp \
-  --region us-central1 --access public --github-org "$GITHUB_ORG" --spot
-```
-
-Each `apply` takes several minutes (control plane creation is the slow
-part — EKS more than GKE). Poll until both reach `ready`:
-
-```bash
-kubespin fleet status
-```
-
-```text
-spot-test-aws   aws   ready   true   never audited   never
-spot-test-gcp   gcp   ready   true   never audited   never
-```
-
-Once both are `ready`, tear them down — `delete` needs the same
-`--provider`/`--region`/`--access` the cluster was created with:
-
-```bash
-kubespin delete --provider aws --cluster-id spot-test-aws --region us-east-1 \
-  --access public --github-org "$GITHUB_ORG" --yes
-```
-
-```bash
-kubespin delete --provider gcp --gcp-project "$GCP_PROJECT" --cluster-id spot-test-gcp \
-  --region us-central1 --access public --github-org "$GITHUB_ORG" --yes
-```
-
-If a `delete` gets stuck partway through, see
-[Troubleshooting a stuck delete](runbook.md#troubleshooting-a-stuck-delete) —
-`delete` is idempotent and resumes from `decommissioning` on retry, so a
-failed attempt is always safe to run again once the underlying blocker is
-cleared.
+`apply` per cloud, polling `fleet status`, then tearing both down — is useful
+when you want to watch each step, or only need two of the three clouds. See
+[Examples: smoke test](examples.md#smoke-test-create-and-destroy-a-throwaway-cluster)
+for the full walkthrough (it already uses `--spot`); the only difference here
+is which cluster IDs and clouds you pick.
