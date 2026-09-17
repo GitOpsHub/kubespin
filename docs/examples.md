@@ -15,6 +15,37 @@ written once the prerequisites below are in place.
 make build
 ```
 
+## Quickstart
+
+The fastest path to one running cluster:
+
+- **Fleet already bootstrapped?** Ask your platform team, or run
+  `kubespin fleet status` with `KUBESPIN_REGISTRY_DSN` set — if it runs
+  (even against a fleet with no clusters yet), the shared infra already
+  exists. Skip straight to the `apply` below.
+- **Setting up a fleet from scratch?** Run [Fleet bootstrap](fleet-bootstrap.md)
+  once, first — it provisions the shared Central Ingestion API and is a
+  one-time fleet-admin operation, not something every new cluster repeats.
+
+```bash
+kubespin login --only aws
+
+kubespin apply \
+  --provider aws \
+  --region us-east-1 \
+  --cluster-id demo-aws \
+  --access private \
+  --github-org "$GITHUB_ORG"
+
+kubespin fleet status --phase ready
+```
+
+That's the same AWS example as [Spin up a single cluster](#aws-private-cluster)
+below, with `GITHUB_TOKEN`, `GITHUB_ORG`, and `KUBESPIN_REGISTRY_DSN` assumed
+set — see [Prerequisites](#prerequisites) for what those are and why each is
+required. For the cheapest possible cluster to try this with, see
+[Low-cost dev clusters](low-cost-dev-clusters.md).
+
 ## Prerequisites
 
 ### Cloud sessions
@@ -431,32 +462,22 @@ The shared fleet infrastructure — the Central Ingestion API — is provisioned
 once per fleet account, before any cluster, via `fleet bootstrap`. The Fleet
 Registry itself is a separately operated Postgres database
 (`KUBESPIN_REGISTRY_DSN`); it self-migrates its schema on first connect, so
-there is nothing to provision for it. Full walkthrough, including required
-IAM permissions, in [Fleet bootstrap](fleet-bootstrap.md).
+there is nothing to provision for it. This is a one-time fleet-admin step, not
+part of every cluster's lifecycle — full walkthrough, including required IAM
+permissions and troubleshooting, in [Fleet bootstrap](fleet-bootstrap.md).
+
+Once that's done (or if it already was — see [Quickstart](#quickstart)),
+everything below is the recurring, per-cluster/per-fleet part:
 
 ```bash
-# 1. Build the ingestion handler — bootstrap reads it from disk
-make lambda
-
-# 2. Preview
-kubespin fleet bootstrap --account-id 465532803838 --region us-east-1 --dry-run
-
-# 3. Apply
-kubespin fleet bootstrap --account-id 465532803838 --region us-east-1
-
-# 4. Re-run the preview: everything must now report in sync
-kubespin fleet bootstrap --account-id 465532803838 --region us-east-1 --dry-run
-```
-
-```bash
-# 5. Spin up clusters (repeat per cluster; see "Spin up a single cluster")
+# 1. Spin up clusters (repeat per cluster; see "Spin up a single cluster")
 kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
   --access private \
   --github-org "$GITHUB_ORG"
 ```
 
 ```bash
-# 6. Watch the fleet — read-only, never connects to a cluster
+# 2. Watch the fleet — read-only, never connects to a cluster
 kubespin fleet status
 kubespin fleet status --stale-only --stale-threshold 30m
 kubespin fleet status --output json
@@ -467,7 +488,7 @@ kubespin fleet dashboard
 ```
 
 ```bash
-# 7. Roll a component version across every matching cluster
+# 3. Roll a component version across every matching cluster
 kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8 \
   --github-org "$GITHUB_ORG"
 
@@ -477,7 +498,7 @@ kubespin fleet update --component cert-manager --version 1.15.1 --provider aws \
 ```
 
 ```bash
-# 8. Check live infra against each cluster's cluster.yaml
+# 4. Check live infra against each cluster's cluster.yaml
 kubespin fleet audit \
   --github-org "$GITHUB_ORG"
 
