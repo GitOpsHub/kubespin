@@ -13,7 +13,7 @@ kubespin fleet [flags]
   # (in .env or the environment) for every one of these.
   kubespin fleet bootstrap --account-id 465532803838 --region us-east-1
   kubespin fleet status
-  kubespin fleet update --component argo-cd --version 2.11.0 --github-org GitOpsHub
+  kubespin fleet update --component argo-cd --version 3.5.3 --github-org GitOpsHub
   kubespin fleet audit --github-org GitOpsHub
 ```
 
