@@ -69,6 +69,16 @@ lint:
 docs:
 	go run ./internal/tools/docsgen
 
+## Prepends a dated CHANGELOG.md section for VERSION, built from Conventional
+## Commit subjects since the last tag. Mainly for local preview — the release
+## workflow (.github/workflows/release.yml) runs the same generator itself on
+## every merge to main, so this is not part of a normal release.
+##   make changelog VERSION=v1.2.3
+.PHONY: changelog
+changelog:
+	@test -n "$(VERSION)" || { echo "usage: make changelog VERSION=vX.Y.Z" >&2; exit 1; }
+	go run ./internal/tools/changeloggen render -version $(VERSION)
+
 .PHONY: fmt
 fmt:
 	go fmt ./...

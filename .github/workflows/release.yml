@@ -1,0 +1,100 @@
+name: release
+
+# Runs after CI passes on main. If commits since the last tag include a
+# feat/fix/perf (or a BREAKING CHANGE), it bumps SemVer, updates
+# CHANGELOG.md, tags, and publishes a GitHub Release with cross-platform
+# binaries — fully automatic, no manual `make release`/tag push. See
+# docs/development.md#releases and internal/tools/changeloggen.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: "1.26"
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0 # tag history is needed for git describe/log
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Determine next version
+        id: version
+        run: |
+          if version=$(go run ./internal/tools/changeloggen next); then
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update CHANGELOG.md
+        if: steps.version.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: go run ./internal/tools/changeloggen render -version "$VERSION"
+
+      - name: Commit and tag
+        if: steps.version.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "chore(release): $VERSION"
+          git tag -a "$VERSION" -m "$VERSION"
+          git push origin main
+          git push origin "$VERSION"
+
+      - name: Release notes
+        if: steps.version.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: go run ./internal/tools/changeloggen extract "$VERSION" > release-notes.md
+
+      - name: Build release binaries
+        if: steps.version.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist
+          for platform in linux/amd64 linux/arm64 darwin/arm64; do
+            goos=${platform%/*}
+            goarch=${platform#*/}
+            out="dist/kubespin-${goos}-${goarch}"
+            mkdir -p "$out"
+            GOOS=$goos GOARCH=$goarch go build -trimpath \
+              -ldflags "-X github.com/GitOpsHub/kubespin/internal/version.Version=$VERSION \
+                        -X github.com/GitOpsHub/kubespin/internal/version.Commit=$(git rev-parse --short HEAD) \
+                        -X github.com/GitOpsHub/kubespin/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              -o "$out/kubespin" ./cmd/kubespin
+            tar -C dist -czf "dist/kubespin-${goos}-${goarch}.tar.gz" "kubespin-${goos}-${goarch}"
+          done
+
+      - name: Publish GitHub Release
+        if: steps.version.outputs.release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          body_path: release-notes.md
+          files: dist/*.tar.gz
