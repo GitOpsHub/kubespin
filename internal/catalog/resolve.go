@@ -19,6 +19,7 @@ func ResolveForCluster(ctx context.Context, resolver Resolver, spec core.Cluster
 		return core.Profile{}, fmt.Errorf("resolving size %s for %s: %w", spec.Size, spec.ID, err)
 	}
 	profile = profile.ForProvider(spec.Provider)
+	profile = profile.ForAutopilot(spec.Autopilot)
 	profile = withArgoCDAddon(profile)
 
 	merged, err := Merge(profile, spec.Overrides)

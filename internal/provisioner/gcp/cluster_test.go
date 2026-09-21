@@ -317,6 +317,113 @@ func TestClusterProvisioner_Delete_ConvergesOnAClusterAlreadyDeleting(t *testing
 	}
 }
 
+func TestClusterProvisioner_Create_Autopilot_SetsAutopilotEnabled(t *testing.T) {
+	f := newFakeGCP()
+	p := NewClusterProvisioner(f.clients())
+	spec := testSpec()
+	spec.Autopilot = true
+	spec.NodePools = nil
+
+	if err := p.Create(context.Background(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if f.cluster == nil {
+		t.Fatal("expected a cluster to have been created")
+	}
+	if !f.cluster.GetAutopilot().GetEnabled() {
+		t.Error("expected Autopilot.Enabled to be true")
+	}
+	if len(f.cluster.NodePools) != 0 {
+		t.Errorf("NodePools = %v, want none set under Autopilot", f.cluster.NodePools)
+	}
+}
+
+func TestClusterProvisioner_Create_Autopilot_SkipsNodePoolCreation(t *testing.T) {
+	f := newFakeGCP()
+	p := NewClusterProvisioner(f.clients())
+	spec := testSpec()
+	spec.Autopilot = true
+	spec.NodePools = nil
+	f.activeCluster(spec)
+
+	if err := p.Create(context.Background(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	for _, call := range f.calls {
+		if call == "CreateNodePool" || call == "SetNodePoolSize" {
+			t.Errorf("unexpected node-pool call %q under Autopilot", call)
+		}
+	}
+}
+
+func TestClusterProvisioner_Reconcile_Autopilot_SkipsEnsureNodePools(t *testing.T) {
+	f := newFakeGCP()
+	spec := testSpec()
+	spec.Autopilot = true
+	spec.NodePools = nil
+	f.activeCluster(spec)
+	f.calls = nil
+
+	state, err := NewClusterProvisioner(f.clients()).Reconcile(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if state.Changed {
+		t.Errorf("expected no change under Autopilot, got %v", state.Details)
+	}
+	for _, call := range f.calls {
+		if call == "CreateNodePool" || call == "SetNodePoolSize" {
+			t.Errorf("unexpected node-pool call %q under Autopilot", call)
+		}
+	}
+}
+
+// A `delete` invocation rebuilds ClusterSpec from flags with no --spec file,
+// so it will not necessarily have --autopilot set even for a cluster that
+// was created with it. Describe must detect Autopilot from the live cluster
+// itself, not trust the caller's spec, so Delete/Reconcile still work.
+func TestClusterProvisioner_Describe_DetectsAutopilotFromLiveCluster(t *testing.T) {
+	f := newFakeGCP()
+	spec := testSpec()
+	spec.Autopilot = true
+	f.activeCluster(spec)
+
+	// Simulate a `delete` invocation: the spec passed in has no --autopilot,
+	// unlike the one that created the cluster.
+	describeSpec := spec
+	describeSpec.Autopilot = false
+
+	state, err := NewClusterProvisioner(f.clients()).Describe(context.Background(), describeSpec)
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	if !state.Autopilot {
+		t.Error("expected Describe to detect Autopilot from the live cluster, regardless of spec.Autopilot")
+	}
+}
+
+func TestClusterProvisioner_Delete_DoesNotRequireAutopilotFlag(t *testing.T) {
+	f := newFakeGCP()
+	spec := testSpec()
+	spec.Autopilot = true
+	spec.NodePools = nil
+	f.activeCluster(spec)
+
+	// The delete-side spec omits --autopilot, as a real `delete` invocation
+	// without a --spec file would.
+	deleteSpec := spec
+	deleteSpec.Autopilot = false
+
+	if err := NewClusterProvisioner(f.clients()).Delete(context.Background(), deleteSpec); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if slices.Contains(f.calls, "ListNodePools") {
+		t.Error("Delete should not list node pools for a live Autopilot cluster, even without --autopilot on the spec")
+	}
+}
+
 func TestNormaliseStatus(t *testing.T) {
 	cases := map[containerpb.Cluster_Status]provisioner.Status{
 		containerpb.Cluster_RUNNING:      provisioner.StatusActive,

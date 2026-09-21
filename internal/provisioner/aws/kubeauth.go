@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net/http"
+	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -23,12 +26,35 @@ import (
 // cached.
 const eksTokenPrefix = "k8s-aws-v1." //nolint:gosec // not a credential, just the token's format prefix
 
-// eksTokenExpirySeconds is the token's lifetime, matching the 60s
-// aws-iam-authenticator itself uses. aws-sdk-go-v2's PresignHTTP does *not*
-// set X-Amz-Expires on its own (see its doc comment) — omitting it entirely
-// produces a presigned URL the built-in authenticator rejects outright rather
-// than one that merely never expires, so this has to be added explicitly.
+// eksTokenExpirySeconds is stamped onto the presigned URL's X-Amz-Expires
+// query parameter. aws-sdk-go-v2's PresignHTTP does *not* set it on its own
+// (see its doc comment) — omitting it entirely produces a presigned URL the
+// built-in authenticator rejects outright rather than one that merely never
+// expires, so this has to be added explicitly.
+//
+// The value itself is close to decorative: aws-iam-authenticator's own
+// Verify() only sanity-checks that X-Amz-Expires is between 0 and 900, then
+// separately enforces a flat, hardcoded 15-minute window measured from the
+// request's X-Amz-Date — it ignores whatever X-Amz-Expires actually claims
+// beyond that bounds check. "60" here matches the token AWS's own
+// `aws-iam-authenticator token`/`aws eks get-token` mint (which sets it for
+// legacy compatibility, by its own admission unused), so it is kept for
+// parity rather than because it changes the real expiry. The real,
+// enforced window is what eksTokenRefreshInterval below has to stay under.
 const eksTokenExpirySeconds = "60"
+
+// eksTokenRefreshInterval bounds how long a minted bearer token is reused
+// before RESTConfig's transport mints a fresh one. It must stay comfortably
+// under aws-iam-authenticator's actual enforced window (a flat 15 minutes
+// from the token's signing time, per its Verify() — see eksTokenExpirySeconds
+// above); 10 minutes leaves a 5-minute margin for a slow request or clock
+// skew. A single static token was the original design here, and it broke on
+// EKS Auto Mode: node provisioning on first pod schedule can leave the Argo
+// CD Helm install's wait-for-ready loop running for 15+ minutes, well past
+// the real window, so every request after that point failed with
+// Unauthorized. Standard EKS with pre-warmed managed node groups usually
+// finishes well inside 15 minutes, which is why this was not caught earlier.
+const eksTokenRefreshInterval = 10 * time.Minute
 
 // stsPresignAPI mints that bearer token. Narrowed to this one operation so
 // the whole RESTConfig path is testable without AWS credentials, the same way
@@ -84,6 +110,14 @@ func (p *stsPresigner) PresignGetCallerIdentityURL(ctx context.Context, clusterN
 // provisioner.RESTConfigProvisioner. The cluster must already be active: its
 // endpoint and CA data come from the same Describe call every other caller
 // uses.
+//
+// The returned config carries no static bearer token. A long-running caller
+// (Argo CD's Helm install, which can legitimately run 15+ minutes while
+// nodes provision) would otherwise present the same token past its real
+// ~15-minute validity window and start failing with Unauthorized partway
+// through — WrapTransport instead mints a fresh token on first use and
+// re-mints it every eksTokenRefreshInterval, transparently to every caller
+// that just wants a *rest.Config.
 func (p *ClusterProvisioner) RESTConfig(ctx context.Context, spec core.ClusterSpec) (*rest.Config, error) {
 	state, err := p.Describe(ctx, spec)
 	if err != nil {
@@ -93,14 +127,67 @@ func (p *ClusterProvisioner) RESTConfig(ctx context.Context, spec core.ClusterSp
 		return nil, fmt.Errorf("EKS cluster %s is not active (status %s)", spec.ID, state.Status)
 	}
 
-	url, err := p.c.sts.PresignGetCallerIdentityURL(ctx, names{spec}.cluster())
+	clusterName := names{spec}.cluster()
+	cfg := &rest.Config{
+		Host:            state.Endpoint,
+		TLSClientConfig: rest.TLSClientConfig{CAData: state.CertificateAuthorityData},
+	}
+	cfg.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
+		return &eksRefreshingTransport{
+			base:    rt,
+			sts:     p.c.sts,
+			cluster: clusterName,
+			now:     time.Now,
+		}
+	}
+	return cfg, nil
+}
+
+// eksRefreshingTransport wraps an http.RoundTripper, minting a fresh EKS
+// bearer token on the first request and again every eksTokenRefreshInterval,
+// so a client holding this *rest.Config across a long-running operation
+// never presents a token past its real validity window.
+type eksRefreshingTransport struct {
+	base    http.RoundTripper
+	sts     stsPresignAPI
+	cluster string
+
+	// now is a seam for tests to simulate elapsed time without sleeping.
+	now func() time.Time
+
+	mu       sync.Mutex
+	token    string
+	mintedAt time.Time
+}
+
+func (t *eksRefreshingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	token, err := t.currentToken(req.Context())
 	if err != nil {
-		return nil, fmt.Errorf("minting EKS bearer token for %s: %w", spec.ID, err)
+		return nil, fmt.Errorf("minting EKS bearer token for %s: %w", t.cluster, err)
 	}
 
-	return &rest.Config{
-		Host:            state.Endpoint,
-		BearerToken:     eksTokenPrefix + base64.RawURLEncoding.EncodeToString([]byte(url)),
-		TLSClientConfig: rest.TLSClientConfig{CAData: state.CertificateAuthorityData},
-	}, nil
+	req = req.Clone(req.Context())
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := t.base.RoundTrip(req)
+	if err != nil {
+		return nil, fmt.Errorf("round-tripping request for %s: %w", t.cluster, err)
+	}
+	return resp, nil
+}
+
+func (t *eksRefreshingTransport) currentToken(ctx context.Context) (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.token != "" && t.now().Sub(t.mintedAt) < eksTokenRefreshInterval {
+		return t.token, nil
+	}
+
+	url, err := t.sts.PresignGetCallerIdentityURL(ctx, t.cluster)
+	if err != nil {
+		return "", fmt.Errorf("presigning GetCallerIdentity for %s: %w", t.cluster, err)
+	}
+	t.token = eksTokenPrefix + base64.RawURLEncoding.EncodeToString([]byte(url))
+	t.mintedAt = t.now()
+	return t.token, nil
 }

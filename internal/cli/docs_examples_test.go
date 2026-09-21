@@ -154,7 +154,7 @@ func extractInvocations(doc string) []invocation {
 			line = strings.TrimSuffix(line, `\`) + " " + strings.TrimSpace(lines[i])
 		}
 
-		fields := strings.Fields(strings.TrimPrefix(line, docPrompt))
+		fields := splitShellWords(strings.TrimPrefix(line, docPrompt))
 		inv := invocation{args: make([]string, 0, len(fields))}
 		for _, f := range fields {
 			// A trailing "2>/dev/null" is shell redirection, not an argument.
@@ -189,6 +189,55 @@ func extractInvocations(doc string) []invocation {
 		out = append(out, inv)
 	}
 	return out
+}
+
+// splitShellWords is a minimal shell-aware tokenizer: it splits on whitespace
+// like strings.Fields, except a double-quoted span or a $(...) command
+// substitution counts as one word even when it contains internal spaces
+// (e.g. `"$(curl -s ifconfig.me)/32"`), so such an argument is not split
+// into several stray positional-looking tokens.
+func splitShellWords(s string) []string {
+	var (
+		words      []string
+		current    strings.Builder
+		inQuotes   bool
+		parenDepth int
+	)
+
+	flush := func() {
+		if current.Len() > 0 {
+			words = append(words, current.String())
+			current.Reset()
+		}
+	}
+
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '"':
+			inQuotes = !inQuotes
+			current.WriteByte(c)
+		case inQuotes || parenDepth > 0:
+			switch c {
+			case '(':
+				parenDepth++
+			case ')':
+				parenDepth--
+			}
+			current.WriteByte(c)
+		case c == '$' && i+1 < len(s) && s[i+1] == '(':
+			parenDepth++
+			current.WriteByte(c)
+			current.WriteByte('(')
+			i++
+		case c == ' ' || c == '\t':
+			flush()
+		default:
+			current.WriteByte(c)
+		}
+	}
+	flush()
+	return words
 }
 
 // repoRoot walks up from the package directory to the module root.

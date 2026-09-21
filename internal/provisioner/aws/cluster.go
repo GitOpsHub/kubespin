@@ -46,8 +46,18 @@ func (p *ClusterProvisioner) Create(ctx context.Context, spec core.ClusterSpec) 
 		return err
 	}
 
-	clusterRoleARN, err := p.ensureRole(ctx, names{spec}.clusterRole(),
-		eksServiceTrust("eks.amazonaws.com"), []string{policyEKSCluster})
+	clusterPolicies := []string{policyEKSCluster}
+	clusterTrust := eksServiceTrust("eks.amazonaws.com")
+	if spec.Autopilot {
+		clusterPolicies = append(clusterPolicies,
+			policyEKSComputePolicy, policyEKSBlockStoragePolicy,
+			policyEKSLoadBalancingPolicy, policyEKSNetworkingPolicy)
+		// Auto Mode's tag-based resource scoping requires the cluster role to
+		// also be able to tag the sessions it assumes under, beyond the plain
+		// AssumeRole every EKS cluster role needs.
+		clusterTrust = eksClusterAutoModeTrust("eks.amazonaws.com")
+	}
+	clusterRoleARN, err := p.ensureRole(ctx, names{spec}.clusterRole(), clusterTrust, clusterPolicies)
 	if err != nil {
 		return err
 	}
@@ -67,8 +77,10 @@ func (p *ClusterProvisioner) Create(ctx context.Context, spec core.ClusterSpec) 
 	}
 
 	if state.Status == provisioner.StatusActive {
-		if err := p.ensureNodeGroups(ctx, spec, nil); err != nil {
-			return err
+		if !state.Autopilot {
+			if err := p.ensureNodeGroups(ctx, spec, nil); err != nil {
+				return err
+			}
 		}
 		return p.ensureCSIAddons(ctx, spec, state, nil)
 	}
@@ -84,6 +96,28 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 	}
 	if spec.KubernetesVersion != "" {
 		in.Version = aws.String(spec.KubernetesVersion)
+	}
+	if spec.Autopilot {
+		autoNodeRoleARN, err := p.ensureRole(ctx, names{spec}.autoNodeRole(),
+			eksServiceTrust("ec2.amazonaws.com"), []string{policyEKSWorkerNodeMinimal, policyECRPullOnly})
+		if err != nil {
+			return fmt.Errorf("ensuring Auto Mode node role for %s: %w", spec.ID, err)
+		}
+		in.AccessConfig = &ekstypes.CreateAccessConfigRequest{
+			AuthenticationMode:                      ekstypes.AuthenticationModeApiAndConfigMap,
+			BootstrapClusterCreatorAdminPermissions: aws.Bool(true),
+		}
+		in.ComputeConfig = &ekstypes.ComputeConfigRequest{
+			Enabled:     aws.Bool(true),
+			NodePools:   []string{"general-purpose", "system"},
+			NodeRoleArn: aws.String(autoNodeRoleARN),
+		}
+		in.KubernetesNetworkConfig = &ekstypes.KubernetesNetworkConfigRequest{
+			ElasticLoadBalancing: &ekstypes.ElasticLoadBalancing{Enabled: aws.Bool(true)},
+		}
+		in.StorageConfig = &ekstypes.StorageConfigRequest{
+			BlockStorage: &ekstypes.BlockStorage{Enabled: aws.Bool(true)},
+		}
 	}
 
 	if _, err := p.c.eks.CreateCluster(ctx, in); err != nil {
@@ -136,10 +170,11 @@ func (p *ClusterProvisioner) Describe(ctx context.Context, spec core.ClusterSpec
 	}
 
 	state := provisioner.ClusterState{
-		Status:   normaliseStatus(cluster.Status),
-		Endpoint: aws.ToString(cluster.Endpoint),
-		Version:  aws.ToString(cluster.Version),
-		Access:   accessFrom(cluster.ResourcesVpcConfig),
+		Status:    normaliseStatus(cluster.Status),
+		Endpoint:  aws.ToString(cluster.Endpoint),
+		Version:   aws.ToString(cluster.Version),
+		Access:    accessFrom(cluster.ResourcesVpcConfig),
+		Autopilot: cluster.ComputeConfig != nil && aws.ToBool(cluster.ComputeConfig.Enabled),
 	}
 	if cluster.Identity != nil && cluster.Identity.Oidc != nil {
 		state.OIDCIssuer = aws.ToString(cluster.Identity.Oidc.Issuer)
@@ -260,8 +295,10 @@ func (p *ClusterProvisioner) Reconcile(ctx context.Context, spec core.ClusterSpe
 	}
 	change.Merge(accessChange)
 
-	if err := p.ensureNodeGroups(ctx, spec, &change); err != nil {
-		return change, err
+	if !state.Autopilot {
+		if err := p.ensureNodeGroups(ctx, spec, &change); err != nil {
+			return change, err
+		}
 	}
 	if err := p.ensureCSIAddons(ctx, spec, state, &change); err != nil {
 		return change, err
@@ -308,6 +345,12 @@ func (p *ClusterProvisioner) ensureCSIAddons(
 			comp:      provisioner.Component{Name: "efs-csi", Namespace: "kube-system", ServiceAccount: "efs-csi-controller-sa"},
 		},
 	} {
+		// EKS Auto Mode's StorageConfig.BlockStorage replaces the EBS CSI
+		// driver addon entirely; installing it alongside would be redundant.
+		// EFS has no Auto Mode equivalent and is still installed.
+		if state.Autopilot && d.addonName == addonEBSCSIDriver {
+			continue
+		}
 		trust := irsaTrustPolicy(providerARN, state.OIDCIssuer, d.comp)
 		roleARN, err := p.ensureRole(ctx, d.roleName, trust, []string{d.policy})
 		if err != nil {
@@ -578,6 +621,9 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 	if err := p.deleteRole(ctx, names{spec}.clusterRole()); err != nil {
 		return err
 	}
+	if err := p.deleteRole(ctx, names{spec}.autoNodeRole()); err != nil {
+		return err
+	}
 	if err := p.deleteRole(ctx, names{spec}.ebsCSIRole()); err != nil {
 		return err
 	}
@@ -592,10 +638,15 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 	return nil
 }
 
-// deleteRole detaches every attached policy, then deletes the role. IAM
-// refuses to delete a role that still has policies attached, so an orphaned
-// role would survive teardown if the detach step were skipped — the same
-// reasoning IdentityProvisioner.Deprovision follows for the IRSA role.
+// deleteRole detaches every attached policy and removes the role from every
+// instance profile it belongs to, then deletes the role. IAM refuses to
+// delete a role that still has policies attached or is still in an instance
+// profile, so an orphaned role would survive teardown if either step were
+// skipped — the same reasoning IdentityProvisioner.Deprovision follows for
+// the IRSA role. The instance-profile case matters for the EKS Auto Mode
+// node role: EKS itself creates and attaches an instance profile for it
+// (kubespin never calls CreateInstanceProfile), so teardown has to find and
+// detach that profile rather than assuming it owns every attachment.
 func (p *ClusterProvisioner) deleteRole(ctx context.Context, name string) error {
 	attached, err := p.c.iam.ListAttachedRolePolicies(ctx, &iam.ListAttachedRolePoliciesInput{
 		RoleName: aws.String(name),
@@ -614,6 +665,25 @@ func (p *ClusterProvisioner) deleteRole(ctx context.Context, name string) error 
 			PolicyArn: policy.PolicyArn,
 		}); err != nil {
 			return fmt.Errorf("detaching %s from %s: %w", aws.ToString(policy.PolicyArn), name, err)
+		}
+	}
+
+	profiles, err := p.c.iam.ListInstanceProfilesForRole(ctx, &iam.ListInstanceProfilesForRoleInput{
+		RoleName: aws.String(name),
+	})
+	if err != nil {
+		var missing *iamtypes.NoSuchEntityException
+		if !errors.As(err, &missing) {
+			return fmt.Errorf("listing instance profiles for %s: %w", name, err)
+		}
+		profiles = &iam.ListInstanceProfilesForRoleOutput{}
+	}
+	for _, profile := range profiles.InstanceProfiles {
+		if _, err := p.c.iam.RemoveRoleFromInstanceProfile(ctx, &iam.RemoveRoleFromInstanceProfileInput{
+			InstanceProfileName: profile.InstanceProfileName,
+			RoleName:            aws.String(name),
+		}); err != nil {
+			return fmt.Errorf("removing %s from instance profile %s: %w", name, aws.ToString(profile.InstanceProfileName), err)
 		}
 	}
 
@@ -784,6 +854,20 @@ func eksServiceTrust(service string) map[string]any {
 		"Statement": []any{map[string]any{
 			"Effect":    "Allow",
 			"Action":    "sts:AssumeRole",
+			"Principal": map[string]any{"Service": service},
+		}},
+	}
+}
+
+// eksClusterAutoModeTrust is eksServiceTrust plus sts:TagSession, which EKS
+// Auto Mode's cluster role needs for its tag-based resource scoping
+// (docs.aws.amazon.com/eks/latest/userguide/auto-cluster-iam-role.html).
+func eksClusterAutoModeTrust(service string) map[string]any {
+	return map[string]any{
+		"Version": "2012-10-17",
+		"Statement": []any{map[string]any{
+			"Effect":    "Allow",
+			"Action":    []string{"sts:AssumeRole", "sts:TagSession"},
 			"Principal": map[string]any{"Service": service},
 		}},
 	}

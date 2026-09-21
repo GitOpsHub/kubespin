@@ -29,14 +29,16 @@ import (
 type fakeAWS struct {
 	calls []string
 
-	cluster    *ekstypes.Cluster
-	nodeGroups map[string]*ekstypes.Nodegroup
-	addons     map[string]*ekstypes.Addon // name -> addon
-	roles      map[string]string          // name -> arn
-	rolePolicy map[string]string          // name -> assume role policy document
-	attached   map[string][]string
-	oidc       map[string]string // arn -> url host
-	sgRules    []ec2types.SecurityGroupRule
+	cluster           *ekstypes.Cluster
+	lastCreateCluster *eks.CreateClusterInput
+	nodeGroups        map[string]*ekstypes.Nodegroup
+	addons            map[string]*ekstypes.Addon // name -> addon
+	roles             map[string]string          // name -> arn
+	rolePolicy        map[string]string          // name -> assume role policy document
+	attached          map[string][]string
+	instanceProfiles  map[string][]string // role name -> instance profile names it belongs to
+	oidc              map[string]string   // arn -> url host
+	sgRules           []ec2types.SecurityGroupRule
 
 	// nodeGroupDeletePolls models the real asynchrony of DeleteNodegroup: how
 	// many ListNodegroups calls a deleted node group survives before it is
@@ -65,6 +67,7 @@ func newFakeAWS() *fakeAWS {
 		roles:              map[string]string{},
 		rolePolicy:         map[string]string{},
 		attached:           map[string][]string{},
+		instanceProfiles:   map[string][]string{},
 		oidc:               map[string]string{},
 		vpcs:               map[string]*ec2types.Vpc{},
 		subnets:            map[string]*ec2types.Subnet{},
@@ -92,6 +95,7 @@ var mutatingCalls = []string{
 	"CreateCluster", "UpdateClusterConfig", "DeleteCluster",
 	"CreateNodegroup", "UpdateNodegroupConfig", "DeleteNodegroup",
 	"CreateRole", "DeleteRole", "AttachRolePolicy", "DetachRolePolicy",
+	"RemoveRoleFromInstanceProfile",
 	"UpdateAssumeRolePolicy", "CreateOpenIDConnectProvider",
 	"CreateAddon", "UpdateAddon",
 	"AuthorizeSecurityGroupEgress",
@@ -134,6 +138,7 @@ func (f *fakeAWS) DescribeCluster(context.Context, *eks.DescribeClusterInput, ..
 
 func (f *fakeAWS) CreateCluster(_ context.Context, in *eks.CreateClusterInput, _ ...func(*eks.Options)) (*eks.CreateClusterOutput, error) {
 	f.record("CreateCluster")
+	f.lastCreateCluster = in
 	f.cluster = &ekstypes.Cluster{
 		Name:    in.Name,
 		Status:  ekstypes.ClusterStatusCreating,
@@ -333,6 +338,43 @@ func (f *fakeAWS) DetachRolePolicy(_ context.Context, in *iam.DetachRolePolicyIn
 	}
 	f.attached[name] = remaining
 	return &iam.DetachRolePolicyOutput{}, nil
+}
+
+// simulateAutoModeInstanceProfile models EKS Auto Mode's own behavior of
+// creating an instance profile for the node role and attaching it —
+// something kubespin never calls CreateInstanceProfile for itself, but must
+// still detach during delete.
+func (f *fakeAWS) simulateAutoModeInstanceProfile(roleName, profileName string) {
+	f.instanceProfiles[roleName] = append(f.instanceProfiles[roleName], profileName)
+}
+
+func (f *fakeAWS) ListInstanceProfilesForRole(_ context.Context, in *iam.ListInstanceProfilesForRoleInput, _ ...func(*iam.Options)) (*iam.ListInstanceProfilesForRoleOutput, error) {
+	f.record("ListInstanceProfilesForRole")
+
+	name := aws.ToString(in.RoleName)
+	if _, ok := f.roles[name]; !ok {
+		return nil, &iamtypes.NoSuchEntityException{}
+	}
+
+	var out []iamtypes.InstanceProfile
+	for _, profile := range f.instanceProfiles[name] {
+		out = append(out, iamtypes.InstanceProfile{InstanceProfileName: aws.String(profile)})
+	}
+	return &iam.ListInstanceProfilesForRoleOutput{InstanceProfiles: out}, nil
+}
+
+func (f *fakeAWS) RemoveRoleFromInstanceProfile(_ context.Context, in *iam.RemoveRoleFromInstanceProfileInput, _ ...func(*iam.Options)) (*iam.RemoveRoleFromInstanceProfileOutput, error) {
+	f.record("RemoveRoleFromInstanceProfile")
+
+	name := aws.ToString(in.RoleName)
+	remaining := f.instanceProfiles[name][:0]
+	for _, profile := range f.instanceProfiles[name] {
+		if profile != aws.ToString(in.InstanceProfileName) {
+			remaining = append(remaining, profile)
+		}
+	}
+	f.instanceProfiles[name] = remaining
+	return &iam.RemoveRoleFromInstanceProfileOutput{}, nil
 }
 
 func (f *fakeAWS) ListOpenIDConnectProviders(context.Context, *iam.ListOpenIDConnectProvidersInput, ...func(*iam.Options)) (*iam.ListOpenIDConnectProvidersOutput, error) {
@@ -682,6 +724,9 @@ func (f *fakeAWS) activeCluster(spec core.ClusterSpec) {
 			EndpointPrivateAccess:  true,
 			ClusterSecurityGroupId: aws.String("sg-cluster"),
 		},
+	}
+	if spec.Autopilot {
+		f.cluster.ComputeConfig = &ekstypes.ComputeConfigResponse{Enabled: aws.Bool(true)}
 	}
 }
 

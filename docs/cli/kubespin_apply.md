@@ -67,6 +67,7 @@ kubespin apply [flags]
 ```text
       --access string               API server exposure: private or public (default "private")
       --authorized-cidrs strings    CIDR blocks allowed to reach the API server when --access public (GCP: required to reach the endpoint at all, since GKE enables master-authorized-networks with an empty allowlist by default; AWS/Azure: public endpoints are open to 0.0.0.0/0 unless this is set)
+      --autopilot                   use each provider's fully-managed node mode instead of standard node pools: GKE Autopilot (GCP) or EKS Auto Mode (AWS). No Azure equivalent. --instance-type/--min-size/--max-size/--desired-size/--disk-size/--spot are rejected when set explicitly alongside this, since the provider manages compute itself.
       --azure-subscription string   Azure subscription hosting the cluster (required for --provider azure)
       --cluster-id string           cluster identifier (also the repository suffix)
       --desired-size int32          desired size of the default node pool (--spot defaults this lower, see --spot) (default 2)

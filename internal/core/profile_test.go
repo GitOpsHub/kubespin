@@ -123,6 +123,29 @@ func TestProfileForProvider(t *testing.T) {
 	}
 }
 
+func TestProfileForAutopilot(t *testing.T) {
+	agnostic := validAddon()
+	autoscaler := AddonRef{
+		Name: "cluster-autoscaler", Chart: "cluster-autoscaler", Repository: "https://example",
+		Version: "1.0.0", Namespace: "kube-system",
+	}
+	p := Profile{Name: "small", Addons: []AddonRef{agnostic, autoscaler}}
+
+	forAutopilot := p.ForAutopilot(true)
+	if len(forAutopilot.Addons) != 0 {
+		t.Fatalf("ForAutopilot(true) should drop every addon, got %+v", forAutopilot.Addons)
+	}
+
+	forStandard := p.ForAutopilot(false)
+	if len(forStandard.Addons) != 2 {
+		t.Fatalf("ForAutopilot(false) should keep every addon, got %d", len(forStandard.Addons))
+	}
+
+	if len(p.Addons) != 2 {
+		t.Fatalf("ForAutopilot mutated the source profile: %+v", p.Addons)
+	}
+}
+
 func TestAddonOverrideValidate(t *testing.T) {
 	if err := (AddonOverride{Name: "cert-manager"}).Validate(); err != nil {
 		t.Fatalf("valid override rejected: %v", err)

@@ -49,7 +49,7 @@ func (p *ClusterProvisioner) Create(ctx context.Context, spec core.ClusterSpec) 
 		return p.createCluster(ctx, spec)
 	}
 
-	if state.Status == provisioner.StatusActive {
+	if state.Status == provisioner.StatusActive && !state.Autopilot {
 		return p.ensureNodePools(ctx, spec, nil)
 	}
 	return nil
@@ -78,12 +78,17 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 		},
 		PrivateClusterConfig:           privateClusterConfig(spec),
 		MasterAuthorizedNetworksConfig: authorizedNetworksConfig(spec),
-		// The default node pool is not used; node pools are created explicitly
-		// once the control plane is active, mirroring the AWS provisioner.
-		InitialNodeCount: 0,
-		NodePools: []*containerpb.NodePool{
-			placeholderNodePool(spec),
-		},
+	}
+
+	if spec.Autopilot {
+		// Autopilot manages its own node pools internally and rejects a
+		// CreateCluster request that also sets NodePools/InitialNodeCount.
+		cluster.Autopilot = &containerpb.Autopilot{Enabled: true}
+	} else {
+		// The default node pool is not used (InitialNodeCount stays at its
+		// zero value); node pools are created explicitly once the control
+		// plane is active, mirroring the AWS provisioner.
+		cluster.NodePools = []*containerpb.NodePool{placeholderNodePool(spec)}
 	}
 
 	_, err := p.c.cluster.CreateCluster(ctx, &containerpb.CreateClusterRequest{
@@ -200,8 +205,13 @@ func privateClusterConfig(spec core.ClusterSpec) *containerpb.PrivateClusterConf
 	}
 }
 
+// authorizedNetworksConfig builds the master-authorized-networks config GKE
+// requires whenever a private endpoint is requested — the live API rejects
+// EnablePrivateEndpoint without Enabled set, even with an empty CIDR list
+// (which just means "no networks besides the VPC itself may reach it").
 func authorizedNetworksConfig(spec core.ClusterSpec) *containerpb.MasterAuthorizedNetworksConfig {
-	if spec.Access != core.AccessPublic || len(spec.AuthorizedCIDRs) == 0 {
+	enable := spec.Access == core.AccessPrivate || (spec.Access == core.AccessPublic && len(spec.AuthorizedCIDRs) > 0)
+	if !enable {
 		return nil
 	}
 	blocks := make([]*containerpb.MasterAuthorizedNetworksConfig_CidrBlock, 0, len(spec.AuthorizedCIDRs))
@@ -280,6 +290,7 @@ func (p *ClusterProvisioner) Describe(ctx context.Context, spec core.ClusterSpec
 		Version:   cluster.GetCurrentMasterVersion(),
 		Access:    accessFrom(cluster.GetPrivateClusterConfig()),
 		NetworkID: cluster.GetNetwork(),
+		Autopilot: cluster.GetAutopilot().GetEnabled(),
 	}
 	if wi := cluster.GetWorkloadIdentityConfig(); wi != nil {
 		// GKE's federated OIDC issuer for a workload pool is a fixed, well
@@ -292,7 +303,7 @@ func (p *ClusterProvisioner) Describe(ctx context.Context, spec core.ClusterSpec
 		}
 	}
 
-	if state.Status == provisioner.StatusActive {
+	if state.Status == provisioner.StatusActive && !state.Autopilot {
 		pools, err := p.describeNodePools(ctx, n)
 		if err != nil {
 			return state, err
@@ -380,8 +391,10 @@ func (p *ClusterProvisioner) Reconcile(ctx context.Context, spec core.ClusterSpe
 	}
 	change.Merge(accessChange)
 
-	if err := p.ensureNodePools(ctx, spec, &change); err != nil {
-		return change, err
+	if !state.Autopilot {
+		if err := p.ensureNodePools(ctx, spec, &change); err != nil {
+			return change, err
+		}
 	}
 	return change, nil
 }

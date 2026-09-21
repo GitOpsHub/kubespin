@@ -86,6 +86,7 @@ nav:
   - Getting Started:
       - Examples: examples.md
       - Low-cost dev clusters: low-cost-dev-clusters.md
+      - Autopilot clusters: autopilot-clusters.md
   - Operations:
       - Fleet bootstrap: fleet-bootstrap.md
       - On-call runbook: runbook.md
