@@ -11,8 +11,8 @@ a central Fleet Registry.
 > **Status: every command is implemented and unit-tested against fakes** (cloud
 > SDK fakes, an in-memory registry, an in-memory GitHub-shaped repo). None of
 > it has run against a real cloud account, GitHub org, or cluster yet — see
-> [docs/README.md](docs/README.md#where-the-project-is) for exactly what that
-> does and does not mean per milestone.
+> [docs/README.md](docs/README.md#project-status) for details on current testing
+> and implementation coverage.
 
 ## Quick start
 
