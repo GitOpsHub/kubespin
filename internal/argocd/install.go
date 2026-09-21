@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage/driver"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/discovery"
@@ -128,7 +130,7 @@ func (h *HelmInstaller) Install(ctx context.Context, restConfig *rest.Config, ad
 		return fmt.Errorf("initialising helm: %w", err)
 	}
 
-	exists, err := releaseExists(cfg, ReleaseName)
+	exists, err := h.releaseExists(cfg, ReleaseName)
 	if err != nil {
 		return fmt.Errorf("checking for an existing %s release: %w", ReleaseName, err)
 	}
@@ -205,16 +207,82 @@ func (h *HelmInstaller) Install(ctx context.Context, restConfig *rest.Config, ad
 
 // releaseExists reports whether releaseName already has a Helm release
 // history, so Install can route to Upgrade rather than a fresh Install.
-func releaseExists(cfg *action.Configuration, releaseName string) (bool, error) {
-	_, err := action.NewHistory(cfg).Run(releaseName)
+//
+// It also recovers a release stuck in a Pending* status: a run interrupted
+// mid-install/upgrade (a lost connection, an expired auth token during a long
+// wait for fresh nodes to become ready) leaves the release's latest revision
+// pending forever, since Helm only records success or failure once its own
+// action returns — and every future install/upgrade against that release then
+// fails outright with "another operation ... is in progress", which a plain
+// retry cannot fix. See recoverPendingRelease.
+func (h *HelmInstaller) releaseExists(cfg *action.Configuration, releaseName string) (bool, error) {
+	hist, err := action.NewHistory(cfg).Run(releaseName)
 	switch {
 	case err == nil:
-		return true, nil
+		sort.Slice(hist, func(i, j int) bool { return hist[i].Version < hist[j].Version })
+		latest := hist[len(hist)-1]
+		switch latest.Info.Status {
+		case release.StatusPendingInstall, release.StatusPendingUpgrade, release.StatusPendingRollback:
+			return h.recoverPendingRelease(cfg, releaseName, hist, latest)
+		default:
+			return true, nil
+		}
 	case errors.Is(err, driver.ErrReleaseNotFound):
 		return false, nil
 	default:
 		return false, fmt.Errorf("checking release history for %s: %w", releaseName, err)
 	}
+}
+
+// recoverPendingRelease clears a release stuck mid-operation from an earlier
+// interrupted run.
+//
+// If a prior successful revision exists, rolling back to it restores a known
+// good state and lets the normal upgrade path take over (reports the release
+// still exists). Otherwise — the pending revision is the release's first and
+// only one, so there is nothing to roll back to — the stuck release is
+// uninstalled entirely, and the normal install path creates it fresh
+// (reports the release no longer exists).
+func (h *HelmInstaller) recoverPendingRelease(
+	cfg *action.Configuration, releaseName string, hist []*release.Release, latest *release.Release,
+) (bool, error) {
+	h.logger.Warn("release stuck mid-operation from an earlier interrupted run; recovering",
+		"release", releaseName, "status", latest.Info.Status, "revision", latest.Version)
+
+	lastDeployed := lastDeployedRevision(hist)
+
+	if lastDeployed == nil {
+		if _, err := action.NewUninstall(cfg).Run(releaseName); err != nil && !errors.Is(err, driver.ErrReleaseNotFound) {
+			return false, fmt.Errorf("uninstalling stuck %s release: %w", releaseName, err)
+		}
+		h.logger.Info("uninstalled stuck release; will install fresh", "release", releaseName)
+		return false, nil
+	}
+
+	rb := action.NewRollback(cfg)
+	rb.Version = lastDeployed.Version
+	if err := rb.Run(releaseName); err != nil {
+		return false, fmt.Errorf("rolling back stuck %s release to revision %d: %w", releaseName, lastDeployed.Version, err)
+	}
+	h.logger.Info("rolled back stuck release to its last good revision",
+		"release", releaseName, "revision", lastDeployed.Version)
+	return true, nil
+}
+
+// lastDeployedRevision returns the highest-versioned revision in hist whose
+// status is Deployed, or nil if none is: a release stuck on its very first
+// (Pending*) revision has never had a successful one. Pure and
+// side-effect-free — recoverPendingRelease is the thin wrapper that acts on
+// what this decides, which is what keeps the decision itself unit-testable
+// without a live cluster.
+func lastDeployedRevision(hist []*release.Release) *release.Release {
+	var lastDeployed *release.Release
+	for _, r := range hist {
+		if r.Info.Status == release.StatusDeployed {
+			lastDeployed = r
+		}
+	}
+	return lastDeployed
 }
 
 // actionConfig builds a Helm action.Configuration addressed at restConfig,

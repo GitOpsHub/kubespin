@@ -667,6 +667,32 @@ func TestDelete_Autopilot_CleansUpAutoNodeRole(t *testing.T) {
 	}
 }
 
+// TestDelete_Autopilot_DetachesEKSOwnedInstanceProfile reproduces a real
+// teardown failure: EKS Auto Mode creates and attaches its own instance
+// profile to the node role (kubespin never calls CreateInstanceProfile), and
+// IAM's DeleteRole returns 409 DeleteConflict until that role is removed
+// from every instance profile it belongs to.
+func TestDelete_Autopilot_DetachesEKSOwnedInstanceProfile(t *testing.T) {
+	f := newFakeAWS()
+	spec := testSpec()
+	spec.Autopilot = true
+	spec.NodePools = nil
+	f.activeCluster(spec)
+	roleName := names{spec}.autoNodeRole()
+	f.roles[roleName] = "arn:aws:iam::123456789012:role/" + roleName
+	f.simulateAutoModeInstanceProfile(roleName, roleName)
+
+	if err := NewClusterProvisioner(f.clients()).Delete(t.Context(), spec); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, ok := f.roles[roleName]; ok {
+		t.Error("expected auto-node role to be deleted")
+	}
+	if len(f.instanceProfiles[roleName]) != 0 {
+		t.Error("expected role to be removed from its instance profile")
+	}
+}
+
 func TestVpcConfig_PrivateIgnoresAuthorizedCIDRs(t *testing.T) {
 	// A private cluster has no public endpoint to restrict; sending CIDRs
 	// anyway would imply otherwise.

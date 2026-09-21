@@ -638,10 +638,15 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 	return nil
 }
 
-// deleteRole detaches every attached policy, then deletes the role. IAM
-// refuses to delete a role that still has policies attached, so an orphaned
-// role would survive teardown if the detach step were skipped — the same
-// reasoning IdentityProvisioner.Deprovision follows for the IRSA role.
+// deleteRole detaches every attached policy and removes the role from every
+// instance profile it belongs to, then deletes the role. IAM refuses to
+// delete a role that still has policies attached or is still in an instance
+// profile, so an orphaned role would survive teardown if either step were
+// skipped — the same reasoning IdentityProvisioner.Deprovision follows for
+// the IRSA role. The instance-profile case matters for the EKS Auto Mode
+// node role: EKS itself creates and attaches an instance profile for it
+// (kubespin never calls CreateInstanceProfile), so teardown has to find and
+// detach that profile rather than assuming it owns every attachment.
 func (p *ClusterProvisioner) deleteRole(ctx context.Context, name string) error {
 	attached, err := p.c.iam.ListAttachedRolePolicies(ctx, &iam.ListAttachedRolePoliciesInput{
 		RoleName: aws.String(name),
@@ -660,6 +665,25 @@ func (p *ClusterProvisioner) deleteRole(ctx context.Context, name string) error 
 			PolicyArn: policy.PolicyArn,
 		}); err != nil {
 			return fmt.Errorf("detaching %s from %s: %w", aws.ToString(policy.PolicyArn), name, err)
+		}
+	}
+
+	profiles, err := p.c.iam.ListInstanceProfilesForRole(ctx, &iam.ListInstanceProfilesForRoleInput{
+		RoleName: aws.String(name),
+	})
+	if err != nil {
+		var missing *iamtypes.NoSuchEntityException
+		if !errors.As(err, &missing) {
+			return fmt.Errorf("listing instance profiles for %s: %w", name, err)
+		}
+		profiles = &iam.ListInstanceProfilesForRoleOutput{}
+	}
+	for _, profile := range profiles.InstanceProfiles {
+		if _, err := p.c.iam.RemoveRoleFromInstanceProfile(ctx, &iam.RemoveRoleFromInstanceProfileInput{
+			InstanceProfileName: profile.InstanceProfileName,
+			RoleName:            aws.String(name),
+		}); err != nil {
+			return fmt.Errorf("removing %s from instance profile %s: %w", name, aws.ToString(profile.InstanceProfileName), err)
 		}
 	}
 
