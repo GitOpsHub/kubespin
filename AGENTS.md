@@ -86,12 +86,15 @@ internal/provisioner/{aws,gcp,azure}  ClusterProvisioner + IdentityProvisioner +
 internal/repo/                  GitHub repo CRUD; Push nil-content = delete
 internal/catalog/               size resolution (small/medium/large, builtin) + override merge
 internal/argocd/                app-of-apps manifests, Helm install
+internal/orchestrator/          per-cluster phase state machine (apply/delete)
 internal/fleet/                 fleet-wide audit, update, status
 internal/fleetinfra/            SDK converge engine for the fleet infra (Lambda/IAM/API GW)
+internal/kubeconfig/            operator kubeconfig update after apply (shells out to aws/gcloud/az)
 internal/ingestion/             token verification + registry write path
 internal/reporter/              Argo CD summary + signed push (in-cluster)
-internal/version/               build metadata (-ldflags)
+internal/tools/changeloggen/    derives CHANGELOG.md and next SemVer from Conventional Commits
 internal/tools/docsgen/         regenerates docs/cli/*.md from cobra tree
+internal/version/               build metadata (-ldflags)
 ```
 
 ---
@@ -190,6 +193,7 @@ When you change code, update the corresponding reference doc:
 | `internal/orchestrator/` | `docs/reference/orchestrator.md` |
 | `internal/provisioner/` | `docs/reference/provisioner-{aws,gcp,azure}.md` |
 | `internal/fleetinfra/` | `docs/reference/fleetinfra.md` |
+| `internal/kubeconfig/` | `docs/reference/kubeconfig.md` |
 | `internal/ingestion/` | `docs/reference/ingestion.md` |
 | cobra command tree | run `make docs`; commit result |
 | Architecture invariants | `CLAUDE.md`, `AGENTS.md` (this file) |

@@ -13,6 +13,7 @@ lives in `internal/`.
 | [`cmd/ingestion`](#cmdingestion) | Central Ingestion API Lambda handler | The only inbound network surface in the system; verifies and writes cluster status pushes via `internal/ingestion`. |
 | [`cmd/fleet-status-reporter`](#cmdfleet-status-reporter) | In-cluster CronJob binary | Queries local Argo CD, builds a status summary, and pushes it signed to the Central Ingestion API. |
 | [`internal/tools/docsgen`](#internaltoolsdocsgen) | `make docs` generator | Regenerates `docs/cli/*.md` from the live cobra command tree so the CLI reference cannot drift. |
+| [`internal/tools/changeloggen`](#internaltoolschangeloggen) | `make changelog` generator | Derives next SemVer tag and `CHANGELOG.md` sections from Conventional Commits since the last tag. |
 | [`internal/version`](#internalversion) | Build metadata package | Carries `Version`/`Commit`/`BuildDate` stamped in via `-ldflags`, and renders the `--version` banner. |
 
 ## cmd/kubespin
@@ -282,6 +283,26 @@ func disableAutoGenTag(cmd *cobra.Command)
 
 - **Behavior:** Recursively sets `cmd.DisableAutoGenTag = true` on the
   command and all of its children.
+
+</details>
+
+## internal/tools/changeloggen
+
+Backs `make changelog`. Derives the next SemVer tag and `CHANGELOG.md` release entry from Conventional Commit subjects (`git log`) since the last tag, per the package comment in [internal/tools/changeloggen/main.go](https://github.com/GitOpsHub/kubespin/blob/main/internal/tools/changeloggen/main.go).
+
+It supports three subcommands:
+- `next` — computes and prints the next `vX.Y.Z` tag based on commit types since the last tag, or exits 1 if no commits warrant a release.
+- `render -version vX.Y.Z` — parses commits since the last tag, formats them into categorized groups (`Added`, `Fixed`, `Changed`), and prepends a dated section directly beneath `## [Unreleased]` in `CHANGELOG.md`.
+- `extract vX.Y.Z` — extracts the changelog body for the specified version from `CHANGELOG.md` to stdout, suitable for populating a GitHub Release body.
+
+<details>
+<summary>Classification and SemVer Bump Rules</summary>
+
+- **Major bump (`v(X+1).0.0`)**: any commit with `!` in the type prefix (e.g. `feat!:`) or containing `BREAKING CHANGE` in its commit body.
+- **Minor bump (`vX.(Y+1).0`)**: commits with prefix `feat:`. Categorized under `### Added`.
+- **Patch bump (`vX.Y.(Z+1)`)**: commits with prefix `fix:` or `perf:`. `fix:` commits are categorized under `### Fixed`.
+- **Changed bucket**: other commit types (e.g. `docs:`, `refactor:`, `chore:`) or commits not matching the conventional commit pattern are categorized under `### Changed` and do not trigger a version bump on their own.
+- **Initial tag**: if no prior git tag is reachable in repository history, the next version defaults to `v0.1.0`.
 
 </details>
 

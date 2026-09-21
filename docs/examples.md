@@ -44,7 +44,9 @@ That's the same AWS example as [Spin up a single cluster](#aws-private-cluster)
 below, with `GITHUB_TOKEN`, `GITHUB_ORG`, and `KUBESPIN_REGISTRY_DSN` assumed
 set — see [Prerequisites](#prerequisites) for what those are and why each is
 required. For the cheapest possible cluster to try this with, see
-[Low-cost dev clusters](low-cost-dev-clusters.md).
+[Low-cost dev clusters](low-cost-dev-clusters.md). For fully-managed compute
+without managing node pools (GKE Autopilot or EKS Auto Mode), see
+[Autopilot clusters](autopilot-clusters.md).
 
 ## Prerequisites
 

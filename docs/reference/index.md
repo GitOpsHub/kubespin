@@ -48,6 +48,7 @@ method-level reference.
 | Package | Covers |
 |---|---|
 | [internal/auth](auth.md) | Operator-facing cloud auth (`login`/`status`/`logout`, apply/delete preflight) |
+| [internal/kubeconfig](kubeconfig.md) | Operator kubeconfig update after apply (shells out to `aws`/`gcloud`/`az`) |
 | [internal/cli](cli.md) | The cobra command tree wiring every package above to a command |
 
 ## Central Ingestion API and in-cluster reporter
@@ -61,4 +62,4 @@ method-level reference.
 
 | Package | Covers |
 |---|---|
-| [Entrypoints and tooling](entrypoints.md) | `cmd/kubespin`, `cmd/ingestion`, `cmd/fleet-status-reporter`, `internal/tools/docsgen`, `internal/version` |
+| [Entrypoints and tooling](entrypoints.md) | `cmd/kubespin`, `cmd/ingestion`, `cmd/fleet-status-reporter`, `internal/tools/docsgen`, `internal/tools/changeloggen`, `internal/version` |

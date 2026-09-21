@@ -26,6 +26,7 @@ const sidebars = {
         'code-organization',
         'reference/core',
         'reference/auth',
+        'reference/kubeconfig',
         'reference/fleetinfra',
         'reference/provisioner-aws',
         'reference/provisioner-gcp',

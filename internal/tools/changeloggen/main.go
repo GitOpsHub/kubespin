@@ -276,7 +276,7 @@ func runRender(args []string) error {
 	fs := flag.NewFlagSet("render", flag.ContinueOnError)
 	version := fs.String("version", "", "version to render, e.g. v1.2.3")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("parsing flags: %w", err)
 	}
 	if *version == "" {
 		return fmt.Errorf("-version is required")

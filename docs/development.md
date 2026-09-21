@@ -48,11 +48,12 @@ internal/provisioner/      cloud-facing interfaces; one subpackage per cloud
 internal/repo/             cluster repositories over GitHub
 internal/catalog/          size resolution: small/medium/large, fully builtin
 internal/argocd/           app-of-apps rendering, access-mode templating, install
-internal/fleet/            fleet-wide audit, update, and status
+internal/fleet/            fleet-wide audit, update, status, and dashboard
 internal/fleetinfra/       SDK converge engine behind `fleet bootstrap`
+internal/kubeconfig/       operator kubeconfig update after apply (shells out to aws/gcloud/az)
 internal/ingestion/        token verification and write path for the ingestion API
 internal/reporter/         the status reporter's Argo CD summary and push logic
-internal/tools/            build-time tools (docs generation)
+internal/tools/            build-time tools (docs generation, changelog generation)
 internal/version/          build metadata stamped in via -ldflags
 docs/cli/                  generated — never edit by hand
 ```

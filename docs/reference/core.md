@@ -10,6 +10,7 @@
 | [Provider](#provider) | const-block | cluster.go | The cloud a cluster is provisioned on (aws/gcp/azure). |
 | [Providers](#providers) | func | cluster.go | Returns all three `Provider` values, in help-text order. |
 | [Access](#access) | const-block | cluster.go | API server exposure model: private or public. |
+| [CapacityType](#capacitytype) | type / const-block | cluster.go | Purchasing option for node pool instances (on-demand/spot). |
 | [ClusterID](#clusterid) | struct (string) | cluster.go | Unique fleet-wide cluster identifier. |
 | [NodePool](#nodepool) | struct | cluster.go | A homogeneous group of worker nodes. |
 | [ClusterSpec](#clusterspec) | struct | cluster.go | Desired state of one cluster (`cluster.yaml` contents). |
@@ -104,6 +105,37 @@ func (a Access) String() string
 
 </details>
 
+#### CapacityType
+
+<details>
+<summary>Signature: `CapacityType`</summary>
+
+```go
+type CapacityType string
+
+const (
+    CapacityTypeOnDemand CapacityType = "on-demand"
+    CapacityTypeSpot     CapacityType = "spot"
+)
+```
+
+- **Behavior:** selects the purchasing option for a node pool's instances.
+- **Invariants:** empty string means on-demand (`CapacityTypeOnDemand`), which is also the zero value, preserving backward compatibility with existing specs. `CapacityTypeSpot` requests spot/preemptible instances. AWS and GCP honor this; AKS requires its default/system node pool to stay on-demand, so it is a no-op there.
+
+</details>
+
+<details>
+<summary>Signature: `(CapacityType) Valid`, `(CapacityType) String`</summary>
+
+```go
+func (c CapacityType) Valid() bool
+func (c CapacityType) String() string
+```
+
+- **Behavior:** `Valid` reports whether `c` is empty, `CapacityTypeOnDemand`, or `CapacityTypeSpot`; `String` renders the raw value.
+
+</details>
+
 #### ClusterID
 
 <details>
@@ -144,6 +176,7 @@ type NodePool struct {
     DesiredSize  int32
     DiskSizeGB   int32             // optional
     Labels       map[string]string // optional
+    CapacityType CapacityType      // optional, on-demand or spot
 }
 ```
 
@@ -159,7 +192,7 @@ func (np NodePool) Validate() error
 ```
 
 - **Behavior:** joins every violation found rather than stopping at the first.
-- **Invariants:** `Name` required; `InstanceType` required; `MinSize >= 0`; `MaxSize >= 1`; `MinSize <= MaxSize`; `DesiredSize` within `[MinSize, MaxSize]`; `DiskSizeGB >= 0`. Cross-pool checks (unique names within a spec) live on `ClusterSpec.Validate`, not here.
+- **Invariants:** `Name` required; `InstanceType` required; `CapacityType.Valid()` (empty, `on-demand`, or `spot`); `MinSize >= 0`; `MaxSize >= 1`; `MinSize <= MaxSize`; `DesiredSize` within `[MinSize, MaxSize]`; `DiskSizeGB >= 0`. Cross-pool checks (unique names within a spec) live on `ClusterSpec.Validate`, not here.
 
 </details>
 
@@ -177,22 +210,28 @@ type ClusterSpec struct {
     KubernetesVersion string          // optional, "MAJOR.MINOR"
     NodePools         []NodePool
     Size              ClusterSize
+    Zone              string          // optional, GCP only
+    PublicNodes       bool            // optional, GCP only
     AuthorizedCIDRs   []string        // optional
     Subnets           []string
     VPCCIDR           string          // optional, AWS only
     VNetCIDR          string          // optional, Azure only
     SubnetCIDR        string          // optional, Azure/GCP only
+    Autopilot         bool            // optional, GKE Autopilot / EKS Auto Mode
     Overrides         []AddonOverride // optional
 }
 ```
 
 - **Behavior:** the desired state of one cluster — the contents of `cluster.yaml` in that cluster's repository.
 - **Fields:**
+    - `Zone` — when set, requests a zonal GKE cluster (control plane in a single zone) instead of the default regional cluster; GCP-only, ignored on AWS/Azure; eligible for GCP's free zonal control plane tier for cost-sensitive dev clusters; empty preserves regional behavior.
+    - `PublicNodes` — when true, skips GKE's private-nodes configuration and Cloud Router/Cloud NAT, giving nodes public IPs instead; GCP-only, ignored on AWS/Azure; trades network isolation to avoid Cloud NAT charges for dev clusters.
     - `AuthorizedCIDRs` — restricts API server access; meaningful only for `AccessPublic` (a private cluster has no public endpoint to restrict).
     - `Subnets` — places the cluster on an existing network (subnet IDs on AWS, a subnetwork on GCP, a subnet resource ID on Azure); when empty, `EnsureNetwork` creates a network deterministically named from the cluster ID on every provider, so a resumed or repeated `apply` adopts existing resources instead of duplicating them — leaving this empty in the persisted `cluster.yaml` durably means "kubespin manages this cluster's network."
     - `VPCCIDR` — sizes the VPC kubespin creates on AWS when `Subnets` is empty; AWS-only, ignored otherwise; empty means kubespin's default.
     - `VNetCIDR` — sizes the VNet kubespin creates on Azure when `Subnets` is empty; Azure-only, ignored otherwise.
     - `SubnetCIDR` — sizes the single subnet/subnetwork kubespin creates when `Subnets` is empty, on Azure or GCP; ignored on AWS (which derives two subnets from `VPCCIDR` instead).
+    - `Autopilot` — requests each provider's fully-managed node mode instead of standard node-pool provisioning: GKE Autopilot on GCP, EKS Auto Mode on AWS (Azure has no equivalent and ignores this field); when true, `NodePools` is not required and is ignored if supplied.
     - `Overrides` — per-cluster patch onto `Size`'s resolved addon set; lives in the user-authored `cluster.yaml` rather than a separate file, since the derived `addons.yaml` is not user-edited.
 
 </details>
@@ -205,7 +244,7 @@ func (s ClusterSpec) Validate() error
 ```
 
 - **Behavior:** joins every problem found rather than stopping at the first, so a user fixing a spec sees the full list in one run.
-- **Invariants:** `ID.Validate()`; `Provider.Valid()`; `Region` non-empty; `Access.Valid()`; `KubernetesVersion`, if set, matches `^\d+\.\d+$`; `AuthorizedCIDRs` must be empty when `Access == AccessPrivate`; at least one `NodePool`; `VPCCIDR`/`VNetCIDR`/`SubnetCIDR`, if set, must each parse as a valid CIDR; each `NodePool.Validate()` plus rejection of duplicate node pool names; `Size.Valid()`; each `Overrides[i].Validate()` plus rejection of duplicate override addon names. Subnets themselves are not required to be non-empty — every provider is allowed to omit them, since `EnsureNetwork` creates a network when none is supplied.
+- **Invariants:** `ID.Validate()`; `Provider.Valid()`; `Region` non-empty; `Access.Valid()`; `KubernetesVersion`, if set, matches `^\d+\.\d+$`; `AuthorizedCIDRs` must be empty when `Access == AccessPrivate`; `Zone` meaningful only for provider GCP; `PublicNodes` meaningful only for provider GCP; at least one `NodePool` unless `Autopilot` is true; `VPCCIDR`/`VNetCIDR`/`SubnetCIDR`, if set, must each parse as a valid CIDR; each `NodePool.Validate()` plus rejection of duplicate node pool names; `Size.Valid()`; each `Overrides[i].Validate()` plus rejection of duplicate override addon names. Subnets themselves are not required to be non-empty — every provider is allowed to omit them, since `EnsureNetwork` creates a network when none is supplied.
 
 </details>
 
@@ -422,15 +461,16 @@ type Profile struct {
 </details>
 
 <details>
-<summary>Signature: `(Profile) ForProvider`, `(Profile) Addon`, `(Profile) Validate`</summary>
+<summary>Signature: `(Profile) ForProvider`, `(Profile) ForAutopilot`, `(Profile) Addon`, `(Profile) Validate`</summary>
 
 ```go
 func (p Profile) ForProvider(provider Provider) Profile
+func (p Profile) ForAutopilot(autopilot bool) Profile
 func (p Profile) Addon(name string) (AddonRef, bool)
 func (p Profile) Validate() error
 ```
 
-- **Behavior:** `ForProvider` returns a copy of `p` with every addon that does not support `provider` dropped (via `AddonRef.SupportsProvider`); `Addon` looks up an addon by name, reporting whether it was found; `Validate` requires a non-empty `Name`, requires at least one addon, validates each `AddonRef`, and rejects duplicate addon names (two Argo CD Applications cannot share a name).
+- **Behavior:** `ForProvider` returns a copy of `p` with every addon that does not support `provider` dropped (via `AddonRef.SupportsProvider`); `ForAutopilot` returns a copy of `p` with every addon dropped when `autopilot` is true (GKE Autopilot and EKS Auto Mode manage compute, storage, load balancing, and autoscaling natively, so none of a size tier's addons are meaningful — the cluster gets nothing beyond Argo CD itself, re-added by `catalog.withArgoCDAddon`); `Addon` looks up an addon by name, reporting whether it was found; `Validate` requires a non-empty `Name`, requires at least one addon, validates each `AddonRef`, and rejects duplicate addon names (two Argo CD Applications cannot share a name).
 - **Invariants:** callers resolve a profile for a specific cluster's provider through `ForProvider` before applying override patches, so e.g. Karpenter never renders into a GCP or Azure cluster's `addons.yaml`, and an override naming it on those clouds correctly fails as unknown rather than silently applying.
 - **Behavior:** `Addon` is what `internal/orchestrator.installArgoCDStep` uses to pull the `"argocd"` entry `catalog.ResolveForCluster` guarantees is always present, instead of a caller-side loop.
 
