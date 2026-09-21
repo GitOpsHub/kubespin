@@ -25,6 +25,21 @@ kubespin apply \
   --github-org "$GITHUB_ORG"
 ```
 
+Public access (GCP requires `--authorized-cidrs` to reach the endpoint at
+all under `--access public`):
+
+```bash
+kubespin apply \
+  --provider gcp \
+  --gcp-project kubernetes-dev-502710 \
+  --region us-central1 \
+  --cluster-id gke-autopilot-01 \
+  --access public \
+  --authorized-cidrs "$(curl -s ifconfig.me)/32" \
+  --autopilot \
+  --github-org "$GITHUB_ORG"
+```
+
 GKE manages node pools, node autoscaling, and node OS/security patching
 itself. An Autopilot cluster's resolved addon set carries **only Argo CD** —
 `--size` has no effect on the addon set under `--autopilot` (it still exists
@@ -43,6 +58,20 @@ kubespin apply \
   --region us-east-1 \
   --cluster-id eks-auto-01 \
   --access private \
+  --autopilot \
+  --github-org "$GITHUB_ORG"
+```
+
+Public access (restricts the otherwise-open `0.0.0.0/0` default to the
+caller's own IP):
+
+```bash
+kubespin apply \
+  --provider aws \
+  --region us-east-1 \
+  --cluster-id eks-auto-01 \
+  --access public \
+  --authorized-cidrs "$(curl -s ifconfig.me)/32" \
   --autopilot \
   --github-org "$GITHUB_ORG"
 ```
@@ -66,13 +95,18 @@ still installed, since EFS has no Auto Mode equivalent.
   is dropped for an Autopilot/Auto Mode cluster — Argo CD is installed and
   the cluster registers, but nothing else syncs from the cluster repo unless
   a per-cluster override patch adds it back.
-- **IAM (AWS only).** EKS Auto Mode needs a dedicated node role
-  (`AmazonEKSAutoNodePolicy`) distinct from the role manually-managed node
-  groups use, plus four extra managed policies
-  (`AmazonEKSComputePolicy`/`AmazonEKSBlockStoragePolicy`/
-  `AmazonEKSLoadBalancingPolicy`/`AmazonEKSNetworkingPolicy`) on the cluster
-  role. Kubespin provisions and tears these down automatically; there is
-  nothing extra to configure.
+- **IAM (AWS only).** EKS Auto Mode needs a dedicated node role, distinct
+  from the role manually-managed node groups use, with
+  `AmazonEKSWorkerNodeMinimalPolicy` + `AmazonEC2ContainerRegistryPullOnly`
+  attached (there is no single "Auto Mode node policy" — AWS documents this
+  exact pair). The cluster role gets four extra managed policies beyond the
+  standard `AmazonEKSClusterPolicy`: `AmazonEKSComputePolicy`,
+  `AmazonEKSBlockStoragePolicyV2` (note the `V2` suffix —
+  `AmazonEKSBlockStoragePolicy` without it does not exist),
+  `AmazonEKSLoadBalancingPolicy`, and `AmazonEKSNetworkingPolicy`; its trust
+  policy also grants `sts:TagSession` (not just `sts:AssumeRole`), which Auto
+  Mode's tag-based resource scoping requires. Kubespin provisions and tears
+  all of this down automatically; there is nothing extra to configure.
 
 ## Teardown
 
@@ -89,6 +123,31 @@ kubespin delete --provider gcp --gcp-project kubernetes-dev-502710 \
 
 kubespin delete --provider aws --region us-east-1 --cluster-id eks-auto-01
 ```
+
+## Reusing a `--cluster-id` after delete
+
+`kubespin delete` marks a cluster's Fleet Registry record `decommissioned`
+rather than removing it, and `apply` refuses to reuse a cluster ID that is
+`decommissioning` or `decommissioned` ("reviving one is not a phase
+transition; it is a new cluster"). This is not specific to Autopilot/Auto
+Mode, but it is easy to hit while iterating on a throwaway Autopilot cluster
+with the same `--cluster-id`:
+
+```text
+kubespin: applying gke-autopilot-01: cluster is decommissioning or decommissioned: gke-autopilot-01 is at phase decommissioned
+```
+
+There is currently no CLI command to purge a decommissioned record (no
+`fleet forget`/registry-delete primitive exists yet). Options:
+
+- **Pick a different `--cluster-id`** (e.g. append `-02`) — the simplest fix
+  for repeated test runs.
+- **Delete the registry rows directly**, if you have `KUBESPIN_REGISTRY_DSN`
+  access and specifically want the same ID back:
+  ```sql
+  DELETE FROM cluster_argocd_details WHERE cluster_id = 'gke-autopilot-01';
+  DELETE FROM fleet_registry WHERE cluster_id = 'gke-autopilot-01';
+  ```
 
 ## Azure
 

@@ -585,8 +585,10 @@ func TestCreate_Autopilot_CreatesAutoNodeRole(t *testing.T) {
 	if _, ok := f.roles[roleName]; !ok {
 		t.Fatalf("expected auto-node role %s to be created", roleName)
 	}
-	if !slices.Contains(f.attached[roleName], policyEKSAutoNodePolicy) {
-		t.Errorf("auto-node role policies = %v, want to include %s", f.attached[roleName], policyEKSAutoNodePolicy)
+	for _, want := range []string{policyEKSWorkerNodeMinimal, policyECRPullOnly} {
+		if !slices.Contains(f.attached[roleName], want) {
+			t.Errorf("auto-node role policies = %v, want to include %s", f.attached[roleName], want)
+		}
 	}
 }
 

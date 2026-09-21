@@ -137,10 +137,15 @@ const (
 	// policyEKSWorkerNode/policyEKSCNI/policyECRReadOnly trio manually
 	// managed node groups use.
 	policyEKSComputePolicy       = "arn:aws:iam::aws:policy/AmazonEKSComputePolicy"
-	policyEKSBlockStoragePolicy  = "arn:aws:iam::aws:policy/AmazonEKSBlockStoragePolicy"
+	policyEKSBlockStoragePolicy  = "arn:aws:iam::aws:policy/AmazonEKSBlockStoragePolicyV2"
 	policyEKSLoadBalancingPolicy = "arn:aws:iam::aws:policy/AmazonEKSLoadBalancingPolicy"
 	policyEKSNetworkingPolicy    = "arn:aws:iam::aws:policy/AmazonEKSNetworkingPolicy"
-	policyEKSAutoNodePolicy      = "arn:aws:iam::aws:policy/AmazonEKSAutoNodePolicy"
+
+	// The Auto Mode node role has no single dedicated policy; AWS documents
+	// attaching this pair instead (docs.aws.amazon.com/eks/latest/userguide/
+	// auto-create-node-role.html).
+	policyEKSWorkerNodeMinimal = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodeMinimalPolicy"
+	policyECRPullOnly          = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly"
 
 	// addonEBSCSIDriver and addonEFSCSIDriver are the EKS-managed addon names
 	// (not Helm charts): EKS installs and updates these itself, so kubespin

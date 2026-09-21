@@ -47,13 +47,17 @@ func (p *ClusterProvisioner) Create(ctx context.Context, spec core.ClusterSpec) 
 	}
 
 	clusterPolicies := []string{policyEKSCluster}
+	clusterTrust := eksServiceTrust("eks.amazonaws.com")
 	if spec.Autopilot {
 		clusterPolicies = append(clusterPolicies,
 			policyEKSComputePolicy, policyEKSBlockStoragePolicy,
 			policyEKSLoadBalancingPolicy, policyEKSNetworkingPolicy)
+		// Auto Mode's tag-based resource scoping requires the cluster role to
+		// also be able to tag the sessions it assumes under, beyond the plain
+		// AssumeRole every EKS cluster role needs.
+		clusterTrust = eksClusterAutoModeTrust("eks.amazonaws.com")
 	}
-	clusterRoleARN, err := p.ensureRole(ctx, names{spec}.clusterRole(),
-		eksServiceTrust("eks.amazonaws.com"), clusterPolicies)
+	clusterRoleARN, err := p.ensureRole(ctx, names{spec}.clusterRole(), clusterTrust, clusterPolicies)
 	if err != nil {
 		return err
 	}
@@ -95,7 +99,7 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 	}
 	if spec.Autopilot {
 		autoNodeRoleARN, err := p.ensureRole(ctx, names{spec}.autoNodeRole(),
-			eksServiceTrust("ec2.amazonaws.com"), []string{policyEKSAutoNodePolicy})
+			eksServiceTrust("ec2.amazonaws.com"), []string{policyEKSWorkerNodeMinimal, policyECRPullOnly})
 		if err != nil {
 			return fmt.Errorf("ensuring Auto Mode node role for %s: %w", spec.ID, err)
 		}
@@ -826,6 +830,20 @@ func eksServiceTrust(service string) map[string]any {
 		"Statement": []any{map[string]any{
 			"Effect":    "Allow",
 			"Action":    "sts:AssumeRole",
+			"Principal": map[string]any{"Service": service},
+		}},
+	}
+}
+
+// eksClusterAutoModeTrust is eksServiceTrust plus sts:TagSession, which EKS
+// Auto Mode's cluster role needs for its tag-based resource scoping
+// (docs.aws.amazon.com/eks/latest/userguide/auto-cluster-iam-role.html).
+func eksClusterAutoModeTrust(service string) map[string]any {
+	return map[string]any{
+		"Version": "2012-10-17",
+		"Statement": []any{map[string]any{
+			"Effect":    "Allow",
+			"Action":    []string{"sts:AssumeRole", "sts:TagSession"},
 			"Principal": map[string]any{"Service": service},
 		}},
 	}
