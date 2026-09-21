@@ -51,282 +51,315 @@ exposure.
 
 #### `KubeApplier`
 
-??? abstract "`KubeApplier`"
+<details>
+<summary>`KubeApplier`</summary>
 
-    Interface for applying a single manifest directly to a cluster's API
-    server — used for exactly one resource in this codebase: app-of-apps'
-    root `Application`, which cannot be delivered by Argo CD syncing itself
-    since it is never committed to the repository it manages.
+Interface for applying a single manifest directly to a cluster's API
+server — used for exactly one resource in this codebase: app-of-apps'
+root `Application`, which cannot be delivered by Argo CD syncing itself
+since it is never committed to the repository it manages.
 
-    ```go
-    type KubeApplier interface {
-        Apply(ctx context.Context, restConfig *rest.Config, manifest []byte) error
-    }
-    ```
+```go
+type KubeApplier interface {
+    Apply(ctx context.Context, restConfig *rest.Config, manifest []byte) error
+}
+```
 
-    - Invariant: `Apply` must be idempotent — applying the same manifest
-      twice converges rather than erroring or duplicating.
+- Invariant: `Apply` must be idempotent — applying the same manifest
+  twice converges rather than erroring or duplicating.
+
+</details>
 
 #### `DynamicApplier`
 
-??? abstract "`DynamicApplier`"
+<details>
+<summary>`DynamicApplier`</summary>
 
-    The real `KubeApplier`, built on `client-go`'s dynamic client and a
-    discovery-backed REST mapper rather than shelling out to `kubectl` — the
-    same discipline `HelmInstaller` follows for Argo CD's own install.
+The real `KubeApplier`, built on `client-go`'s dynamic client and a
+discovery-backed REST mapper rather than shelling out to `kubectl` — the
+same discipline `HelmInstaller` follows for Argo CD's own install.
 
-    ```go
-    type DynamicApplier struct {
-        // unexported: logger, crdInterval, crdTimeout
-    }
+```go
+type DynamicApplier struct {
+    // unexported: logger, crdInterval, crdTimeout
+}
 
-    func NewDynamicApplier(logger *slog.Logger) *DynamicApplier
-    func (a *DynamicApplier) Apply(ctx context.Context, restConfig *rest.Config, manifest []byte) error
-    ```
+func NewDynamicApplier(logger *slog.Logger) *DynamicApplier
+func (a *DynamicApplier) Apply(ctx context.Context, restConfig *rest.Config, manifest []byte) error
+```
 
-    - `Apply` unmarshals the manifest, resolves its REST mapping (retrying
-      while a just-installed CRD is not yet served by discovery — see
-      `restMapping` below), and server-side-applies it with
-      `FieldManager: "kubespin"` and `Force: true`.
-    - `crdInterval`/`crdTimeout` (defaults `crdEstablishInterval` = 2s,
-      `crdEstablishTimeout` = 90s) bound the wait for a just-installed CRD
-      (e.g. `argoproj.io/v1alpha1.Application`) to become queryable via
-      discovery. Only a `meta.IsNoMatchError` is retried, and the cached
-      discovery document is reset before each retry — a stale cache, not a
-      genuinely missing kind, is the real reason the mapping looks absent
-      immediately after `HelmInstaller` installs Argo CD's CRDs.
+- `Apply` unmarshals the manifest, resolves its REST mapping (retrying
+  while a just-installed CRD is not yet served by discovery — see
+  `restMapping` below), and server-side-applies it with
+  `FieldManager: "kubespin"` and `Force: true`.
+- `crdInterval`/`crdTimeout` (defaults `crdEstablishInterval` = 2s,
+  `crdEstablishTimeout` = 90s) bound the wait for a just-installed CRD
+  (e.g. `argoproj.io/v1alpha1.Application`) to become queryable via
+  discovery. Only a `meta.IsNoMatchError` is retried, and the cached
+  discovery document is reset before each retry — a stale cache, not a
+  genuinely missing kind, is the real reason the mapping looks absent
+  immediately after `HelmInstaller` installs Argo CD's CRDs.
 
-??? note "`DynamicApplier.restMapping` (unexported)"
+</details>
 
-    ```go
-    func (a *DynamicApplier) restMapping(
-        ctx context.Context, mapper meta.ResettableRESTMapper, obj *unstructured.Unstructured,
-    ) (*meta.RESTMapping, error)
-    ```
+<details>
+<summary>`DynamicApplier.restMapping` (unexported)</summary>
 
-    - Resolves `obj`'s `GroupVersionKind` to a REST mapping, retrying only on
-      `meta.IsNoMatchError` (resetting the cached discovery document before
-      each retry) until `crdTimeout` elapses.
-    - Exists because `HelmInstaller.Install` returns once Argo CD's chart
-      (including its CRDs) is submitted, not once the API server has
-      established the new `Application` type — resolving the mapping
-      immediately intermittently failed with "no matches for kind
-      Application" on fresh clusters.
+```go
+func (a *DynamicApplier) restMapping(
+    ctx context.Context, mapper meta.ResettableRESTMapper, obj *unstructured.Unstructured,
+) (*meta.RESTMapping, error)
+```
+
+- Resolves `obj`'s `GroupVersionKind` to a REST mapping, retrying only on
+  `meta.IsNoMatchError` (resetting the cached discovery document before
+  each retry) until `crdTimeout` elapses.
+- Exists because `HelmInstaller.Install` returns once Argo CD's chart
+  (including its CRDs) is submitted, not once the API server has
+  established the new `Application` type — resolving the mapping
+  immediately intermittently failed with "no matches for kind
+  Application" on fresh clusters.
+
+</details>
 
 ## install.go
 
 #### `Installer`
 
-??? abstract "`Installer`"
+<details>
+<summary>`Installer`</summary>
 
-    Installs or upgrades Argo CD itself into a cluster — the one piece of the
-    addon pipeline that must exist before app-of-apps can sync anything, so
-    it is not delivered as an Argo CD `Application` like every other addon.
+Installs or upgrades Argo CD itself into a cluster — the one piece of the
+addon pipeline that must exist before app-of-apps can sync anything, so
+it is not delivered as an Argo CD `Application` like every other addon.
 
-    ```go
-    type Installer interface {
-        Install(ctx context.Context, restConfig *rest.Config, addon core.AddonRef) error
-    }
-    ```
+```go
+type Installer interface {
+    Install(ctx context.Context, restConfig *rest.Config, addon core.AddonRef) error
+}
+```
 
-    Invariants:
+Invariants:
 
-    - Must be safe to call on every `apply` — a no-change call must not
-      error.
-    - Returns only once Argo CD is actually running (not merely once
-      manifests are submitted), because the caller's next act — applying the
-      root `Application` — depends on the CRD this install created.
+- Must be safe to call on every `apply` — a no-change call must not
+  error.
+- Returns only once Argo CD is actually running (not merely once
+  manifests are submitted), because the caller's next act — applying the
+  root `Application` — depends on the CRD this install created.
+
+</details>
 
 #### `HelmInstaller`
 
-??? abstract "`HelmInstaller`"
+<details>
+<summary>`HelmInstaller`</summary>
 
-    The real `Installer`, built on `helm.sh/helm/v3/pkg/action` rather than
-    shelling out to the `helm` binary.
+The real `Installer`, built on `helm.sh/helm/v3/pkg/action` rather than
+shelling out to the `helm` binary.
 
-    ```go
-    type HelmInstaller struct {
-        // unexported: logger, timeout
-    }
+```go
+type HelmInstaller struct {
+    // unexported: logger, timeout
+}
 
-    func NewHelmInstaller(logger *slog.Logger) *HelmInstaller
-    func (h *HelmInstaller) Install(ctx context.Context, restConfig *rest.Config, addon core.AddonRef) error
-    ```
+func NewHelmInstaller(logger *slog.Logger) *HelmInstaller
+func (h *HelmInstaller) Install(ctx context.Context, restConfig *rest.Config, addon core.AddonRef) error
+```
 
-    - `Install` checks `releaseExists` for the fixed release name
-      `ReleaseName = "argocd"`; routes to `action.NewUpgrade` if a release
-      history exists, otherwise `action.NewInstall` with
-      `CreateNamespace: true`.
-    - Both paths set `Wait: true` and `Atomic: false`: `Wait` so "installed
-      argocd" means Argo CD is actually serving (not just that manifests
-      were submitted — the root `Application` applied moments later needs
-      the CRDs this release creates); not `Atomic` because a rollback would
-      uninstall a part-working release, and since the phase isn't recorded
-      on failure anyway, a retry re-enters and converges via the upgrade
-      branch — the same create-or-update, never-delete discipline as
-      `internal/fleetinfra`.
-    - `InstallTimeout = 10 * time.Minute` is the default wait bound
-      (`timeout` field overrides it per instance, e.g. for
-      slow/quota-constrained clusters).
-    - Has no live-cluster test coverage — `action.Install.Run`/`Upgrade.Run`
-      require a reachable API server. What's covered: the release-exists
-      branch and the chart reference construction, both pure functions of
-      their inputs.
+- `Install` checks `releaseExists` for the fixed release name
+  `ReleaseName = "argocd"`; routes to `action.NewUpgrade` if a release
+  history exists, otherwise `action.NewInstall` with
+  `CreateNamespace: true`.
+- Both paths set `Wait: true` and `Atomic: false`: `Wait` so "installed
+  argocd" means Argo CD is actually serving (not just that manifests
+  were submitted — the root `Application` applied moments later needs
+  the CRDs this release creates); not `Atomic` because a rollback would
+  uninstall a part-working release, and since the phase isn't recorded
+  on failure anyway, a retry re-enters and converges via the upgrade
+  branch — the same create-or-update, never-delete discipline as
+  `internal/fleetinfra`.
+- `InstallTimeout = 10 * time.Minute` is the default wait bound
+  (`timeout` field overrides it per instance, e.g. for
+  slow/quota-constrained clusters).
+- Has no live-cluster test coverage — `action.Install.Run`/`Upgrade.Run`
+  require a reachable API server. What's covered: the release-exists
+  branch and the chart reference construction, both pure functions of
+  their inputs.
 
-??? abstract "`staticRESTClientGetter` (unexported)"
+</details>
 
-    Adapts an already-resolved `*rest.Config` to Helm's
-    `genericclioptions.RESTClientGetter` interface, so Helm never needs to
-    know the config came from a cloud-native token mint
-    (`internal/provisioner`) rather than a kubeconfig file on disk.
+<details>
+<summary>`staticRESTClientGetter` (unexported)</summary>
 
-    - Implements `ToRESTConfig`, `ToDiscoveryClient`, `ToRESTMapper`.
-    - `ToRawKubeConfigLoader` returns an empty loader (unused by the
-      Install/Upgrade/History calls this file makes, but returns a clear
-      "no such context" error rather than panicking if that ever changes).
+Adapts an already-resolved `*rest.Config` to Helm's
+`genericclioptions.RESTClientGetter` interface, so Helm never needs to
+know the config came from a cloud-native token mint
+(`internal/provisioner`) rather than a kubeconfig file on disk.
+
+- Implements `ToRESTConfig`, `ToDiscoveryClient`, `ToRESTMapper`.
+- `ToRawKubeConfigLoader` returns an empty loader (unused by the
+  Install/Upgrade/History calls this file makes, but returns a clear
+  "no such context" error rather than panicking if that ever changes).
+
+</details>
 
 #### `DefaultAddon`
 
-??? abstract "`DefaultAddon`"
+<details>
+<summary>`DefaultAddon`</summary>
 
-    ```go
-    var DefaultAddon = core.AddonRef{
-        Name:       "argocd",
-        Chart:      "argo-cd",
-        Repository: "https://argoproj.github.io/argo-helm",
-        Version:    "10.9.2",
-        Namespace:  installNamespace,
-        Values:     ServerLoadBalancerValues,
-    }
-    ```
+```go
+var DefaultAddon = core.AddonRef{
+    Name:       "argocd",
+    Chart:      "argo-cd",
+    Repository: "https://argoproj.github.io/argo-helm",
+    Version:    "10.9.2",
+    Namespace:  installNamespace,
+    Values:     ServerLoadBalancerValues,
+}
+```
 
-    - This is the catalog entry every size includes (`internal/catalog`'s
-      `baseAddons`), and what `Install` falls back to on the rare chance a
-      resolved profile carries none of its own.
-    - Argo CD still must be installed on every cluster regardless: app-of-apps
-      cannot sync into a cluster that doesn't have it yet.
+- This is the catalog entry every size includes (`internal/catalog`'s
+  `baseAddons`), and what `Install` falls back to on the rare chance a
+  resolved profile carries none of its own.
+- Argo CD still must be installed on every cluster regardless: app-of-apps
+  cannot sync into a cluster that doesn't have it yet.
 
-??? note "`releaseExists` (unexported)"
+</details>
 
-    ```go
-    func releaseExists(cfg *action.Configuration, releaseName string) (bool, error)
-    ```
+<details>
+<summary>`releaseExists` (unexported)</summary>
 
-    - Reports whether `releaseName` already has Helm release history via
-      `action.NewHistory(cfg).Run`, so `Install` can route to the upgrade
-      path rather than a fresh install.
-    - Treats `driver.ErrReleaseNotFound` as `false, nil`; any other error is
-      wrapped and returned.
+```go
+func releaseExists(cfg *action.Configuration, releaseName string) (bool, error)
+```
 
-??? note "`HelmInstaller.actionConfig` (unexported)"
+- Reports whether `releaseName` already has Helm release history via
+  `action.NewHistory(cfg).Run`, so `Install` can route to the upgrade
+  path rather than a fresh install.
+- Treats `driver.ErrReleaseNotFound` as `false, nil`; any other error is
+  wrapped and returned.
 
-    ```go
-    func (h *HelmInstaller) actionConfig(restConfig *rest.Config) (*action.Configuration, error)
-    ```
+</details>
 
-    - Builds a Helm `action.Configuration` addressed at `restConfig` via
-      `staticRESTClientGetter`, storing release state as Secrets in
-      `installNamespace` — the same storage driver (`"secret"`) `helm`
-      itself defaults to.
+<details>
+<summary>`HelmInstaller.actionConfig` (unexported)</summary>
+
+```go
+func (h *HelmInstaller) actionConfig(restConfig *rest.Config) (*action.Configuration, error)
+```
+
+- Builds a Helm `action.Configuration` addressed at `restConfig` via
+  `staticRESTClientGetter`, storing release state as Secrets in
+  `installNamespace` — the same storage driver (`"secret"`) `helm`
+  itself defaults to.
+
+</details>
 
 ## manifest.go
 
 #### `Application`
 
-??? abstract "`Application`, `ApplicationMetadata`, `ApplicationSpec`, `ApplicationSource`, `ApplicationSourceHelm`, `ApplicationDestination`, `ApplicationSyncPolicy`, `ApplicationSyncPolicyAutomated`"
+<details>
+<summary>`Application`, `ApplicationMetadata`, `ApplicationSpec`, `ApplicationSource`, `ApplicationSourceHelm`, `ApplicationDestination`, `ApplicationSyncPolicy`, `ApplicationSyncPolicyAutomated`</summary>
 
-    A local, minimal mirror of the subset of the Argo CD `Application` CRD
-    (`argoproj.io/v1alpha1`) this package writes — not a dependency on Argo
-    CD's own Go module, since kubespin only ever writes these fields, never
-    reads or reconciles them.
+A local, minimal mirror of the subset of the Argo CD `Application` CRD
+(`argoproj.io/v1alpha1`) this package writes — not a dependency on Argo
+CD's own Go module, since kubespin only ever writes these fields, never
+reads or reconciles them.
 
-    ```go
-    type Application struct {
-        APIVersion string
-        Kind       string
-        Metadata   ApplicationMetadata
-        Spec       ApplicationSpec
-    }
+```go
+type Application struct {
+    APIVersion string
+    Kind       string
+    Metadata   ApplicationMetadata
+    Spec       ApplicationSpec
+}
 
-    type ApplicationMetadata struct {
-        Name       string
-        Namespace  string
-        Finalizers []string // e.g. "resources-finalizer.argocd.argoproj.io"
-    }
+type ApplicationMetadata struct {
+    Name       string
+    Namespace  string
+    Finalizers []string // e.g. "resources-finalizer.argocd.argoproj.io"
+}
 
-    type ApplicationSpec struct {
-        Project     string
-        Source      ApplicationSource
-        Destination ApplicationDestination
-        SyncPolicy  *ApplicationSyncPolicy
-    }
+type ApplicationSpec struct {
+    Project     string
+    Source      ApplicationSource
+    Destination ApplicationDestination
+    SyncPolicy  *ApplicationSyncPolicy
+}
 
-    type ApplicationSource struct {
-        RepoURL        string
-        Path           string                 // root Application: AppsDir
-        Chart          string                 // addon Applications: addon.Chart
-        TargetRevision string
-        Helm           *ApplicationSourceHelm
-    }
+type ApplicationSource struct {
+    RepoURL        string
+    Path           string                 // root Application: AppsDir
+    Chart          string                 // addon Applications: addon.Chart
+    TargetRevision string
+    Helm           *ApplicationSourceHelm
+}
 
-    type ApplicationSourceHelm struct {
-        ValuesObject map[string]any
-    }
+type ApplicationSourceHelm struct {
+    ValuesObject map[string]any
+}
 
-    type ApplicationDestination struct {
-        Server    string // always inClusterServer
-        Namespace string
-    }
+type ApplicationDestination struct {
+    Server    string // always inClusterServer
+    Namespace string
+}
 
-    type ApplicationSyncPolicy struct {
-        Automated   *ApplicationSyncPolicyAutomated
-        SyncOptions []string
-    }
+type ApplicationSyncPolicy struct {
+    Automated   *ApplicationSyncPolicyAutomated
+    SyncOptions []string
+}
 
-    type ApplicationSyncPolicyAutomated struct {
-        Prune    bool
-        SelfHeal bool
-    }
-    ```
+type ApplicationSyncPolicyAutomated struct {
+    Prune    bool
+    SelfHeal bool
+}
+```
 
-    Invariants:
+Invariants:
 
-    - `Finalizers` always includes `resources-finalizer.argocd.argoproj.io`
-      so deleting an `Application` also deletes the resources it manages
-      instead of orphaning them.
-    - `Destination.Server` is always `inClusterServer`
-      (`https://kubernetes.default.svc`) — Argo CD is local to the cluster
-      it manages, there is no central hub, so every rendered `Application`
-      points at itself.
-    - `SyncPolicy` is automated, pruning, and self-healing on every
-      `Application` this package renders: drifted or hand-deleted resources
-      converge back on their own, the same convergence discipline `apply`
-      uses for cloud infra and the repo.
-    - `ApplicationSourceHelm.ValuesObject` takes a structured map so an
-      addon's resolved values (profile + `internal/catalog` override patch)
-      pass straight through without re-serialization.
+- `Finalizers` always includes `resources-finalizer.argocd.argoproj.io`
+  so deleting an `Application` also deletes the resources it manages
+  instead of orphaning them.
+- `Destination.Server` is always `inClusterServer`
+  (`https://kubernetes.default.svc`) — Argo CD is local to the cluster
+  it manages, there is no central hub, so every rendered `Application`
+  points at itself.
+- `SyncPolicy` is automated, pruning, and self-healing on every
+  `Application` this package renders: drifted or hand-deleted resources
+  converge back on their own, the same convergence discipline `apply`
+  uses for cloud infra and the repo.
+- `ApplicationSourceHelm.ValuesObject` takes a structured map so an
+  addon's resolved values (profile + `internal/catalog` override patch)
+  pass straight through without re-serialization.
+
+</details>
 
 #### `Option`
 
-??? abstract "`options` / `Option`"
+<details>
+<summary>`options` / `Option`</summary>
 
-    ```go
-    type options struct {
-        logger *slog.Logger
-    }
+```go
+type options struct {
+    logger *slog.Logger
+}
 
-    type Option func(*options)
+type Option func(*options)
 
-    func WithLogger(logger *slog.Logger) Option
-    ```
+func WithLogger(logger *slog.Logger) Option
+```
 
-    - Carries settings accepted by the rendering entry points
-      (`RenderAddonApplications`, `ApplyProfileIngressDefaults`).
-    - A struct rather than a field on a type because everything in this
-      package outside `install.go`/`apply.go` is a pure function over a
-      `Profile` — there is no installer object to hang a logger off.
-    - `resolve(opts []Option) options` applies `opts` over the default
-      (`slog.Default()`).
+- Carries settings accepted by the rendering entry points
+  (`RenderAddonApplications`, `ApplyProfileIngressDefaults`).
+- A struct rather than a field on a type because everything in this
+  package outside `install.go`/`apply.go` is a pure function over a
+  `Profile` — there is no installer object to hang a logger off.
+- `resolve(opts []Option) options` applies `opts` over the default
+  (`slog.Default()`).
+
+</details>
 
 ## Package-level constants
 
@@ -345,121 +378,148 @@ Spread across `manifest.go`, `appofapps.go`, `install.go`, `repocreds.go`:
 
 #### `RenderRootApplication`
 
-??? note "`RenderRootApplication(repoURL string) ([]byte, error)`"
+<details>
+<summary>`RenderRootApplication(repoURL string) ([]byte, error)`</summary>
 
-    - Renders the app-of-apps root `Application` — the one resource
-      installed directly into the cluster via `KubeApplier`, never
-      committed to the repo it manages (an `Application` that synced itself
-      would be a cycle).
-    - Points its `Source` at `Path: AppsDir`, `TargetRevision: "HEAD"` of
-      `repoURL`, so it discovers every manifest committed under `apps/` in
-      the cluster's own repository.
-    - Returns the YAML-marshaled manifest.
+- Renders the app-of-apps root `Application` — the one resource
+  installed directly into the cluster via `KubeApplier`, never
+  committed to the repo it manages (an `Application` that synced itself
+  would be a cycle).
+- Points its `Source` at `Path: AppsDir`, `TargetRevision: "HEAD"` of
+  `repoURL`, so it discovers every manifest committed under `apps/` in
+  the cluster's own repository.
+- Returns the YAML-marshaled manifest.
+
+</details>
 
 #### `RenderAddonApplication`
 
-??? note "`RenderAddonApplication(addon core.AddonRef) ([]byte, error)`"
+<details>
+<summary>`RenderAddonApplication(addon core.AddonRef) ([]byte, error)`</summary>
 
-    - Renders one addon's independent `Application` (`Source.Chart`/
-      `Repository`/`Version` from `addon`, values passed through
-      `ApplicationSourceHelm.ValuesObject`, `SyncOptions:
-      []string{"CreateNamespace=true"}`).
-    - Each addon syncs and fails on its own, which is the entire point of
-      app-of-apps over one monolithic `Application` for the whole profile.
+- Renders one addon's independent `Application` (`Source.Chart`/
+  `Repository`/`Version` from `addon`, values passed through
+  `ApplicationSourceHelm.ValuesObject`, `SyncOptions:
+  []string{"CreateNamespace=true"}`).
+- Each addon syncs and fails on its own, which is the entire point of
+  app-of-apps over one monolithic `Application` for the whole profile.
+
+</details>
 
 #### `RenderAddonApplications`
 
-??? note "`RenderAddonApplications(profile core.Profile, opts ...Option) (map[string][]byte, error)`"
+<details>
+<summary>`RenderAddonApplications(profile core.Profile, opts ...Option) (map[string][]byte, error)`</summary>
 
-    - Renders every addon in `profile` via `RenderAddonApplication`, keyed
-      by the path each should be committed to under `AppsDir`
-      (`"apps/<addon.Name>.yaml"`) in the cluster's own repository.
-    - Logs one debug line per addon and a summary info line.
+- Renders every addon in `profile` via `RenderAddonApplication`, keyed
+  by the path each should be committed to under `AppsDir`
+  (`"apps/<addon.Name>.yaml"`) in the cluster's own repository.
+- Logs one debug line per addon and a summary info line.
+
+</details>
 
 ## repocreds.go
 
 #### `RenderRepoCredentialsSecret`
 
-??? note "`RenderRepoCredentialsSecret(repoURL, username, password string) ([]byte, error)`"
+<details>
+<summary>`RenderRepoCredentialsSecret(repoURL, username, password string) ([]byte, error)`</summary>
 
-    - Renders the repository-credential Secret Argo CD's repo-server needs
-      to clone the cluster's own repository.
-    - Fixed name `repo-creds`, namespace `Namespace`, label
-      `argocd.argoproj.io/secret-type: repository`, `stringData` holding
-      `type: git`, `url`, `username`, `password`.
-    - Because the repository is always created private, applying this
-      Secret alongside the root `Application` (both via
-      `KubeApplier.Apply`, never committed to git — a Secret holding a live
-      token has no business in git history) is what prevents the root
-      `Application`'s first reconcile from failing with "authentication
-      required".
+- Renders the repository-credential Secret Argo CD's repo-server needs
+  to clone the cluster's own repository.
+- Fixed name `repo-creds`, namespace `Namespace`, label
+  `argocd.argoproj.io/secret-type: repository`, `stringData` holding
+  `type: git`, `url`, `username`, `password`.
+- Because the repository is always created private, applying this
+  Secret alongside the root `Application` (both via
+  `KubeApplier.Apply`, never committed to git — a Secret holding a live
+  token has no business in git history) is what prevents the root
+  `Application`'s first reconcile from failing with "authentication
+  required".
+
+</details>
 
 ## ingress.go
 
 #### `Exposure`
 
-??? abstract "`Exposure`"
+<details>
+<summary>`Exposure`</summary>
 
-    ```go
-    type Exposure string
+```go
+type Exposure string
 
-    const (
-        ExposureInternal Exposure = "internal"
-        ExposureExternal Exposure = "external"
-    )
-    ```
+const (
+    ExposureInternal Exposure = "internal"
+    ExposureExternal Exposure = "external"
+)
+```
 
-    - How an ingress or Gateway API addon's load balancer is reachable.
-    - Internal is the default in every case but one — see `ResolveExposure`.
+- How an ingress or Gateway API addon's load balancer is reachable.
+- Internal is the default in every case but one — see `ResolveExposure`.
+
+</details>
 
 #### `ResolveExposure`
 
-??? note "`ResolveExposure(access core.Access, requested Exposure) Exposure`"
+<details>
+<summary>`ResolveExposure(access core.Access, requested Exposure) Exposure`</summary>
 
-    ```go
-    func ResolveExposure(access core.Access, requested Exposure) Exposure {
-        if access == core.AccessPublic && requested == ExposureExternal {
-            return ExposureExternal
-        }
-        return ExposureInternal
+```go
+func ResolveExposure(access core.Access, requested Exposure) Exposure {
+    if access == core.AccessPublic && requested == ExposureExternal {
+        return ExposureExternal
     }
-    ```
+    return ExposureInternal
+}
+```
 
-    - Applies the public/private-aware ingress default: internal load
-      balancer unless the cluster is `core.AccessPublic` *and* the addon
-      itself asks to be external.
-    - A private cluster overrides any addon-level request for external
-      exposure — there is no public endpoint for an externally exposed load
-      balancer to sit in front of.
+- Applies the public/private-aware ingress default: internal load
+  balancer unless the cluster is `core.AccessPublic` *and* the addon
+  itself asks to be external.
+- A private cluster overrides any addon-level request for external
+  exposure — there is no public endpoint for an externally exposed load
+  balancer to sit in front of.
 
-??? note "`requestedExposure(values map[string]any) Exposure` (unexported)"
+</details>
 
-    - Reads an addon's own `ingress.exposure` value out of its resolved
-      Helm values, defaulting to `ExposureInternal` when the addon sets
-      none or the value isn't shaped as expected.
+<details>
+<summary>`requestedExposure(values map[string]any) Exposure` (unexported)</summary>
+
+- Reads an addon's own `ingress.exposure` value out of its resolved
+  Helm values, defaulting to `ExposureInternal` when the addon sets
+  none or the value isn't shaped as expected.
+
+</details>
 
 #### `ApplyIngressDefaults`
 
-??? note "`ApplyIngressDefaults(access core.Access, addon core.AddonRef) core.AddonRef`"
+<details>
+<summary>`ApplyIngressDefaults(access core.Access, addon core.AddonRef) core.AddonRef`</summary>
 
-    - Overlays the resolved exposure onto an ingress/Gateway addon's
-      values, returning a new `AddonRef` (addon's own `Values` map is never
-      mutated, so a caller iterating a profile's addons cannot leak one
-      addon's ingress defaults into another).
-    - Always writes an explicit `ingress.exposure` string and an
-      `ingress.internal` bool (`exposure == ExposureInternal`) that chart
-      authors can key an annotation off — proving the access-mode default
-      was applied rather than trusting the profile got it right.
+- Overlays the resolved exposure onto an ingress/Gateway addon's
+  values, returning a new `AddonRef` (addon's own `Values` map is never
+  mutated, so a caller iterating a profile's addons cannot leak one
+  addon's ingress defaults into another).
+- Always writes an explicit `ingress.exposure` string and an
+  `ingress.internal` bool (`exposure == ExposureInternal`) that chart
+  authors can key an annotation off — proving the access-mode default
+  was applied rather than trusting the profile got it right.
+
+</details>
 
 #### `ApplyProfileIngressDefaults`
 
-??? note "`ApplyProfileIngressDefaults(access core.Access, profile core.Profile, opts ...Option) core.Profile`"
+<details>
+<summary>`ApplyProfileIngressDefaults(access core.Access, profile core.Profile, opts ...Option) core.Profile`</summary>
 
-    - Applies `ApplyIngressDefaults` to every addon in `profile` that
-      already declares an `ingress` values block, leaving every other addon
-      untouched (an addon with no opinion about ingress should not gain an
-      empty `ingress: {}` block just because some other addon in the
-      profile is a load balancer).
-    - Logs a warning via the resolved `Option`'s logger when an addon
-      requested `ExposureExternal` but `ResolveExposure` forced it back to
-      internal.
+- Applies `ApplyIngressDefaults` to every addon in `profile` that
+  already declares an `ingress` values block, leaving every other addon
+  untouched (an addon with no opinion about ingress should not gain an
+  empty `ingress: {}` block just because some other addon in the
+  profile is a load balancer).
+- Logs a warning via the resolved `Option`'s logger when an addon
+  requested `ExposureExternal` but `ResolveExposure` forced it back to
+  internal.
+
+</details>

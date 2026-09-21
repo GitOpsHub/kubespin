@@ -1,3 +1,7 @@
+---
+title: kubespin login
+---
+
 # kubespin login
 
 Authenticate to every configured cloud provider

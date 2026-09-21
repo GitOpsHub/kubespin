@@ -1,3 +1,7 @@
+---
+title: kubespin delete
+---
+
 # kubespin delete
 
 Decommission a cluster and its supporting resources

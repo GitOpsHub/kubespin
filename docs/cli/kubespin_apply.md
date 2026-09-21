@@ -1,3 +1,7 @@
+---
+title: kubespin apply
+---
+
 # kubespin apply
 
 Create or reconcile a cluster to match its desired state

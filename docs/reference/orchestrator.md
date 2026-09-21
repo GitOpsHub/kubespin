@@ -85,187 +85,223 @@ maps to exactly one registry phase transition: `Orchestrator.advance` runs the
 
 #### `Step`
 
-??? abstract "`Step` — interface"
+<details>
+<summary>`Step` — interface</summary>
 
-    ```go
-    type Step interface {
-    	Name() string
-    	Run(ctx context.Context, spec core.ClusterSpec, rec registry.Record) error
-    }
-    ```
+```go
+type Step interface {
+	Name() string
+	Run(ctx context.Context, spec core.ClusterSpec, rec registry.Record) error
+}
+```
 
-    - **Behavior**: performs the work that moves a cluster out of one phase.
-    - **Invariant**: a step must be safe to re-run — a resumed apply
-      re-executes the step for the phase it stopped at, because the phase is
-      only recorded once the step succeeded.
+- **Behavior**: performs the work that moves a cluster out of one phase.
+- **Invariant**: a step must be safe to re-run — a resumed apply
+  re-executes the step for the phase it stopped at, because the phase is
+  only recorded once the step succeeded.
+
+</details>
 
 #### `StepFunc`
 
-??? abstract "`StepFunc` — type"
+<details>
+<summary>`StepFunc` — type</summary>
 
-    ```go
-    type StepFunc struct {
-    	Label string
-    	Fn    func(ctx context.Context, spec core.ClusterSpec, rec registry.Record) error
-    }
-    ```
+```go
+type StepFunc struct {
+	Label string
+	Fn    func(ctx context.Context, spec core.ClusterSpec, rec registry.Record) error
+}
+```
 
-    - **Behavior**: adapts a plain function to `Step`. `Name()` returns
-      `Label`; `Run` calls `Fn` if set, otherwise no-ops.
-    - **Used by**: `DefaultSteps()` placeholders, which carry a `Label` and no
-      `Fn`.
+- **Behavior**: adapts a plain function to `Step`. `Name()` returns
+  `Label`; `Run` calls `Fn` if set, otherwise no-ops.
+- **Used by**: `DefaultSteps()` placeholders, which carry a `Label` and no
+  `Fn`.
+
+</details>
 
 #### `ReconcileFunc`
 
-??? abstract "`ReconcileFunc` — type"
+<details>
+<summary>`ReconcileFunc` — type</summary>
 
-    ```go
-    type ReconcileFunc func(ctx context.Context, spec core.ClusterSpec, rec registry.Record) error
-    ```
+```go
+type ReconcileFunc func(ctx context.Context, spec core.ClusterSpec, rec registry.Record) error
+```
 
-    - **Behavior**: reconciles a cluster that is already at `PhaseReady`.
-    - **Built by**: `ReadyReconcile`, installed via `WithReadyReconcile`.
+- **Behavior**: reconciles a cluster that is already at `PhaseReady`.
+- **Built by**: `ReadyReconcile`, installed via `WithReadyReconcile`.
+
+</details>
 
 #### `Cloud`
 
-??? abstract "`Cloud` — type (bundling struct, defined in steps.go)"
+<details>
+<summary>`Cloud` — type (bundling struct, defined in steps.go)</summary>
 
-    See [`Cloud`](#cloud) under steps.go.
+See [`Cloud`](#cloud) under steps.go.
+
+</details>
 
 #### `Orchestrator`
 
-??? abstract "`Orchestrator` — type"
+<details>
+<summary>`Orchestrator` — type</summary>
 
-    ```go
-    type Orchestrator struct {
-    	registry       registry.Registry
-    	steps          map[core.Phase]Step
-    	holder         string
-    	leaseTTL       time.Duration
-    	now            func() time.Time
-    	logger         *slog.Logger
-    	readyReconcile ReconcileFunc
-    }
-    ```
+```go
+type Orchestrator struct {
+	registry       registry.Registry
+	steps          map[core.Phase]Step
+	holder         string
+	leaseTTL       time.Duration
+	now            func() time.Time
+	logger         *slog.Logger
+	readyReconcile ReconcileFunc
+}
+```
 
-    - **Behavior**: drives one cluster's provisioning at a time.
-    - **Built by**: `New(reg, opts...)` and configured through the `Option`
-      functions.
-    - **Invariants**:
-        - `holder` must be unique per run — two runs sharing a holder would
-          each believe they own the lease (see `defaultHolder`, which
-          combines hostname and PID).
-        - Exactly one `Orchestrator.Apply` or `Orchestrator.Delete` call may
-          hold a given cluster's lease at a time; a second concurrent call
-          gets `ErrBusy`.
+- **Behavior**: drives one cluster's provisioning at a time.
+- **Built by**: `New(reg, opts...)` and configured through the `Option`
+  functions.
+- **Invariants**:
+    - `holder` must be unique per run — two runs sharing a holder would
+      each believe they own the lease (see `defaultHolder`, which
+      combines hostname and PID).
+    - Exactly one `Orchestrator.Apply` or `Orchestrator.Delete` call may
+      hold a given cluster's lease at a time; a second concurrent call
+      gets `ErrBusy`.
+
+</details>
 
 #### `Option`
 
-??? abstract "`Option` — type"
+<details>
+<summary>`Option` — type</summary>
 
-    ```go
-    type Option func(*Orchestrator)
-    ```
+```go
+type Option func(*Orchestrator)
+```
 
-    - **Behavior**: functional option for `New`.
-    - **Provided options**: `WithSteps`, `WithHolder`, `WithLeaseTTL`,
-      `WithClock`, `WithLogger`, `WithReadyReconcile`.
+- **Behavior**: functional option for `New`.
+- **Provided options**: `WithSteps`, `WithHolder`, `WithLeaseTTL`,
+  `WithClock`, `WithLogger`, `WithReadyReconcile`.
+
+</details>
 
 #### `ErrBusy`
 
-??? note "`ErrBusy`, `ErrDecommissioning`, `DefaultLeaseTTL` — vars/const"
+<details>
+<summary>`ErrBusy`, `ErrDecommissioning`, `DefaultLeaseTTL` — vars/const</summary>
 
-    ```go
-    var ErrBusy = errors.New("cluster is being provisioned by another run")
-    var ErrDecommissioning = errors.New("cluster is decommissioning or decommissioned")
+```go
+var ErrBusy = errors.New("cluster is being provisioned by another run")
+var ErrDecommissioning = errors.New("cluster is decommissioning or decommissioned")
 
-    const DefaultLeaseTTL = 15 * time.Minute
-    ```
+const DefaultLeaseTTL = 15 * time.Minute
+```
 
-    - **`ErrBusy`**: another run holds the cluster's lease (`AcquireLease`
-      returned `registry.ErrLeaseHeld`).
-    - **`ErrDecommissioning`**: `Apply` was called on a cluster whose phase is
-      `decommissioning` or `decommissioned`; reviving one is not a phase
-      transition, it is a new cluster.
-    - **`DefaultLeaseTTL`**: bounds how long a crashed run can block a
-      cluster; the orchestrator renews it before each step and on a timer
-      during long steps, so this only has to outlast the longest single
-      step's renewal failures, not the whole run.
+- **`ErrBusy`**: another run holds the cluster's lease (`AcquireLease`
+  returned `registry.ErrLeaseHeld`).
+- **`ErrDecommissioning`**: `Apply` was called on a cluster whose phase is
+  `decommissioning` or `decommissioned`; reviving one is not a phase
+  transition, it is a new cluster.
+- **`DefaultLeaseTTL`**: bounds how long a crashed run can block a
+  cluster; the orchestrator renews it before each step and on a timer
+  during long steps, so this only has to outlast the longest single
+  step's renewal failures, not the whole run.
 
-    See also [`ErrLeaseLost`](#errleaselost) (lease.go), which rounds out the
-    package's exported error set.
+See also [`ErrLeaseLost`](#errleaselost) (lease.go), which rounds out the
+package's exported error set.
+
+</details>
 
 #### `DefaultSteps`
 
-??? note "`DefaultSteps` — func"
+<details>
+<summary>`DefaultSteps` — func</summary>
 
-    ```go
-    func DefaultSteps() map[core.Phase]Step
-    ```
+```go
+func DefaultSteps() map[core.Phase]Step
+```
 
-    - **Returns**: a no-op `Step` (label only, no `Fn`) for every phase from
-      `pending` through `argocd-installed`.
-    - **Behavior**: placeholders until real steps are wired in by
-      `ProvisioningSteps`; their labels document what each phase is waiting
-      on.
+- **Returns**: a no-op `Step` (label only, no `Fn`) for every phase from
+  `pending` through `argocd-installed`.
+- **Behavior**: placeholders until real steps are wired in by
+  `ProvisioningSteps`; their labels document what each phase is waiting
+  on.
+
+</details>
 
 #### `WithSteps`, `WithHolder`, `WithLeaseTTL`, `WithClock`, `WithLogger`, `WithReadyReconcile`
 
-??? note "`WithSteps`, `WithHolder`, `WithLeaseTTL`, `WithClock`, `WithLogger`, `WithReadyReconcile` — funcs"
+<details>
+<summary>`WithSteps`, `WithHolder`, `WithLeaseTTL`, `WithClock`, `WithLogger`, `WithReadyReconcile` — funcs</summary>
 
-    ```go
-    func WithSteps(steps map[core.Phase]Step) Option
-    func WithHolder(holder string) Option
-    func WithLeaseTTL(ttl time.Duration) Option
-    func WithClock(now func() time.Time) Option
-    func WithLogger(logger *slog.Logger) Option
-    func WithReadyReconcile(fn ReconcileFunc) Option
-    ```
+```go
+func WithSteps(steps map[core.Phase]Step) Option
+func WithHolder(holder string) Option
+func WithLeaseTTL(ttl time.Duration) Option
+func WithClock(now func() time.Time) Option
+func WithLogger(logger *slog.Logger) Option
+func WithReadyReconcile(fn ReconcileFunc) Option
+```
 
-    - **Behavior**: standard functional options replacing, respectively: the
-      phase→step map, the lease holder identity, the lease TTL, the time
-      source, the logger, and the function `Apply` runs whenever it leaves a
-      cluster at `PhaseReady` (whether that's the outcome of this call's
-      phase walk, or the cluster was already ready when `Apply` was called).
+- **Behavior**: standard functional options replacing, respectively: the
+  phase→step map, the lease holder identity, the lease TTL, the time
+  source, the logger, and the function `Apply` runs whenever it leaves a
+  cluster at `PhaseReady` (whether that's the outcome of this call's
+  phase walk, or the cluster was already ready when `Apply` was called).
+
+</details>
 
 #### `New`
 
-??? note "`New` — func"
+<details>
+<summary>`New` — func</summary>
 
-    ```go
-    func New(reg registry.Registry, opts ...Option) *Orchestrator
-    ```
+```go
+func New(reg registry.Registry, opts ...Option) *Orchestrator
+```
 
-    - **Behavior**: builds an `Orchestrator` over `reg` with `DefaultSteps()`,
-      a hostname/PID holder, `DefaultLeaseTTL`, `time.Now`, and
-      `slog.Default()`, then applies `opts`.
+- **Behavior**: builds an `Orchestrator` over `reg` with `DefaultSteps()`,
+  a hostname/PID holder, `DefaultLeaseTTL`, `time.Now`, and
+  `slog.Default()`, then applies `opts`.
+
+</details>
 
 #### `(*Orchestrator) Apply`
 
-??? note "`(*Orchestrator) Apply` — func"
+<details>
+<summary>`(*Orchestrator) Apply` — func</summary>
 
-    ```go
-    func (o *Orchestrator) Apply(ctx context.Context, spec core.ClusterSpec) (registry.Record, error)
-    ```
+```go
+func (o *Orchestrator) Apply(ctx context.Context, spec core.ClusterSpec) (registry.Record, error)
+```
 
-    - **Behavior**: validates `spec`, ensures a registry record exists
-      (`ensureRecord`, creating one at `pending` if new), acquires the
-      cluster's lease, re-reads the record under the lease (another run may
-      have advanced it between the first read and acquiring), then walks the
-      phase state machine to `ready` via `run`.
-    - **Behavior**: if the resulting phase is `ready` and
-      `WithReadyReconcile` was set, calls that function.
-    - **Returns**: the final `registry.Record` and, on lease loss, wraps the
-      error with `ErrLeaseLost` context.
-    - **Invariant**: idempotent — a cluster already at `ready` runs no steps
-      and writes nothing.
+- **Behavior**: validates `spec`, ensures a registry record exists
+  (`ensureRecord`, creating one at `pending` if new), acquires the
+  cluster's lease, re-reads the record under the lease (another run may
+  have advanced it between the first read and acquiring), then walks the
+  phase state machine to `ready` via `run`.
+- **Behavior**: if the resulting phase is `ready` and
+  `WithReadyReconcile` was set, calls that function.
+- **Returns**: the final `registry.Record` and, on lease loss, wraps the
+  error with `ErrLeaseLost` context.
+- **Invariant**: idempotent — a cluster already at `ready` runs no steps
+  and writes nothing.
 
-??? note "`advance` — internal func"
+</details>
 
-    `advance` (orchestrator.go) runs the `Step` for the record's current
-    phase, renewing the lease first as a fast-fail check, and only calls
-    `registry.UpdatePhase` to `next` if the step succeeds — a failed step
-    leaves the phase unchanged so a resumed run re-executes it.
+<details>
+<summary>`advance` — internal func</summary>
+
+`advance` (orchestrator.go) runs the `Step` for the record's current
+phase, renewing the lease first as a fast-fail check, and only calls
+`registry.UpdatePhase` to `next` if the step succeeds — a failed step
+leaves the phase unchanged so a resumed run re-executes it.
+
+</details>
 
 ## steps.go
 
@@ -277,121 +313,142 @@ it resolves the cluster's profile, hashes desired state, and routes the diff
 call), an addon change becomes `repo.ReconcileAddons` (a git commit + push
 against `.state.yaml`) — so a no-change `apply` makes neither call.
 
-??? abstract "`Cloud` — type"
+<details>
+<summary>`Cloud` — type</summary>
 
-    ```go
-    type Cloud struct {
-    	Cluster  provisioner.ClusterProvisioner
-    	Identity provisioner.IdentityProvisioner
-    	Network  provisioner.NetworkProvisioner
+```go
+type Cloud struct {
+	Cluster  provisioner.ClusterProvisioner
+	Identity provisioner.IdentityProvisioner
+	Network  provisioner.NetworkProvisioner
 
-    	IngestionEndpoint provisioner.EgressDestination
-    	Wait provisioner.WaitOptions
-    }
-    ```
+	IngestionEndpoint provisioner.EgressDestination
+	Wait provisioner.WaitOptions
+}
+```
 
-    - **Behavior**: bundles the provisioners for one cloud so per-cloud
-      construction lives in one place — adding GCP and Azure is a matter of
-      building this struct differently rather than changing the
-      orchestrator.
-    - **`IngestionEndpoint`**: the Central Ingestion API the status reporter
-      pushes to, the only destination a cluster's egress must permit; if its
-      `Host` is empty, `openEgress` logs a warning and allows nothing.
-    - **`Wait`**: tunes how cluster creation/deletion is polled.
+- **Behavior**: bundles the provisioners for one cloud so per-cloud
+  construction lives in one place — adding GCP and Azure is a matter of
+  building this struct differently rather than changing the
+  orchestrator.
+- **`IngestionEndpoint`**: the Central Ingestion API the status reporter
+  pushes to, the only destination a cluster's egress must permit; if its
+  `Host` is empty, `openEgress` logs a warning and allows nothing.
+- **`Wait`**: tunes how cluster creation/deletion is polled.
+
+</details>
 
 #### `ProvisioningSteps`
 
-??? note "`ProvisioningSteps` — func"
+<details>
+<summary>`ProvisioningSteps` — func</summary>
 
-    ```go
-    func ProvisioningSteps(
-    	cloud Cloud, repoProv repo.Provisioner, resolver catalog.Resolver, reg registry.Registry,
-    	installer argocd.Installer, applier argocd.KubeApplier, logger *slog.Logger,
-    ) map[core.Phase]Step
-    ```
+```go
+func ProvisioningSteps(
+	cloud Cloud, repoProv repo.Provisioner, resolver catalog.Resolver, reg registry.Registry,
+	installer argocd.Installer, applier argocd.KubeApplier, logger *slog.Logger,
+) map[core.Phase]Step
+```
 
-    - **Behavior**: builds the real `pending`→`argocd-installed` steps
-      described in the [Apply step order table](#apply-provisioningsteps-stepsgo),
-      overriding `DefaultSteps()`.
+- **Behavior**: builds the real `pending`→`argocd-installed` steps
+  described in the [Apply step order table](#apply-provisioningsteps-stepsgo),
+  overriding `DefaultSteps()`.
+
+</details>
 
 #### `ReadyReconcile`
 
-??? note "`ReadyReconcile` — func"
+<details>
+<summary>`ReadyReconcile` — func</summary>
 
-    ```go
-    func ReadyReconcile(cloud Cloud, repoProv repo.Provisioner, resolver catalog.Resolver, logger *slog.Logger) ReconcileFunc
-    ```
+```go
+func ReadyReconcile(cloud Cloud, repoProv repo.Provisioner, resolver catalog.Resolver, logger *slog.Logger) ReconcileFunc
+```
 
-    - **Behavior**: builds the `ReconcileFunc` that keeps a `ready` cluster
-      converged on every subsequent `apply`: `cloud.Cluster.Reconcile` for
-      infra drift, `repo.ReconcileAddons` (after `catalog.ResolveForCluster`)
-      for addon drift.
-    - **Invariant**: a no-change run makes neither call — this is where
-      `apply`'s split-diff idempotence for already-provisioned clusters
-      lives.
+- **Behavior**: builds the `ReconcileFunc` that keeps a `ready` cluster
+  converged on every subsequent `apply`: `cloud.Cluster.Reconcile` for
+  infra drift, `repo.ReconcileAddons` (after `catalog.ResolveForCluster`)
+  for addon drift.
+- **Invariant**: a no-change run makes neither call — this is where
+  `apply`'s split-diff idempotence for already-provisioned clusters
+  lives.
+
+</details>
 
 #### `Teardown`
 
-??? note "`Teardown` — func"
+<details>
+<summary>`Teardown` — func</summary>
 
-    ```go
-    func Teardown(cloud Cloud, repoProv repo.Provisioner, logger *slog.Logger) TeardownFunc
-    ```
+```go
+func Teardown(cloud Cloud, repoProv repo.Provisioner, logger *slog.Logger) TeardownFunc
+```
 
-    - **Behavior**: builds the `TeardownFunc` performing the reverse-teardown
-      sequence described in the
-      [Delete step order table](#delete-teardown-stepsgo-deletego):
-      identity deprovision → cluster delete (blocking on
-      `provisioner.WaitUntilGone`) → repository archive.
+- **Behavior**: builds the `TeardownFunc` performing the reverse-teardown
+  sequence described in the
+  [Delete step order table](#delete-teardown-stepsgo--deletego):
+  identity deprovision → cluster delete (blocking on
+  `provisioner.WaitUntilGone`) → repository archive.
 
-??? note "Step functions — `createClusterStep`, `bindIdentityStep`, `seedRepoStep`, `installArgoCDStep`, `openEgress` — internal funcs"
+</details>
 
-    - **Behavior**: unexported implementations backing the phase steps
-      described in the [Apply step order table](#apply-provisioningsteps-stepsgo)
-      above. Profile resolution itself — catalog resolve → provider template
-      → argocd stand-in → override merge → ingress/access-mode templating —
-      no longer lives here: `seedRepoStep`, `installArgoCDStep`, and
-      `ReadyReconcile` all call `catalog.ResolveForCluster`
-      (`internal/catalog/resolve.go`), the same seam `internal/fleet.UpdateOne`
-      uses for `fleet update`, so the two commands can never resolve a given
-      cluster's profile differently.
+<details>
+<summary>Step functions — `createClusterStep`, `bindIdentityStep`, `seedRepoStep`, `installArgoCDStep`, `openEgress` — internal funcs</summary>
+
+- **Behavior**: unexported implementations backing the phase steps
+  described in the [Apply step order table](#apply-provisioningsteps-stepsgo)
+  above. Profile resolution itself — catalog resolve → provider template
+  → argocd stand-in → override merge → ingress/access-mode templating —
+  no longer lives here: `seedRepoStep`, `installArgoCDStep`, and
+  `ReadyReconcile` all call `catalog.ResolveForCluster`
+  (`internal/catalog/resolve.go`), the same seam `internal/fleet.UpdateOne`
+  uses for `fleet update`, so the two commands can never resolve a given
+  cluster's profile differently.
+
+</details>
 
 ## delete.go
 
 `Orchestrator.Delete` marks the registry `decommissioning`, runs the supplied
 `TeardownFunc`, then marks it `decommissioned` — see the
-[Delete step order table](#delete-teardown-stepsgo-deletego) for what the
+[Delete step order table](#delete-teardown-stepsgo--deletego) for what the
 teardown itself does.
 
 #### `TeardownFunc`
 
-??? abstract "`TeardownFunc` — type"
+<details>
+<summary>`TeardownFunc` — type</summary>
 
-    ```go
-    type TeardownFunc func(ctx context.Context, spec core.ClusterSpec, rec registry.Record) error
-    ```
+```go
+type TeardownFunc func(ctx context.Context, spec core.ClusterSpec, rec registry.Record) error
+```
 
-    - **Behavior**: performs the actual cleanup for a decommissioning
-      cluster.
-    - **Invariant**: runs once the cluster is recorded
-      `PhaseDecommissioning`, so a crashed teardown resumes as a teardown on
-      retry rather than an ordinary `apply`.
+- **Behavior**: performs the actual cleanup for a decommissioning
+  cluster.
+- **Invariant**: runs once the cluster is recorded
+  `PhaseDecommissioning`, so a crashed teardown resumes as a teardown on
+  retry rather than an ordinary `apply`.
+
+</details>
 
 #### `(*Orchestrator) Delete`
 
-??? note "`(*Orchestrator) Delete` — func"
+<details>
+<summary>`(*Orchestrator) Delete` — func</summary>
 
-    ```go
-    func (o *Orchestrator) Delete(ctx context.Context, spec core.ClusterSpec, teardown TeardownFunc) (registry.Record, error)
-    ```
+```go
+func (o *Orchestrator) Delete(ctx context.Context, spec core.ClusterSpec, teardown TeardownFunc) (registry.Record, error)
+```
 
-    - **Behavior**: reads the cluster's record; no-ops if already
-      `decommissioned`. Otherwise acquires the lease, re-reads under it,
-      marks `PhaseDecommissioning` if not already there, runs `teardown`,
-      then marks `PhaseDecommissioned`.
-    - **Invariant**: on teardown failure the phase is deliberately left at
-      `decommissioning` so a retried `delete` resumes teardown rather than
-      believing the cluster is still live.
+- **Behavior**: reads the cluster's record; no-ops if already
+  `decommissioned`. Otherwise acquires the lease, re-reads under it,
+  marks `PhaseDecommissioning` if not already there, runs `teardown`,
+  then marks `PhaseDecommissioned`.
+- **Invariant**: on teardown failure the phase is deliberately left at
+  `decommissioning` so a retried `delete` resumes teardown rather than
+  believing the cluster is still live.
+
+</details>
 
 ## lease.go
 
@@ -402,41 +459,50 @@ mid-step and let a second `apply` provision the same cluster concurrently.
 
 #### `ErrLeaseLost`
 
-??? note "`ErrLeaseLost` — var"
+<details>
+<summary>`ErrLeaseLost` — var</summary>
 
-    ```go
-    var ErrLeaseLost = errors.New("lost the cluster lease mid-run")
-    ```
+```go
+var ErrLeaseLost = errors.New("lost the cluster lease mid-run")
+```
 
-    - **Behavior**: a run can no longer prove it holds the lease (see
-      `keepLeaseAlive`); deliberately fatal, since another `apply` may
-      already be provisioning the same cluster.
+- **Behavior**: a run can no longer prove it holds the lease (see
+  `keepLeaseAlive`); deliberately fatal, since another `apply` may
+  already be provisioning the same cluster.
+
+</details>
 
 #### `keepLeaseAlive`
 
-??? note "`keepLeaseAlive` — internal func"
+<details>
+<summary>`keepLeaseAlive` — internal func</summary>
 
-    ```go
-    func (o *Orchestrator) keepLeaseAlive(ctx context.Context, id core.ClusterID) (context.Context, func())
-    ```
+```go
+func (o *Orchestrator) keepLeaseAlive(ctx context.Context, id core.ClusterID) (context.Context, func())
+```
 
-    - **Behavior**: renews the lease on a timer (every `leaseTTL / 3`) in a
-      background goroutine.
-    - **Returns**: a derived `context.Context` that is cancelled with
-      `ErrLeaseLost` the moment renewal can no longer prove the lease is
-      held (either an unambiguous `registry.ErrLeaseLost`/
-      `registry.ErrNotFound`, or transient renewal failures persisting past
-      the lease's last known expiry).
+- **Behavior**: renews the lease on a timer (every `leaseTTL / 3`) in a
+  background goroutine.
+- **Returns**: a derived `context.Context` that is cancelled with
+  `ErrLeaseLost` the moment renewal can no longer prove the lease is
+  held (either an unambiguous `registry.ErrLeaseLost`/
+  `registry.ErrNotFound`, or transient renewal failures persisting past
+  the lease's last known expiry).
+
+</details>
 
 #### `leaseFailure`
 
-??? note "`leaseFailure` — internal func"
+<details>
+<summary>`leaseFailure` — internal func</summary>
 
-    ```go
-    func leaseFailure(runCtx context.Context, err error) error
-    ```
+```go
+func leaseFailure(runCtx context.Context, err error) error
+```
 
-    - **Behavior**: rewrites an error as `ErrLeaseLost` context when the run
-      context was cancelled by `keepLeaseAlive`, so a lost lease reads as
-      "another run took over" instead of an unexplained context
-      cancellation.
+- **Behavior**: rewrites an error as `ErrLeaseLost` context when the run
+  context was cancelled by `keepLeaseAlive`, so a lost lease reads as
+  "another run took over" instead of an unexplained context
+  cancellation.
+
+</details>

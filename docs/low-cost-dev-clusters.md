@@ -135,7 +135,7 @@ kubespin apply --provider azure --azure-subscription "$AZURE_SUBSCRIPTION_ID" \
 ```
 
 See [Examples](examples.md) for the full flag reference on `apply`, and
-[Examples: quota on low-quota / sandbox GCP projects](examples.md#quota-on-low-quota-sandbox-gcp-projects)
+[Examples: quota on low-quota / sandbox GCP projects](examples.md#quota-on-low-quota--sandbox-gcp-projects)
 for why `--disk-size` also matters on a regional (non-`--spot`) GCP cluster.
 
 ## `make spot`: all three clouds at once

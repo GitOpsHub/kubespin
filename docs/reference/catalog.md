@@ -38,109 +38,133 @@ build, not editing an external repo or pinning a version.
 
 #### `ResolveForCluster`
 
-??? note "`ResolveForCluster` — function"
+<details>
+<summary>`ResolveForCluster` — function</summary>
 
-    ```go
-    func ResolveForCluster(ctx context.Context, resolver Resolver, spec core.ClusterSpec) (core.Profile, error)
-    ```
+```go
+func ResolveForCluster(ctx context.Context, resolver Resolver, spec core.ClusterSpec) (core.Profile, error)
+```
 
-    - **Behavior:** `resolver.Resolve(ctx, spec.Size)`, then `Profile.ForProvider(spec.Provider)` to drop unsupported addons, then `withArgoCDAddon` (unexported: injects `argocd.DefaultAddon` as a defensive stand-in `"argocd"` catalog entry on the rare chance a size's catalog entry doesn't carry one — every builtin size does, via `baseAddons`), then `Merge(profile, spec.Overrides)`, then `argocd.ApplyProfileIngressDefaults(spec.Access, merged)`.
-    - **Invariant:** because `withArgoCDAddon` runs before `Merge`, every resolved profile always has an `"argocd"` entry, so a `cluster.yaml` override naming `"argocd"` is always legal.
-    - **Behavior:** the single seam both `internal/orchestrator` (`installArgoCDStep`, `seedRepoStep`, `ReadyReconcile`) and `internal/fleet.UpdateOne` call, so `apply` and `fleet update` resolve the same cluster's size identically.
+- **Behavior:** `resolver.Resolve(ctx, spec.Size)`, then `Profile.ForProvider(spec.Provider)` to drop unsupported addons, then `withArgoCDAddon` (unexported: injects `argocd.DefaultAddon` as a defensive stand-in `"argocd"` catalog entry on the rare chance a size's catalog entry doesn't carry one — every builtin size does, via `baseAddons`), then `Merge(profile, spec.Overrides)`, then `argocd.ApplyProfileIngressDefaults(spec.Access, merged)`.
+- **Invariant:** because `withArgoCDAddon` runs before `Merge`, every resolved profile always has an `"argocd"` entry, so a `cluster.yaml` override naming `"argocd"` is always legal.
+- **Behavior:** the single seam both `internal/orchestrator` (`installArgoCDStep`, `seedRepoStep`, `ReadyReconcile`) and `internal/fleet.UpdateOne` call, so `apply` and `fleet update` resolve the same cluster's size identically.
+
+</details>
 
 ## `catalog.go`
 
 #### `Resolver`
 
-??? abstract "`Resolver` — interface"
+<details>
+<summary>`Resolver` — interface</summary>
 
-    ```go
-    type Resolver interface {
-    	Resolve(ctx context.Context, size core.ClusterSize) (core.Profile, error)
-    }
-    ```
+```go
+type Resolver interface {
+	Resolve(ctx context.Context, size core.ClusterSize) (core.Profile, error)
+}
+```
 
-    - **Behavior:** the seam size resolution happens behind. `internal/orchestrator` and the rest of upstream code depend only on this interface — today `BuiltinResolver` is the only implementation.
+- **Behavior:** the seam size resolution happens behind. `internal/orchestrator` and the rest of upstream code depend only on this interface — today `BuiltinResolver` is the only implementation.
+
+</details>
 
 #### `BuiltinResolver`
 
-??? abstract "`BuiltinResolver` — type"
+<details>
+<summary>`BuiltinResolver` — type</summary>
 
-    ```go
-    type BuiltinResolver struct {
-    	profiles map[core.ClusterSize]core.Profile
-    }
+```go
+type BuiltinResolver struct {
+	profiles map[core.ClusterSize]core.Profile
+}
 
-    func NewBuiltinResolver() *BuiltinResolver
-    func (r *BuiltinResolver) Resolve(_ context.Context, size core.ClusterSize) (core.Profile, error)
-    ```
+func NewBuiltinResolver() *BuiltinResolver
+func (r *BuiltinResolver) Resolve(_ context.Context, size core.ClusterSize) (core.Profile, error)
+```
 
-    - **Behavior:** serves a fixed, in-memory map of the three builtin sizes (`sizeSmall`, `sizeMedium`, `sizeLarge` from `tiers.go`), keyed by `core.ClusterSize`.
-    - **Behavior:** `Resolve` returns `ErrProfileNotFound` wrapped with the requested size when no entry matches (e.g. an unrecognized string cast to `core.ClusterSize`).
+- **Behavior:** serves a fixed, in-memory map of the three builtin sizes (`sizeSmall`, `sizeMedium`, `sizeLarge` from `tiers.go`), keyed by `core.ClusterSize`.
+- **Behavior:** `Resolve` returns `ErrProfileNotFound` wrapped with the requested size when no entry matches (e.g. an unrecognized string cast to `core.ClusterSize`).
+
+</details>
 
 #### `baseAddons`
 
-??? note "`baseAddons` — var"
+<details>
+<summary>`baseAddons` — var</summary>
 
-    ```go
-    var baseAddons = []core.AddonRef{ /* cilium, cert-manager, gateway-api,
-    	external-secrets, cluster-autoscaler, karpenter, kube-prometheus-stack,
-    	fluent-bit, opencost, external-dns, ingress-nginx, kyverno,
-    	kyverno-policies, fleet-status-reporter, argocd.DefaultAddon */ }
-    ```
+```go
+var baseAddons = []core.AddonRef{ /* cilium, cert-manager, gateway-api,
+	external-secrets, cluster-autoscaler, karpenter, kube-prometheus-stack,
+	fluent-bit, opencost, external-dns, ingress-nginx, kyverno,
+	kyverno-policies, fleet-status-reporter, argocd.DefaultAddon */ }
+```
 
-    - **Behavior:** the addon set every size carries, unconditionally — this is what "Argo CD and an autoscaler ship at every size" means in practice. `sizeSmall` is exactly this list; `sizeMedium`/`sizeLarge` layer on top of it via `withAddons`/`replaceAddon`.
-    - **Invariant — autoscaler mutual exclusion:** `cluster-autoscaler` carries `Providers: []core.Provider{core.ProviderGCP, core.ProviderAzure}`; `karpenter` carries `Providers: []core.Provider{core.ProviderAWS}`. `core.Profile.ForProvider` drops whichever doesn't apply before an override patch or Argo CD ever sees it, so a given cluster only ever renders one of the two. Karpenter is genuinely EKS-only technology — there is no GCP/Azure port — so `cluster-autoscaler` is the functional equivalent on those clouds, not a lesser fallback.
-    - `ingress-nginx` defaults `ingress.exposure` to `"internal"` until `internal/argocd.ApplyIngressDefaults` overlays the resolved access-mode value; `kyverno-policies` sets `policies.publicExposureDeny: true`, the baseline admission rule the project's architecture invariants require regardless of access mode.
+- **Behavior:** the addon set every size carries, unconditionally — this is what "Argo CD and an autoscaler ship at every size" means in practice. `sizeSmall` is exactly this list; `sizeMedium`/`sizeLarge` layer on top of it via `withAddons`/`replaceAddon`.
+- **Invariant — autoscaler mutual exclusion:** `cluster-autoscaler` carries `Providers: []core.Provider{core.ProviderGCP, core.ProviderAzure}`; `karpenter` carries `Providers: []core.Provider{core.ProviderAWS}`. `core.Profile.ForProvider` drops whichever doesn't apply before an override patch or Argo CD ever sees it, so a given cluster only ever renders one of the two. Karpenter is genuinely EKS-only technology — there is no GCP/Azure port — so `cluster-autoscaler` is the functional equivalent on those clouds, not a lesser fallback.
+- `ingress-nginx` defaults `ingress.exposure` to `"internal"` until `internal/argocd.ApplyIngressDefaults` overlays the resolved access-mode value; `kyverno-policies` sets `policies.publicExposureDeny: true`, the baseline admission rule the project's architecture invariants require regardless of access mode.
+
+</details>
 
 #### `ErrProfileNotFound`
 
-??? abstract "`ErrProfileNotFound` — sentinel error"
+<details>
+<summary>`ErrProfileNotFound` — sentinel error</summary>
 
-    ```go
-    var ErrProfileNotFound = errors.New("profile not found")
-    ```
+```go
+var ErrProfileNotFound = errors.New("profile not found")
+```
 
-    - **Behavior:** returned by `BuiltinResolver.Resolve` when no profile matches the requested `core.ClusterSize`.
+- **Behavior:** returned by `BuiltinResolver.Resolve` when no profile matches the requested `core.ClusterSize`.
+
+</details>
 
 ## `merge.go`
 
 #### `Merge`
 
-??? note "`Merge` — function"
+<details>
+<summary>`Merge` — function</summary>
 
-    ```go
-    func Merge(profile core.Profile, overrides []core.AddonOverride) (core.Profile, error)
-    ```
+```go
+func Merge(profile core.Profile, overrides []core.AddonOverride) (core.Profile, error)
+```
 
-    Applies a cluster's `[]core.AddonOverride` patch onto a resolved `core.Profile`, returning the patched copy. This is the mechanism a cluster uses to customize its addon set beyond what its size includes — see [Per-cluster override patch](../examples.md#per-cluster-override-patch) for a worked `cluster.yaml` example.
+Applies a cluster's `[]core.AddonOverride` patch onto a resolved `core.Profile`, returning the patched copy. This is the mechanism a cluster uses to customize its addon set beyond what its size includes — see [Per-cluster override patch](../examples.md#per-cluster-override-patch) for a worked `cluster.yaml` example.
 
-    - **Behavior:** no-op (returns `profile` unchanged) when `overrides` is empty.
-    - **Behavior:** for each override, looks up the addon by `Name`. An override naming an addon the profile does not carry returns `ErrUnknownOverride` wrapped with the addon name and profile name — a typo in a per-cluster patch must surface at apply time, not be silently dropped.
-    - **Behavior:** `Version`, if set, replaces the addon's version.
-    - **Behavior:** `Values`, if set, is overlaid onto the addon's existing values via `mergeValues`.
-    - **Behavior:** `Disable: true` removes the addon from the merged set entirely, after all patches are applied.
-    - **Invariant:** never adds a new addon and never duplicates one — every name in the override list must already exist in `profile.Addons`. The profile's backing `Addons` slice is copied before mutation, so the source profile passed in is never aliased/mutated.
+- **Behavior:** no-op (returns `profile` unchanged) when `overrides` is empty.
+- **Behavior:** for each override, looks up the addon by `Name`. An override naming an addon the profile does not carry returns `ErrUnknownOverride` wrapped with the addon name and profile name — a typo in a per-cluster patch must surface at apply time, not be silently dropped.
+- **Behavior:** `Version`, if set, replaces the addon's version.
+- **Behavior:** `Values`, if set, is overlaid onto the addon's existing values via `mergeValues`.
+- **Behavior:** `Disable: true` removes the addon from the merged set entirely, after all patches are applied.
+- **Invariant:** never adds a new addon and never duplicates one — every name in the override list must already exist in `profile.Addons`. The profile's backing `Addons` slice is copied before mutation, so the source profile passed in is never aliased/mutated.
+
+</details>
 
 #### `mergeValues`
 
-??? note "`mergeValues` — function"
+<details>
+<summary>`mergeValues` — function</summary>
 
-    ```go
-    func mergeValues(base, override map[string]any) map[string]any
-    ```
+```go
+func mergeValues(base, override map[string]any) map[string]any
+```
 
-    - **Behavior:** one-level-deep overlay of `override` onto `base`: every key in `override` replaces the same key in `base`; keys only in `base` are kept as-is. Nested maps are replaced wholesale, not deep-merged — going deeper would mean guessing at merge semantics (replace vs. deep-merge a slice, for instance) that only the addon's own chart can judge.
+- **Behavior:** one-level-deep overlay of `override` onto `base`: every key in `override` replaces the same key in `base`; keys only in `base` are kept as-is. Nested maps are replaced wholesale, not deep-merged — going deeper would mean guessing at merge semantics (replace vs. deep-merge a slice, for instance) that only the addon's own chart can judge.
+
+</details>
 
 #### `ErrUnknownOverride`
 
-??? abstract "`ErrUnknownOverride` — sentinel error"
+<details>
+<summary>`ErrUnknownOverride` — sentinel error</summary>
 
-    ```go
-    var ErrUnknownOverride = errors.New("override does not match any addon in the profile")
-    ```
+```go
+var ErrUnknownOverride = errors.New("override does not match any addon in the profile")
+```
 
-    - **Behavior:** returned by `Merge` when a `core.AddonOverride.Name` does not match any addon already in the profile.
+- **Behavior:** returned by `Merge` when a `core.AddonOverride.Name` does not match any addon already in the profile.
+
+</details>
 
 ## `tiers.go`
 
@@ -168,20 +192,26 @@ wants):
 
 #### `withAddons`
 
-??? note "`withAddons` — function"
+<details>
+<summary>`withAddons` — function</summary>
 
-    ```go
-    func withAddons(base []core.AddonRef, extra ...core.AddonRef) []core.AddonRef
-    ```
+```go
+func withAddons(base []core.AddonRef, extra ...core.AddonRef) []core.AddonRef
+```
 
-    - **Behavior:** returns a copy of `base` with `extra` appended, backed by a freshly allocated array — appending to `baseAddons` directly would risk one size's growth silently overwriting another's slice if their capacities ever happened to overlap.
+- **Behavior:** returns a copy of `base` with `extra` appended, backed by a freshly allocated array — appending to `baseAddons` directly would risk one size's growth silently overwriting another's slice if their capacities ever happened to overlap.
+
+</details>
 
 #### `replaceAddon`
 
-??? note "`replaceAddon` — function"
+<details>
+<summary>`replaceAddon` — function</summary>
 
-    ```go
-    func replaceAddon(addons []core.AddonRef, name string, replacement core.AddonRef) []core.AddonRef
-    ```
+```go
+func replaceAddon(addons []core.AddonRef, name string, replacement core.AddonRef) []core.AddonRef
+```
 
-    - **Behavior:** returns a copy of `addons` with the entry named `name` swapped for `replacement`, again without aliasing the input slice's backing array. Used by `sizeLarge` to supersede `sizeMedium`'s baseline `kyverno-policies` addon.
+- **Behavior:** returns a copy of `addons` with the entry named `name` swapped for `replacement`, again without aliasing the input slice's backing array. Used by `sizeLarge` to supersede `sizeMedium`'s baseline `kyverno-policies` addon.
+
+</details>

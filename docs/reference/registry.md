@@ -28,54 +28,60 @@
 
 ### `Lease`
 
-??? abstract "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    type Lease struct {
-        Holder    string
-        ExpiresAt time.Time
-    }
+```go
+type Lease struct {
+    Holder    string
+    ExpiresAt time.Time
+}
 
-    func (l Lease) Expired(now time.Time) bool
-    ```
+func (l Lease) Expired(now time.Time) bool
+```
+
+</details>
 
 - **Purpose:** a time-bounded claim on a cluster, preventing two concurrent `apply` runs from provisioning the same cluster at once.
 - **Invariants:** expires rather than being held indefinitely — `Expired` is the sole check used both client-side (`Record.Held`) and to distinguish a stale lease from a live conflict during acquisition.
 
 ### `Record`
 
-??? abstract "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    type Record struct {
-        ClusterID core.ClusterID
-        Phase     core.Phase
+```go
+type Record struct {
+    ClusterID core.ClusterID
+    Phase     core.Phase
 
-        Provider core.Provider
-        Region   string
-        Access   core.Access
-        Size     core.ClusterSize
+    Provider core.Provider
+    Region   string
+    Access   core.Access
+    Size     core.ClusterSize
 
-        OIDCIssuer string
+    OIDCIssuer string
 
-        Version int64
+    Version int64
 
-        LastReportedAt time.Time
+    LastReportedAt time.Time
 
-        Findings   []string
-        FindingsAt time.Time
+    Findings   []string
+    FindingsAt time.Time
 
-        CreatedAt time.Time
-        UpdatedAt time.Time
+    CreatedAt time.Time
+    UpdatedAt time.Time
 
-        Lease *Lease
-    }
+    Lease *Lease
+}
 
-    func (r Record) Stale(now time.Time, threshold time.Duration) bool
-    func (r Record) Held(now time.Time) bool
-    func (r Record) Validate() error
-    func NewRecord(spec core.ClusterSpec, now time.Time) Record
-    ```
+func (r Record) Stale(now time.Time, threshold time.Duration) bool
+func (r Record) Held(now time.Time) bool
+func (r Record) Validate() error
+func NewRecord(spec core.ClusterSpec, now time.Time) Record
+```
+
+</details>
 
 - **Purpose:** one cluster's row in the registry — the durable half of a cluster's state. The other half (resolved addons, node pool detail) lives in the cluster's own repository; `Record` holds only what the fleet needs to reason about centrally.
 - **Fields:**
@@ -92,18 +98,21 @@
 
 ### `ArgoCDAccess`
 
-??? abstract "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    type ArgoCDAccess struct {
-        Provider    core.Provider
-        Region      string
-        KubeContext string
-        Endpoint    string // argocd-server LB external IP or hostname, no scheme
-        Username    string
-        Password    string // plaintext
-    }
-    ```
+```go
+type ArgoCDAccess struct {
+    Provider    core.Provider
+    Region      string
+    KubeContext string
+    Endpoint    string // argocd-server LB external IP or hostname, no scheme
+    Username    string
+    Password    string // plaintext
+}
+```
+
+</details>
 
 - **Purpose:** a cluster's Argo CD connection details, captured by `kubespin apply` (`internal/cli/apply.go`'s `captureAndRecordArgoCDAccess`) once the cluster reaches `PhaseReady` and the `argocd-server` LoadBalancer Service has an assigned endpoint. It is observational metadata, like `Record.OIDCIssuer`, not part of the phase state machine — capture runs on every apply that reaches ready, including a no-op reconcile against an already-ready cluster, so a failed capture simply gets another chance on the next run.
 - **Invariant:** `Password` is stored in **plaintext**, matching the trust model already extended to `KUBESPIN_REGISTRY_DSN` (an operator-supplied, non-flag secret). There is no separate secrets-manager integration for it.
@@ -111,38 +120,44 @@
 
 ### `Filter`
 
-??? abstract "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    type Filter struct {
-        Provider core.Provider
-        Phase    core.Phase
-    }
-    ```
+```go
+type Filter struct {
+    Provider core.Provider
+    Phase    core.Phase
+}
+```
+
+</details>
 
 - **Purpose:** narrows a `List` call. A zero `Filter` matches every cluster.
 - **Invariant:** `Postgres.List` is always one query, `WHERE ($1 = '' OR provider = $1) AND ($2 = '' OR phase = $2)`, served by the `fleet_registry_provider_phase_idx` index (on `(provider, phase)`, created with the table) whenever `Provider` is set — unlike the eventually-consistent scan-vs-GSI-query choice a DynamoDB-backed registry would face, Postgres reads are always consistent, so there is no separate index-or-scan code path to choose between.
 
 ### `Registry` (interface)
 
-??? abstract "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    type Registry interface {
-        Get(ctx context.Context, id core.ClusterID) (Record, error)
-        Create(ctx context.Context, rec Record) (Record, error)
-        UpdatePhase(ctx context.Context, rec Record, to core.Phase) (Record, error)
-        Touch(ctx context.Context, id core.ClusterID, at time.Time) error
-        RecordOIDCIssuer(ctx context.Context, id core.ClusterID, issuer string) error
-        RecordFindings(ctx context.Context, id core.ClusterID, findings []string, at time.Time) error
-        List(ctx context.Context, filter Filter) ([]Record, error)
-        AcquireLease(ctx context.Context, id core.ClusterID, holder string, ttl time.Duration) (Lease, error)
-        RenewLease(ctx context.Context, id core.ClusterID, holder string, ttl time.Duration) (Lease, error)
-        ReleaseLease(ctx context.Context, id core.ClusterID, holder string) error
-        RecordArgoCDAccess(ctx context.Context, id core.ClusterID, access ArgoCDAccess) error
-        GetArgoCDAccess(ctx context.Context, id core.ClusterID) (ArgoCDAccess, error)
-    }
-    ```
+```go
+type Registry interface {
+    Get(ctx context.Context, id core.ClusterID) (Record, error)
+    Create(ctx context.Context, rec Record) (Record, error)
+    UpdatePhase(ctx context.Context, rec Record, to core.Phase) (Record, error)
+    Touch(ctx context.Context, id core.ClusterID, at time.Time) error
+    RecordOIDCIssuer(ctx context.Context, id core.ClusterID, issuer string) error
+    RecordFindings(ctx context.Context, id core.ClusterID, findings []string, at time.Time) error
+    List(ctx context.Context, filter Filter) ([]Record, error)
+    AcquireLease(ctx context.Context, id core.ClusterID, holder string, ttl time.Duration) (Lease, error)
+    RenewLease(ctx context.Context, id core.ClusterID, holder string, ttl time.Duration) (Lease, error)
+    ReleaseLease(ctx context.Context, id core.ClusterID, holder string) error
+    RecordArgoCDAccess(ctx context.Context, id core.ClusterID, access ArgoCDAccess) error
+    GetArgoCDAccess(ctx context.Context, id core.ClusterID) (ArgoCDAccess, error)
+}
+```
+
+</details>
 
 - **Purpose:** the durable store of fleet state — the contract both `Postgres` and `Memory` implement identically.
 - **Invariants implementations must enforce** (callers rely on these rather than re-checking):
@@ -155,17 +170,20 @@
 
 ### Sentinel errors
 
-??? note "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    var (
-        ErrNotFound        = errors.New("cluster not found in registry")
-        ErrAlreadyExists    = errors.New("cluster already exists in registry")
-        ErrVersionConflict  = errors.New("registry record was modified concurrently")
-        ErrLeaseHeld        = errors.New("cluster lease is held by another holder")
-        ErrLeaseLost        = errors.New("cluster lease is no longer held by this holder")
-    )
-    ```
+```go
+var (
+    ErrNotFound        = errors.New("cluster not found in registry")
+    ErrAlreadyExists    = errors.New("cluster already exists in registry")
+    ErrVersionConflict  = errors.New("registry record was modified concurrently")
+    ErrLeaseHeld        = errors.New("cluster lease is held by another holder")
+    ErrLeaseLost        = errors.New("cluster lease is no longer held by this holder")
+)
+```
+
+</details>
 
 - **Behavior:** callers branch with `errors.Is` rather than matching messages.
 
@@ -173,71 +191,80 @@
 
 ### Schema
 
-??? note "`schemaDDL` / `selectColumns`"
+<details>
+<summary>`schemaDDL` / `selectColumns`</summary>
 
-    ```go
-    const schemaDDL = `
-    CREATE TABLE IF NOT EXISTS fleet_registry (
-        cluster_id        TEXT PRIMARY KEY,
-        phase             TEXT NOT NULL,
-        provider          TEXT NOT NULL,
-        region            TEXT NOT NULL,
-        access            TEXT NOT NULL,
-        size              TEXT NOT NULL DEFAULT '',
-        oidc_issuer       TEXT NOT NULL DEFAULT '',
-        version           BIGINT NOT NULL,
-        last_reported_at  TIMESTAMPTZ,
-        findings          JSONB,
-        findings_at       TIMESTAMPTZ,
-        created_at        TIMESTAMPTZ NOT NULL,
-        updated_at        TIMESTAMPTZ NOT NULL,
-        lease_holder      TEXT,
-        lease_expires_at  TIMESTAMPTZ
-    );
-    CREATE INDEX IF NOT EXISTS fleet_registry_provider_phase_idx ON fleet_registry (provider, phase);
-    ALTER TABLE fleet_registry ADD COLUMN IF NOT EXISTS size TEXT NOT NULL DEFAULT '';
-    ALTER TABLE fleet_registry DROP COLUMN IF EXISTS profile_name;
-    ALTER TABLE fleet_registry DROP COLUMN IF EXISTS profile_version;
-    `
-    ```
+```go
+const schemaDDL = `
+CREATE TABLE IF NOT EXISTS fleet_registry (
+    cluster_id        TEXT PRIMARY KEY,
+    phase             TEXT NOT NULL,
+    provider          TEXT NOT NULL,
+    region            TEXT NOT NULL,
+    access            TEXT NOT NULL,
+    size              TEXT NOT NULL DEFAULT '',
+    oidc_issuer       TEXT NOT NULL DEFAULT '',
+    version           BIGINT NOT NULL,
+    last_reported_at  TIMESTAMPTZ,
+    findings          JSONB,
+    findings_at       TIMESTAMPTZ,
+    created_at        TIMESTAMPTZ NOT NULL,
+    updated_at        TIMESTAMPTZ NOT NULL,
+    lease_holder      TEXT,
+    lease_expires_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS fleet_registry_provider_phase_idx ON fleet_registry (provider, phase);
+ALTER TABLE fleet_registry ADD COLUMN IF NOT EXISTS size TEXT NOT NULL DEFAULT '';
+ALTER TABLE fleet_registry DROP COLUMN IF EXISTS profile_name;
+ALTER TABLE fleet_registry DROP COLUMN IF EXISTS profile_version;
+`
+```
 
-    - **Behavior:** run by `NewPostgres` on every connect, via `CREATE TABLE IF NOT EXISTS`/`CREATE INDEX IF NOT EXISTS`, so a fresh database is ready without a separate migration step and a run against an already-provisioned one is a no-op. The `ALTER TABLE` statements are the one exception to "only ever adds": they're the one-time cutover from the old `profile_name`/`profile_version` columns to a single `size` column when `--profile` was replaced with `--size`, written idempotently (`IF NOT EXISTS`/`IF EXISTS`) so they're safe to run against both a pre- and post-cutover database.
-    - **Invariant:** `cluster_id` alone is the primary key, deliberately — this is what makes `AcquireLease` (a conditional `UPDATE` on that same row) actually serialize a status report against a concurrent phase transition; a composite key would let them proceed independently and the lock would protect nothing.
-    - `selectColumns` is a single shared column list used by every read (`Get`, `List`, and `UpdatePhase`'s `RETURNING`), so a column can't drift between them.
+- **Behavior:** run by `NewPostgres` on every connect, via `CREATE TABLE IF NOT EXISTS`/`CREATE INDEX IF NOT EXISTS`, so a fresh database is ready without a separate migration step and a run against an already-provisioned one is a no-op. The `ALTER TABLE` statements are the one exception to "only ever adds": they're the one-time cutover from the old `profile_name`/`profile_version` columns to a single `size` column when `--profile` was replaced with `--size`, written idempotently (`IF NOT EXISTS`/`IF EXISTS`) so they're safe to run against both a pre- and post-cutover database.
+- **Invariant:** `cluster_id` alone is the primary key, deliberately — this is what makes `AcquireLease` (a conditional `UPDATE` on that same row) actually serialize a status report against a concurrent phase transition; a composite key would let them proceed independently and the lock would protect nothing.
+- `selectColumns` is a single shared column list used by every read (`Get`, `List`, and `UpdatePhase`'s `RETURNING`), so a column can't drift between them.
 
-??? note "`argoCDDetailsDDL`"
+</details>
 
-    ```go
-    const argoCDDetailsDDL = `
-    CREATE TABLE IF NOT EXISTS cluster_argocd_details (
-        cluster_id       TEXT PRIMARY KEY REFERENCES fleet_registry(cluster_id) ON DELETE CASCADE,
-        provider         TEXT NOT NULL,
-        region           TEXT NOT NULL,
-        kube_context     TEXT NOT NULL,
-        argocd_endpoint  TEXT NOT NULL,
-        argocd_username  TEXT NOT NULL,
-        argocd_password  TEXT NOT NULL,
-        captured_at      TIMESTAMPTZ NOT NULL,
-        updated_at       TIMESTAMPTZ NOT NULL
-    );
-    `
-    ```
+<details>
+<summary>`argoCDDetailsDDL`</summary>
 
-    - **Behavior:** a second migration, run by `NewPostgres` right after `schemaDDL`, following the same self-migration-on-connect convention. One row per cluster (upsert, not append). `captured_at` is set only by the `INSERT` branch of `RecordArgoCDAccess`'s `ON CONFLICT ... DO UPDATE` and never moves on a later upsert; `updated_at` bumps on every call.
-    - **Invariant:** every column is `NOT NULL` — a capture attempt that cannot obtain all six fields (endpoint, username, password, kube context, provider, region) writes no row at all, so there is no partial/incomplete state to reason about.
+```go
+const argoCDDetailsDDL = `
+CREATE TABLE IF NOT EXISTS cluster_argocd_details (
+    cluster_id       TEXT PRIMARY KEY REFERENCES fleet_registry(cluster_id) ON DELETE CASCADE,
+    provider         TEXT NOT NULL,
+    region           TEXT NOT NULL,
+    kube_context     TEXT NOT NULL,
+    argocd_endpoint  TEXT NOT NULL,
+    argocd_username  TEXT NOT NULL,
+    argocd_password  TEXT NOT NULL,
+    captured_at      TIMESTAMPTZ NOT NULL,
+    updated_at       TIMESTAMPTZ NOT NULL
+);
+`
+```
+
+- **Behavior:** a second migration, run by `NewPostgres` right after `schemaDDL`, following the same self-migration-on-connect convention. One row per cluster (upsert, not append). `captured_at` is set only by the `INSERT` branch of `RecordArgoCDAccess`'s `ON CONFLICT ... DO UPDATE` and never moves on a later upsert; `updated_at` bumps on every call.
+- **Invariant:** every column is `NOT NULL` — a capture attempt that cannot obtain all six fields (endpoint, username, password, kube context, provider, region) writes no row at all, so there is no partial/incomplete state to reason about.
+
+</details>
 
 ### `Postgres`
 
-??? abstract "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    type Postgres struct {
-        db            *sql.DB
-        now           func() time.Time
-        logger        *slog.Logger
-        skipMigration bool
-    }
-    ```
+```go
+type Postgres struct {
+    db            *sql.DB
+    now           func() time.Time
+    logger        *slog.Logger
+    skipMigration bool
+}
+```
+
+</details>
 
 - **Purpose:** the production `Registry`, backed by the `fleet_registry` table it creates and migrates itself — there is no separate provisioning step for it (unlike the ingestion Lambda/API Gateway, which `fleet bootstrap` does provision).
 - **Behavior:**
@@ -247,46 +274,58 @@
 
 ### `Option` and `WithLogger`
 
-??? note "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    type Option func(*Postgres)
+```go
+type Option func(*Postgres)
 
-    func WithLogger(logger *slog.Logger) Option
-    ```
+func WithLogger(logger *slog.Logger) Option
+```
+
+</details>
 
 - **Params:** `logger *slog.Logger` — the logger `Postgres` should use.
 - **Behavior:** `Option` is a functional option for `NewPostgres`; `WithLogger` overrides the default logger (ignoring a nil logger, so passing one is optional).
 
 ### `WithoutMigration`
 
-??? note "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    func WithoutMigration() Option
-    ```
+```go
+func WithoutMigration() Option
+```
+
+</details>
 
 - **Behavior:** Sets `skipMigration = true`, preventing `NewPostgres` from executing `schemaDDL` and `argoCDDetailsDDL` on connect. Intended for ephemeral, burst-driven runtimes like the Central Ingestion API Lambda handler, where the schema is managed out-of-band (either by the long-lived CLI process at first connect, or by a dedicated migration step) and running DDL on cold start causes table lock contention during bursts of parallel Lambda invocations.
 - **Invariant:** The schema must already exist before any `Postgres` client using this option runs. The CLI's `NewPostgres` call (without this option) self-migrates on first connect and is the natural owner of that migration.
 
 ### `WithConnectionPool`
 
-??? note "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    func WithConnectionPool(maxOpen, maxIdle int, maxLifetime time.Duration) Option
-    ```
+```go
+func WithConnectionPool(maxOpen, maxIdle int, maxLifetime time.Duration) Option
+```
+
+</details>
 
 - **Params:** `maxOpen int` — maximum number of open connections; `maxIdle int` — maximum number of idle connections kept; `maxLifetime time.Duration` — maximum lifetime of a connection before it is recycled.
 - **Behavior:** Overrides the connection-pool bounds set by `NewPostgres`'s defaults. Zero values for any parameter are ignored (the corresponding bound is left at its default). Options are applied after the pool defaults are written, so `WithConnectionPool` can tighten them further for low-throughput callers — for example the ingestion Lambda uses `(2, 1, 15*time.Minute)` to cap per-instance connections and prevent Postgres exhaustion under Lambda concurrency.
 
 ### `NewPostgres`
 
-??? note "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    func NewPostgres(ctx context.Context, dsn string, opts ...Option) (*Postgres, error)
-    ```
+```go
+func NewPostgres(ctx context.Context, dsn string, opts ...Option) (*Postgres, error)
+```
+
+</details>
 
 - **Params:** `ctx context.Context`; `dsn string` — a `postgres://` connection string, read by callers only from `KUBESPIN_REGISTRY_DSN` (there is deliberately no flag for it, so a connection string carrying a password never lands in shell history); `opts ...Option`.
 - **Behavior:**
@@ -299,114 +338,162 @@
 
 ### Method behavior (Postgres)
 
-??? note "`Get`"
+<details>
+<summary>`Get`</summary>
 
-    - `SELECT` by `cluster_id`, scanned via the shared `scanRecord` helper.
-    - Returns `ErrNotFound` when `sql.ErrNoRows`.
+- `SELECT` by `cluster_id`, scanned via the shared `scanRecord` helper.
+- Returns `ErrNotFound` when `sql.ErrNoRows`.
 
-??? note "`Create`"
+</details>
 
-    - Validates the record, defaults `Version` to 1, encodes `Findings` (`findingsJSON` — `nil`/SQL `NULL` when `FindingsAt` is zero, so "never audited" stays distinct from an empty, encoded `[]`), then `INSERT ... ON CONFLICT (cluster_id) DO NOTHING`.
-    - `RowsAffected() == 0` (the row already existed, so the `ON CONFLICT` clause suppressed the insert) maps to `ErrAlreadyExists`.
+<details>
+<summary>`Create`</summary>
 
-??? note "`UpdatePhase`"
+- Validates the record, defaults `Version` to 1, encodes `Findings` (`findingsJSON` — `nil`/SQL `NULL` when `FindingsAt` is zero, so "never audited" stays distinct from an empty, encoded `[]`), then `INSERT ... ON CONFLICT (cluster_id) DO NOTHING`.
+- `RowsAffected() == 0` (the row already existed, so the `ON CONFLICT` clause suppressed the insert) maps to `ErrAlreadyExists`.
 
-    - Rejects the transition client-side via `core.ValidateTransition` before any query.
-    - Then `UPDATE fleet_registry SET phase = $1, version = version + 1, updated_at = $2 WHERE cluster_id = $3 AND phase = $4 AND version = $5 RETURNING <selectColumns>` — asserting **both** phase and version, so a racing writer that already advanced the record loses this write instead of silently overwriting it.
-    - On `sql.ErrNoRows` (the `WHERE` matched nothing), a follow-up `Get` distinguishes not-found from a genuine version conflict — the same two-case split DynamoDB's `ReturnValuesOnConditionCheckFailure` gave for free on a condition failure; here it costs a second read instead.
+</details>
 
-??? note "`Touch`"
+<details>
+<summary>`UpdatePhase`</summary>
 
-    - `UPDATE fleet_registry SET last_reported_at = $1 WHERE cluster_id = $2`.
-    - **Invariant:** deliberately no version check, so frequent heartbeats never contend with a phase transition in progress.
-    - **Implementation:** delegates to the shared `execNoVersionCheck` helper (`postgres.go`), which runs the `UPDATE` and maps `RowsAffected() == 0` to `ErrNotFound` once for all three no-version-check writes below.
+- Rejects the transition client-side via `core.ValidateTransition` before any query.
+- Then `UPDATE fleet_registry SET phase = $1, version = version + 1, updated_at = $2 WHERE cluster_id = $3 AND phase = $4 AND version = $5 RETURNING <selectColumns>` — asserting **both** phase and version, so a racing writer that already advanced the record loses this write instead of silently overwriting it.
+- On `sql.ErrNoRows` (the `WHERE` matched nothing), a follow-up `Get` distinguishes not-found from a genuine version conflict — the same two-case split DynamoDB's `ReturnValuesOnConditionCheckFailure` gave for free on a condition failure; here it costs a second read instead.
 
-??? note "`RecordOIDCIssuer`"
+</details>
 
-    - Same no-version-check pattern as `Touch` (via `execNoVersionCheck`), sets `oidc_issuer` once.
+<details>
+<summary>`Touch`</summary>
 
-??? note "`RecordFindings`"
+- `UPDATE fleet_registry SET last_reported_at = $1 WHERE cluster_id = $2`.
+- **Invariant:** deliberately no version check, so frequent heartbeats never contend with a phase transition in progress.
+- **Implementation:** delegates to the shared `execNoVersionCheck` helper (`postgres.go`), which runs the `UPDATE` and maps `RowsAffected() == 0` to `ErrNotFound` once for all three no-version-check writes below.
 
-    - Same no-version-check pattern (via `execNoVersionCheck`), sets `findings` and `findings_at` together, replacing whatever was recorded before.
+</details>
 
-??? note "`RecordArgoCDAccess`"
+<details>
+<summary>`RecordOIDCIssuer`</summary>
 
-    - `INSERT INTO cluster_argocd_details (...) VALUES (...) ON CONFLICT (cluster_id) DO UPDATE SET ...` — every column except `captured_at` is refreshed on conflict; `captured_at` is only ever set by the `INSERT` branch, so it stays fixed across repeat calls while `updated_at` advances.
-    - A foreign-key violation (the referenced `fleet_registry` row doesn't exist — checked via `errors.As` against `*pgconn.PgError` with SQLSTATE `23503`) maps to `ErrNotFound`, the same as every other write against a nonexistent cluster.
+- Same no-version-check pattern as `Touch` (via `execNoVersionCheck`), sets `oidc_issuer` once.
 
-??? note "`GetArgoCDAccess`"
+</details>
 
-    - `SELECT provider, region, kube_context, argocd_endpoint, argocd_username, argocd_password FROM cluster_argocd_details WHERE cluster_id = $1`.
-    - Returns `ErrNotFound` on `sql.ErrNoRows` — covers both "no such cluster" and "cluster exists but nothing has been captured yet", since the table only ever has entries once `RecordArgoCDAccess` has succeeded at least once.
+<details>
+<summary>`RecordFindings`</summary>
 
-??? note "`List`"
+- Same no-version-check pattern (via `execNoVersionCheck`), sets `findings` and `findings_at` together, replacing whatever was recorded before.
 
-    - One query, always: `SELECT <selectColumns> FROM fleet_registry WHERE ($1 = '' OR provider = $1) AND ($2 = '' OR phase = $2) ORDER BY cluster_id`, served by the `(provider, phase)` index whenever `Provider` is set.
-    - Unlike a DynamoDB-backed registry's eventually-consistent scan-vs-GSI-query split, there is exactly one code path here — Postgres reads are always consistent, so there is nothing to choose between or paginate through beyond what the driver already does.
-    - `rows.Close()` is called via `defer func() { _ = rows.Close() }()` — the blank identifier suppresses the linter's "unhandled error" warning on a deferred close that cannot meaningfully be acted on.
+</details>
 
-??? note "`AcquireLease`"
+<details>
+<summary>`RecordArgoCDAccess`</summary>
 
-    - `UPDATE fleet_registry SET lease_holder = $1, lease_expires_at = $2 WHERE cluster_id = $3 AND (lease_holder IS NULL OR lease_expires_at <= $4 OR lease_holder = $1)` — succeeds when the lease is free, expired, or already owned by `holder`. The `<=` matches `Lease.Expired()`'s `!now.Before(expiresAt)` exactly, so "expired" means the same instant here as everywhere else that reasons about a lease.
-    - `RowsAffected() == 0` calls the shared `leaseConflict` helper, which does a follow-up `Get` to distinguish `ErrNotFound` (no such cluster) from `ErrLeaseHeld` (a real conflict, logged at Warn — the exact race the lease exists to catch).
+- `INSERT INTO cluster_argocd_details (...) VALUES (...) ON CONFLICT (cluster_id) DO UPDATE SET ...` — every column except `captured_at` is refreshed on conflict; `captured_at` is only ever set by the `INSERT` branch, so it stays fixed across repeat calls while `updated_at` advances.
+- A foreign-key violation (the referenced `fleet_registry` row doesn't exist — checked via `errors.As` against `*pgconn.PgError` with SQLSTATE `23503`) maps to `ErrNotFound`, the same as every other write against a nonexistent cluster.
 
-??? note "`RenewLease`"
+</details>
 
-    - `UPDATE ... SET lease_expires_at = $1 WHERE cluster_id = $2 AND lease_holder = $3 AND lease_expires_at > $4` — strictly greater than now, so an already-expired lease cannot be renewed (another holder may already own it).
-    - `RowsAffected() == 0` maps through `leaseConflict` to `ErrLeaseLost` (or `ErrNotFound` if the cluster itself is gone).
+<details>
+<summary>`GetArgoCDAccess`</summary>
 
-??? note "`ReleaseLease`"
+- `SELECT provider, region, kube_context, argocd_endpoint, argocd_username, argocd_password FROM cluster_argocd_details WHERE cluster_id = $1`.
+- Returns `ErrNotFound` on `sql.ErrNoRows` — covers both "no such cluster" and "cluster exists but nothing has been captured yet", since the table only ever has entries once `RecordArgoCDAccess` has succeeded at least once.
 
-    - `UPDATE ... SET lease_holder = NULL, lease_expires_at = NULL WHERE cluster_id = $1 AND lease_holder = $2`.
-    - `RowsAffected() == 0` maps through `leaseConflict` to `ErrLeaseLost`/`ErrNotFound` the same way.
+</details>
+
+<details>
+<summary>`List`</summary>
+
+- One query, always: `SELECT <selectColumns> FROM fleet_registry WHERE ($1 = '' OR provider = $1) AND ($2 = '' OR phase = $2) ORDER BY cluster_id`, served by the `(provider, phase)` index whenever `Provider` is set.
+- Unlike a DynamoDB-backed registry's eventually-consistent scan-vs-GSI-query split, there is exactly one code path here — Postgres reads are always consistent, so there is nothing to choose between or paginate through beyond what the driver already does.
+- `rows.Close()` is called via `defer func() { _ = rows.Close() }()` — the blank identifier suppresses the linter's "unhandled error" warning on a deferred close that cannot meaningfully be acted on.
+
+</details>
+
+<details>
+<summary>`AcquireLease`</summary>
+
+- `UPDATE fleet_registry SET lease_holder = $1, lease_expires_at = $2 WHERE cluster_id = $3 AND (lease_holder IS NULL OR lease_expires_at <= $4 OR lease_holder = $1)` — succeeds when the lease is free, expired, or already owned by `holder`. The `<=` matches `Lease.Expired()`'s `!now.Before(expiresAt)` exactly, so "expired" means the same instant here as everywhere else that reasons about a lease.
+- `RowsAffected() == 0` calls the shared `leaseConflict` helper, which does a follow-up `Get` to distinguish `ErrNotFound` (no such cluster) from `ErrLeaseHeld` (a real conflict, logged at Warn — the exact race the lease exists to catch).
+
+</details>
+
+<details>
+<summary>`RenewLease`</summary>
+
+- `UPDATE ... SET lease_expires_at = $1 WHERE cluster_id = $2 AND lease_holder = $3 AND lease_expires_at > $4` — strictly greater than now, so an already-expired lease cannot be renewed (another holder may already own it).
+- `RowsAffected() == 0` maps through `leaseConflict` to `ErrLeaseLost` (or `ErrNotFound` if the cluster itself is gone).
+
+</details>
+
+<details>
+<summary>`ReleaseLease`</summary>
+
+- `UPDATE ... SET lease_holder = NULL, lease_expires_at = NULL WHERE cluster_id = $1 AND lease_holder = $2`.
+- `RowsAffected() == 0` maps through `leaseConflict` to `ErrLeaseLost`/`ErrNotFound` the same way.
+
+</details>
 
 ### Helper functions
 
-??? note "`leaseConflict`"
+<details>
+<summary>`leaseConflict`</summary>
 
-    ```go
-    func (p *Postgres) leaseConflict(ctx context.Context, id core.ClusterID, sentinel error) error
-    ```
+```go
+func (p *Postgres) leaseConflict(ctx context.Context, id core.ClusterID, sentinel error) error
+```
 
-    - **Behavior:** a follow-up `Get` that distinguishes "no such cluster" (`ErrNotFound`) from a genuine lease conflict (`sentinel`, wrapped with the current holder if present) — mirroring the item DynamoDB would have returned alongside a failed condition for free; here it costs the extra read.
+- **Behavior:** a follow-up `Get` that distinguishes "no such cluster" (`ErrNotFound`) from a genuine lease conflict (`sentinel`, wrapped with the current holder if present) — mirroring the item DynamoDB would have returned alongside a failed condition for free; here it costs the extra read.
 
-??? note "`scanRecord`"
+</details>
 
-    ```go
-    type rowScanner interface {
-        Scan(dest ...any) error
-    }
+<details>
+<summary>`scanRecord`</summary>
 
-    func scanRecord(s rowScanner) (Record, error)
-    ```
+```go
+type rowScanner interface {
+    Scan(dest ...any) error
+}
 
-    - **Behavior:** `rowScanner` is satisfied by both `*sql.Row` and `*sql.Rows`, so this one function serves `Get`/`UpdatePhase` (one row) and `List` (many) alike. Builds a `Record` from the scanned columns, using `sql.NullTime`/`sql.NullString` for the optional ones (`LastReportedAt`, `FindingsAt`, lease fields) so "never reported"/"never audited" stays distinguishable from the zero time rather than colliding with it. `Findings` is only unmarshalled when `findings_at` is valid — an absent `FindingsAt` (never audited) must stay distinguishable from an empty `Findings` list (audited and clean). Returns an error if a lease holder is set but its expiry is `NULL` — a state the schema allows but the application logic must never produce. Scan errors are wrapped with `"scanning record: %w"` to give callers a useful call site in stack traces.
+func scanRecord(s rowScanner) (Record, error)
+```
 
-??? note "`findingsJSON` / `nullTime` / `leaseHolder` / `leaseExpiry`"
+- **Behavior:** `rowScanner` is satisfied by both `*sql.Row` and `*sql.Rows`, so this one function serves `Get`/`UpdatePhase` (one row) and `List` (many) alike. Builds a `Record` from the scanned columns, using `sql.NullTime`/`sql.NullString` for the optional ones (`LastReportedAt`, `FindingsAt`, lease fields) so "never reported"/"never audited" stays distinguishable from the zero time rather than colliding with it. `Findings` is only unmarshalled when `findings_at` is valid — an absent `FindingsAt` (never audited) must stay distinguishable from an empty `Findings` list (audited and clean). Returns an error if a lease holder is set but its expiry is `NULL` — a state the schema allows but the application logic must never produce. Scan errors are wrapped with `"scanning record: %w"` to give callers a useful call site in stack traces.
 
-    ```go
-    func findingsJSON(rec Record) (any, error)
-    func nullTime(t time.Time) any
-    func leaseHolder(l *Lease) any
-    func leaseExpiry(l *Lease) any
-    ```
+</details>
 
-    - **Behavior:** small helpers shared by `Create`, converting Go zero values into SQL `NULL` (rather than an empty/zero value that would collapse "never reported"/"never audited"/"unheld" into a real value) and a `*Lease` into its two column values. `findingsJSON` wraps its marshal error with `"marshaling findings: %w"`.
+<details>
+<summary>`findingsJSON` / `nullTime` / `leaseHolder` / `leaseExpiry`</summary>
+
+```go
+func findingsJSON(rec Record) (any, error)
+func nullTime(t time.Time) any
+func leaseHolder(l *Lease) any
+func leaseExpiry(l *Lease) any
+```
+
+- **Behavior:** small helpers shared by `Create`, converting Go zero values into SQL `NULL` (rather than an empty/zero value that would collapse "never reported"/"never audited"/"unheld" into a real value) and a `*Lease` into its two column values. `findingsJSON` wraps its marshal error with `"marshaling findings: %w"`.
+
+</details>
 
 ## memory.go
 
 ### `Memory`
 
-??? abstract "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    type Memory struct {
-        mu           sync.Mutex
-        records      map[core.ClusterID]Record
-        argocdAccess map[core.ClusterID]ArgoCDAccess
-        now          func() time.Time
-    }
-    ```
+```go
+type Memory struct {
+    mu           sync.Mutex
+    records      map[core.ClusterID]Record
+    argocdAccess map[core.ClusterID]ArgoCDAccess
+    now          func() time.Time
+}
+```
+
+</details>
 
 - **Purpose:** an in-memory `Registry`, so every component built on the registry — the orchestrator above all — is testable without credentials or a container.
 - **Invariant:** explicitly documented as not a simplified stand-in — it enforces exactly the same conditions as `Postgres`, and both implementations are exercised by the same contract test suite (`contract_test.go`, run against `Memory` unconditionally and against `Postgres` under the `integration` build tag — see [Development: the registry contract](../development.md#the-registry-contract)), so a fake with weaker semantics can't let real bugs pass.
@@ -414,35 +501,44 @@
 
 ### `MemoryOption` and `WithClock`
 
-??? note "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    type MemoryOption func(*Memory)
+```go
+type MemoryOption func(*Memory)
 
-    func WithClock(now func() time.Time) MemoryOption
-    ```
+func WithClock(now func() time.Time) MemoryOption
+```
+
+</details>
 
 - **Params:** `now func() time.Time` — replacement time source.
 - **Behavior:** `WithClock` replaces the time source so lease expiry is testable without sleeping.
 
 ### `NewMemory`
 
-??? note "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    func NewMemory(opts ...MemoryOption) *Memory
-    ```
+```go
+func NewMemory(opts ...MemoryOption) *Memory
+```
+
+</details>
 
 - **Params:** `opts ...MemoryOption`.
 - **Behavior:** returns an empty registry.
 
 ### `clone`
 
-??? note "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    func clone(rec Record) Record
-    ```
+```go
+func clone(rec Record) Record
+```
+
+</details>
 
 - **Behavior:** deep-copies a record (specifically the `Lease` pointer) before returning it, so callers cannot mutate stored state through a pointer they were handed.
 
@@ -450,32 +546,53 @@
 
 Mirrors `Postgres` exactly, implemented against the map instead of conditional `UPDATE` statements:
 
-??? note "`Create`"
+<details>
+<summary>`Create`</summary>
 
-    - `ErrAlreadyExists` if the key exists; defaults `Version` to 1.
+- `ErrAlreadyExists` if the key exists; defaults `Version` to 1.
 
-??? note "`UpdatePhase`"
+</details>
 
-    - Validates the transition via `core.ValidateTransition` first (failing before touching stored state, not persisting and cleaning up after).
-    - Then compares both `stored.Version != rec.Version` and `stored.Phase != rec.Phase` before mutating — `ErrVersionConflict` otherwise.
-    - On success bumps `Version`, sets `Phase`, and stamps `UpdatedAt` from the injected clock.
+<details>
+<summary>`UpdatePhase`</summary>
 
-??? note "`Touch` / `RecordOIDCIssuer` / `RecordFindings` / `RecordArgoCDAccess` / `GetArgoCDAccess`"
+- Validates the transition via `core.ValidateTransition` first (failing before touching stored state, not persisting and cleaning up after).
+- Then compares both `stored.Version != rec.Version` and `stored.Phase != rec.Phase` before mutating — `ErrVersionConflict` otherwise.
+- On success bumps `Version`, sets `Phase`, and stamps `UpdatedAt` from the injected clock.
 
-    - The four writes mutate directly with no version bump, matching the "not a phase transition" reasoning in `postgres.go`. `RecordArgoCDAccess` requires the cluster to exist in `records` first (`ErrNotFound` otherwise, mirroring `Postgres`'s foreign-key check) and stores into the separate `argocdAccess` map, upserting by key. `GetArgoCDAccess` returns `ErrNotFound` if that map has no entry for the cluster.
+</details>
 
-??? note "`List`"
+<details>
+<summary>`Touch` / `RecordOIDCIssuer` / `RecordFindings` / `RecordArgoCDAccess` / `GetArgoCDAccess`</summary>
 
-    - Filters in-memory by `Provider`/`Phase`, then sorts by `ClusterID` for deterministic output — `Postgres.List` gets the same ordering for free from its `ORDER BY cluster_id`, but the map here has none on its own, so it is added explicitly to match.
+- The four writes mutate directly with no version bump, matching the "not a phase transition" reasoning in `postgres.go`. `RecordArgoCDAccess` requires the cluster to exist in `records` first (`ErrNotFound` otherwise, mirroring `Postgres`'s foreign-key check) and stores into the separate `argocdAccess` map, upserting by key. `GetArgoCDAccess` returns `ErrNotFound` if that map has no entry for the cluster.
 
-??? note "`AcquireLease`"
+</details>
 
-    - `ErrLeaseHeld` if `stored.Lease` is non-nil, unexpired, and held by a different holder; otherwise overwrites `stored.Lease`.
+<details>
+<summary>`List`</summary>
 
-??? note "`RenewLease`"
+- Filters in-memory by `Provider`/`Phase`, then sorts by `ClusterID` for deterministic output — `Postgres.List` gets the same ordering for free from its `ORDER BY cluster_id`, but the map here has none on its own, so it is added explicitly to match.
 
-    - `ErrLeaseLost` if there is no lease, it's held by someone else, or it has already expired.
+</details>
 
-??? note "`ReleaseLease`"
+<details>
+<summary>`AcquireLease`</summary>
 
-    - `ErrLeaseLost` if there is no lease or it's held by someone else; otherwise clears `stored.Lease`.
+- `ErrLeaseHeld` if `stored.Lease` is non-nil, unexpired, and held by a different holder; otherwise overwrites `stored.Lease`.
+
+</details>
+
+<details>
+<summary>`RenewLease`</summary>
+
+- `ErrLeaseLost` if there is no lease, it's held by someone else, or it has already expired.
+
+</details>
+
+<details>
+<summary>`ReleaseLease`</summary>
+
+- `ErrLeaseLost` if there is no lease or it's held by someone else; otherwise clears `stored.Lease`.
+
+</details>

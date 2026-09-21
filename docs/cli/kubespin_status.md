@@ -1,3 +1,7 @@
+---
+title: kubespin status
+---
+
 # kubespin status
 
 Show authentication state per cloud provider

@@ -1,3 +1,7 @@
+---
+title: kubespin fleet dashboard
+---
+
 # kubespin fleet dashboard
 
 Render a static HTML snapshot of fleet sync status, drift, and staleness

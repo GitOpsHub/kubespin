@@ -1,3 +1,7 @@
+---
+title: kubespin fleet update
+---
+
 # kubespin fleet update
 
 Roll a component version across every matching cluster

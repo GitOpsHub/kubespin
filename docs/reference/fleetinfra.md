@@ -11,7 +11,7 @@ Because there is no state file, convergence is the contract: every step describe
 | [`Spec`](#spec) | Type | fleetinfra.go | Desired state of the fleet infrastructure, passed to `Converge`. |
 | [`ActionKind`](#actionkind) | Type | fleetinfra.go | Enum of a step's plan intent: none/create/update. |
 | [`Action`](#action) | Type | fleetinfra.go | One step's verdict on one resource. |
-| [`Option`](#option-withlogger) / [`WithLogger`](#option-withlogger) | Type / Func | fleetinfra.go | Functional option for configuring a `Converge` run. |
+| [`Option`](#option--withlogger) / [`WithLogger`](#option--withlogger) | Type / Func | fleetinfra.go | Functional option for configuring a `Converge` run. |
 | [`Report`](#report) | Type | fleetinfra.go | Outcome of a converge run. |
 | [`ErrSpec`](#errors) | Var | fleetinfra.go | Wraps configuration/validation problems. |
 | [`ErrAccountMismatch`](#errors) | Var | fleetinfra.go | Returned when caller account != configured fleet account. |
@@ -26,129 +26,153 @@ Because there is no state file, convergence is the contract: every step describe
 
 ### `Spec`
 
-??? abstract "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    type Spec struct {
-        AccountID string
-        Region    string
+```go
+type Spec struct {
+    AccountID string
+    Region    string
 
-        NamePrefix       string
-        RegistryDSN      string
-        LogRetentionDays int32
-        ThrottleBurst    int32
-        ThrottleRate     float64
+    NamePrefix       string
+    RegistryDSN      string
+    LogRetentionDays int32
+    ThrottleBurst    int32
+    ThrottleRate     float64
 
-        LambdaZip []byte
-    }
-    ```
+    LambdaZip []byte
+}
+```
 
-    - **Fields:**
-        - `AccountID` — the fleet account; checked against the caller's real STS identity before anything is provisioned (`ErrAccountMismatch` on mismatch).
-        - `RegistryDSN` — the Fleet Registry's Postgres connection string, passed straight through as the ingestion Lambda's `REGISTRY_DSN` environment variable (`functionStep`); never used to provision anything, since the database itself is out of scope for this package.
-        - `LambdaZip` — the packaged ingestion handler produced by `PackageLambda`.
-        - Unset tunables (`NamePrefix`, `LogRetentionDays`, `ThrottleBurst`, `ThrottleRate`) are filled from the `Default*` constants by the unexported `withDefaults` method before use.
-    - **Behavior:** `Validate() error` reports every problem at once (via `errors.Join`): account id must be 12 digits, `Region` required, `RegistryDSN` required, `LambdaZip` non-empty — all wrapping `ErrSpec`.
-    - **Invariants:** Unexported helper methods derive resource names/ARNs from the spec (`functionName`, `roleName`, `apiName`, `lambdaLogGroup`, `apiLogGroup`, `roleARN`, `functionARN`, `invokeARN`, `lambdaLogGroupARN`, `apiLogGroupARN` — no `tableARN`, since there is no table); the partition is assumed to be `aws` — GovCloud/China would need this threaded through the spec.
+- **Fields:**
+    - `AccountID` — the fleet account; checked against the caller's real STS identity before anything is provisioned (`ErrAccountMismatch` on mismatch).
+    - `RegistryDSN` — the Fleet Registry's Postgres connection string, passed straight through as the ingestion Lambda's `REGISTRY_DSN` environment variable (`functionStep`); never used to provision anything, since the database itself is out of scope for this package.
+    - `LambdaZip` — the packaged ingestion handler produced by `PackageLambda`.
+    - Unset tunables (`NamePrefix`, `LogRetentionDays`, `ThrottleBurst`, `ThrottleRate`) are filled from the `Default*` constants by the unexported `withDefaults` method before use.
+- **Behavior:** `Validate() error` reports every problem at once (via `errors.Join`): account id must be 12 digits, `Region` required, `RegistryDSN` required, `LambdaZip` non-empty — all wrapping `ErrSpec`.
+- **Invariants:** Unexported helper methods derive resource names/ARNs from the spec (`functionName`, `roleName`, `apiName`, `lambdaLogGroup`, `apiLogGroup`, `roleARN`, `functionARN`, `invokeARN`, `lambdaLogGroupARN`, `apiLogGroupARN` — no `tableARN`, since there is no table); the partition is assumed to be `aws` — GovCloud/China would need this threaded through the spec.
+
+</details>
 
 ### `ActionKind`
 
-??? abstract "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    type ActionKind int
+```go
+type ActionKind int
 
-    const (
-        ActionNone ActionKind = iota
-        ActionCreate
-        ActionUpdate
-    )
-    ```
+const (
+    ActionNone ActionKind = iota
+    ActionCreate
+    ActionUpdate
+)
+```
 
-    - **Behavior:** Enum of what a step's plan intends to do. There is no `ActionDelete` — `Converge` never deletes. `String()` renders `"in sync"`, `"create"`, `"update"`.
+- **Behavior:** Enum of what a step's plan intends to do. There is no `ActionDelete` — `Converge` never deletes. `String()` renders `"in sync"`, `"create"`, `"update"`.
+
+</details>
 
 ### `Action`
 
-??? abstract "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    type Action struct {
-        Resource string
-        Kind     ActionKind
-        Details  []string
-    }
-    ```
+```go
+type Action struct {
+    Resource string
+    Kind     ActionKind
+    Details  []string
+}
+```
 
-    - **Fields:** `Details` explains what differs and is printed on both dry and real runs.
-    - **Behavior:** `String()` formats as `"<resource>  <kind> (<details>)"`.
+- **Fields:** `Details` explains what differs and is printed on both dry and real runs.
+- **Behavior:** `String()` formats as `"<resource>  <kind> (<details>)"`.
+
+</details>
 
 ### `Option` / `WithLogger`
 
-??? abstract "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    type Option func(*options)
+```go
+type Option func(*options)
 
-    func WithLogger(logger *slog.Logger) Option
-    ```
+func WithLogger(logger *slog.Logger) Option
+```
 
-    - **Behavior:** `Option` is a functional option for configuring a `Converge` run; `WithLogger` sets the `*slog.Logger` the run narrates itself through. A nil logger is ignored, leaving `slog.Default()` in place.
+- **Behavior:** `Option` is a functional option for configuring a `Converge` run; `WithLogger` sets the `*slog.Logger` the run narrates itself through. A nil logger is ignored, leaving `slog.Default()` in place.
+
+</details>
 
 ### `Report`
 
-??? abstract "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    type Report struct {
-        DryRun       bool
-        Actions      []Action
-        IngestionURL string
-    }
-    ```
+```go
+type Report struct {
+    DryRun       bool
+    Actions      []Action
+    IngestionURL string
+}
+```
 
-    - **Fields:** `IngestionURL` is the full endpoint clusters push status to (base API endpoint + `/v1/clusters/{clusterId}/status`), and the host every cluster's egress allowlist must permit. Empty on a dry run that would still have to create the API.
-    - **Behavior:** `Changed() int` counts actions whose `Kind != ActionNone`.
+- **Fields:** `IngestionURL` is the full endpoint clusters push status to (base API endpoint + `/v1/clusters/{clusterId}/status`), and the host every cluster's egress allowlist must permit. Empty on a dry run that would still have to create the API.
+- **Behavior:** `Changed() int` counts actions whose `Kind != ActionNone`.
+
+</details>
 
 ### Errors
 
-??? note "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    var (
-        ErrSpec            = errors.New("invalid fleet infrastructure spec")
-        ErrAccountMismatch = errors.New("caller account does not match the configured fleet account")
-    )
-    ```
+```go
+var (
+    ErrSpec            = errors.New("invalid fleet infrastructure spec")
+    ErrAccountMismatch = errors.New("caller account does not match the configured fleet account")
+)
+```
 
-    - **Behavior:** Both are wrapped (`fmt.Errorf("%w: ...")`) rather than returned bare, so callers can match with `errors.Is`.
+- **Behavior:** Both are wrapped (`fmt.Errorf("%w: ...")`) rather than returned bare, so callers can match with `errors.Is`.
+
+</details>
 
 ### Constants
 
-??? note "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    const (
-        DefaultNamePrefix       = "kubespin"
-        DefaultLogRetentionDays = 30
-        DefaultThrottleBurst    = 100
-        DefaultThrottleRate     = 50
+```go
+const (
+    DefaultNamePrefix       = "kubespin"
+    DefaultLogRetentionDays = 30
+    DefaultThrottleBurst    = 100
+    DefaultThrottleRate     = 50
 
-        StatusRouteKey = "POST /v1/clusters/{clusterId}/status"
-    )
-    ```
+    StatusRouteKey = "POST /v1/clusters/{clusterId}/status"
+)
+```
 
-    - **Behavior:** `Default*` constants back-fill unset `Spec` tunables. `StatusRouteKey` is the only route on the ingestion API; the `{clusterId}` in the path is what M6 binds the caller's token subject against.
+- **Behavior:** `Default*` constants back-fill unset `Spec` tunables. `StatusRouteKey` is the only route on the ingestion API; the `{clusterId}` in the path is what M6 binds the caller's token subject against.
+
+</details>
 
 ### `Converge`
 
-??? abstract "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    func Converge(ctx context.Context, c *Clients, spec Spec, dryRun bool, opts ...Option) (Report, error)
-    ```
+```go
+func Converge(ctx context.Context, c *Clients, spec Spec, dryRun bool, opts ...Option) (Report, error)
+```
 
-    - **Behavior:** Brings the fleet infrastructure to match `spec`. Applies `spec.withDefaults()`, validates it, and verifies the caller's account before touching anything. Runs five steps in dependency order — log groups, IAM role, Lambda function, ingestion API, invoke permission — stopping at the first error, so a failure leaves earlier resources created and later ones untouched; re-running resumes, since every step is create-or-update. There is no registry-table step: the Fleet Registry is a Postgres database provisioned outside this package.
-    - **Invariants:** For each step, `Plan` runs first (always, dry or real) and its `Action` is appended to `Report.Actions`. If the action is `ActionNone`, the step is logged at Debug and skipped. On a dry run, a would-be change is logged at Info and *not* applied. On a real run, `Apply` is called and any error aborts the whole `Converge` call. `Report.IngestionURL` is populated from the API step's resolved endpoint before returning.
+- **Behavior:** Brings the fleet infrastructure to match `spec`. Applies `spec.withDefaults()`, validates it, and verifies the caller's account before touching anything. Runs five steps in dependency order — log groups, IAM role, Lambda function, ingestion API, invoke permission — stopping at the first error, so a failure leaves earlier resources created and later ones untouched; re-running resumes, since every step is create-or-update. There is no registry-table step: the Fleet Registry is a Postgres database provisioned outside this package.
+- **Invariants:** For each step, `Plan` runs first (always, dry or real) and its `Action` is appended to `Report.Actions`. If the action is `ActionNone`, the step is logged at Debug and skipped. On a dry run, a would-be change is logged at Info and *not* applied. On a real run, `Apply` is called and any error aborts the whole `Converge` call. `Report.IngestionURL` is populated from the API step's resolved endpoint before returning.
+
+</details>
 
 ## clients.go
 
@@ -164,39 +188,48 @@ Each AWS service is reached through a narrow interface listing only the calls th
 
 ### `Clients`
 
-??? abstract "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    type Clients struct {
-        // unexported: sts, logs, iam, lambda, apiGateway
-    }
-    ```
+```go
+type Clients struct {
+    // unexported: sts, logs, iam, lambda, apiGateway
+}
+```
 
-    - **Behavior:** Bundles the five AWS service interfaces that converge steps use. All fields are unexported; construct via `NewClients`.
-    - **Invariants:** `(*Clients).verifyAccount(ctx, want string) error` is the guard that replaces Terraform's `allowed_account_ids` — it calls `GetCallerIdentity` and refuses to provision if the caller's account doesn't match `want`, which is what keeps fleet infrastructure out of a cluster account.
+- **Behavior:** Bundles the five AWS service interfaces that converge steps use. All fields are unexported; construct via `NewClients`.
+- **Invariants:** `(*Clients).verifyAccount(ctx, want string) error` is the guard that replaces Terraform's `allowed_account_ids` — it calls `GetCallerIdentity` and refuses to provision if the caller's account doesn't match `want`, which is what keeps fleet infrastructure out of a cluster account.
+
+</details>
 
 ### `NewClients`
 
-??? abstract "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    func NewClients(ctx context.Context, region string) (*Clients, error)
-    ```
+```go
+func NewClients(ctx context.Context, region string) (*Clients, error)
+```
 
-    - **Behavior:** Loads the ambient AWS credential chain via `config.LoadDefaultConfig` scoped to `region`, and constructs real `sts`/`cloudwatchlogs`/`iam`/`lambda`/`apigatewayv2` clients from it.
+- **Behavior:** Loads the ambient AWS credential chain via `config.LoadDefaultConfig` scoped to `region`, and constructs real `sts`/`cloudwatchlogs`/`iam`/`lambda`/`apigatewayv2` clients from it.
+
+</details>
 
 ## package.go
 
 ### `PackageLambda`
 
-??? abstract "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    func PackageLambda(binaryPath string) ([]byte, error)
-    ```
+```go
+func PackageLambda(binaryPath string) ([]byte, error)
+```
 
-    - **Behavior:** Opens the compiled handler binary at `binaryPath` and returns a deployable zip (delegates to the unexported `packageBinary`).
-    - **Invariants:** The zip contains exactly one entry, named `bootstrap` (the `handlerName` constant — what `provided.al2023` executes), mode `0o755`, deflated. Every entry's modified timestamp is pinned to `zipEpoch` (1980-01-01 UTC): determinism is load-bearing, because convergence in `functionStep.Plan` compares the archive's SHA-256 against the deployed function's `CodeSha256`, and an archive carrying the current time would hash differently on every run and report drift forever.
+- **Behavior:** Opens the compiled handler binary at `binaryPath` and returns a deployable zip (delegates to the unexported `packageBinary`).
+- **Invariants:** The zip contains exactly one entry, named `bootstrap` (the `handlerName` constant — what `provided.al2023` executes), mode `0o755`, deflated. Every entry's modified timestamp is pinned to `zipEpoch` (1980-01-01 UTC): determinism is load-bearing, because convergence in `functionStep.Plan` compares the archive's SHA-256 against the deployed function's `CodeSha256`, and an archive carrying the current time would hash differently on every run and report drift forever.
+
+</details>
 
 ## Steps (unexported, one per file)
 
@@ -204,62 +237,77 @@ Each step implements the internal `step` interface (`Name() string`, `Plan(ctx) 
 
 ### `logGroupsStep`
 
-??? note "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    // step_logs.go
-    func newLogGroupsStep(c *Clients, spec Spec, logger *slog.Logger) *logGroupsStep
-    ```
+```go
+// step_logs.go
+func newLogGroupsStep(c *Clients, spec Spec, logger *slog.Logger) *logGroupsStep
+```
 
-    - **Behavior:** Provisions both the Lambda's and the API's CloudWatch log groups up front, so retention (`LogRetentionDays`) can be set at all (an implicitly-created group retains forever) and so the Lambda's execution policy can be scoped to a group that already exists.
+- **Behavior:** Provisions both the Lambda's and the API's CloudWatch log groups up front, so retention (`LogRetentionDays`) can be set at all (an implicitly-created group retains forever) and so the Lambda's execution policy can be scoped to a group that already exists.
+
+</details>
 
 ### `roleStep`
 
-??? note "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    // step_iam.go
-    func newRoleStep(c *Clients, spec Spec, logger *slog.Logger) *roleStep
-    ```
+```go
+// step_iam.go
+func newRoleStep(c *Clients, spec Spec, logger *slog.Logger) *roleStep
+```
 
-    - **Behavior:** Provisions the ingestion Lambda's execution IAM role, with a deliberately tiny inline policy (`ingestion`): only `logs:CreateLogStream`/`PutLogEvents` on its own log group. No registry-access statement at all — unlike the DynamoDB-backed registry this replaced, reaching Postgres is over the network via `REGISTRY_DSN`, not an IAM-mediated AWS API, so there is nothing for this policy to grant.
-    - **Invariants:** Policy equality is checked semantically (`policyEqual`, via JSON round-trip) against a policy IAM may have reformatted.
+- **Behavior:** Provisions the ingestion Lambda's execution IAM role, with a deliberately tiny inline policy (`ingestion`): only `logs:CreateLogStream`/`PutLogEvents` on its own log group. No registry-access statement at all — unlike the DynamoDB-backed registry this replaced, reaching Postgres is over the network via `REGISTRY_DSN`, not an IAM-mediated AWS API, so there is nothing for this policy to grant.
+- **Invariants:** Policy equality is checked semantically (`policyEqual`, via JSON round-trip) against a policy IAM may have reformatted.
+
+</details>
 
 ### `functionStep`
 
-??? note "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    // step_lambda.go
-    func newFunctionStep(c *Clients, spec Spec, logger *slog.Logger) *functionStep
-    ```
+```go
+// step_lambda.go
+func newFunctionStep(c *Clients, spec Spec, logger *slog.Logger) *functionStep
+```
 
-    - **Behavior:** Provisions the ingestion Lambda: `provided.al2023` runtime, arm64, 10s timeout, 256MB memory, one env var `REGISTRY_DSN` (never logged, since it carries the Postgres password).
-    - **Invariants:** Drift on code is detected by comparing the deployed `CodeSha256` against `codeSHA256(spec.LambdaZip)` (`package.go`), which is why the zip must be byte-deterministic.
+- **Behavior:** Provisions the ingestion Lambda: `provided.al2023` runtime, arm64, 10s timeout, 256MB memory, one env var `REGISTRY_DSN` (never logged, since it carries the Postgres password).
+- **Invariants:** Drift on code is detected by comparing the deployed `CodeSha256` against `codeSHA256(spec.LambdaZip)` (`package.go`), which is why the zip must be byte-deterministic.
+
+</details>
 
 ### `apiStep`
 
-??? note "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    // step_api.go
-    func newAPIStep(c *Clients, spec Spec, logger *slog.Logger) *apiStep
+```go
+// step_api.go
+func newAPIStep(c *Clients, spec Spec, logger *slog.Logger) *apiStep
 
-    func (s *apiStep) endpoint() string
-    func (s *apiStep) executeARN() string
-    ```
+func (s *apiStep) endpoint() string
+func (s *apiStep) executeARN() string
+```
 
-    - **Behavior:** Provisions the Central Ingestion API as one step covering the HTTP API, its AWS_PROXY Lambda integration, the single `POST /v1/clusters/{clusterId}/status` route (`AuthorizationType: NONE` — the caller authenticates via a cloud-native workload identity token verified inside the handler itself, since three clouds mean three issuers and no single-issuer JWT authorizer fits), and the auto-deploying `$default` stage with throttle limits and access logging to the API log group.
-    - **Invariants:** These four are one step because they are meaningless apart — an API with no route is a broken endpoint, not a partial one. Exposes `endpoint()` (full status-push URL, empty until the API exists) and `executeARN()` (used to scope the Lambda invoke permission).
+- **Behavior:** Provisions the Central Ingestion API as one step covering the HTTP API, its AWS_PROXY Lambda integration, the single `POST /v1/clusters/{clusterId}/status` route (`AuthorizationType: NONE` — the caller authenticates via a cloud-native workload identity token verified inside the handler itself, since three clouds mean three issuers and no single-issuer JWT authorizer fits), and the auto-deploying `$default` stage with throttle limits and access logging to the API log group.
+- **Invariants:** These four are one step because they are meaningless apart — an API with no route is a broken endpoint, not a partial one. Exposes `endpoint()` (full status-push URL, empty until the API exists) and `executeARN()` (used to scope the Lambda invoke permission).
+
+</details>
 
 ### `permissionStep`
 
-??? note "Signature"
+<details>
+<summary>Signature</summary>
 
-    ```go
-    // step_lambda.go
-    func newPermissionStep(c *Clients, spec Spec, api *apiStep, logger *slog.Logger) *permissionStep
-    ```
+```go
+// step_lambda.go
+func newPermissionStep(c *Clients, spec Spec, api *apiStep, logger *slog.Logger) *permissionStep
+```
 
-    - **Behavior:** Grants API Gateway (`apigateway.amazonaws.com`) permission to invoke the ingestion function, scoped to this one API's execute-api ARN via a stable statement id (`AllowInvokeFromIngestionApi`) so re-running converge recognises the permission it added last time instead of stacking duplicates.
-    - **Invariants:** Holds a reference to the `*apiStep` rather than a resolved API id, since the id only exists once that step has run. Treats `ResourceConflictException` from `AddPermission` as already-converged, not a failure.
+- **Behavior:** Grants API Gateway (`apigateway.amazonaws.com`) permission to invoke the ingestion function, scoped to this one API's execute-api ARN via a stable statement id (`AllowInvokeFromIngestionApi`) so re-running converge recognises the permission it added last time instead of stacking duplicates.
+- **Invariants:** Holds a reference to the `*apiStep` rather than a resolved API id, since the id only exists once that step has run. Treats `ResourceConflictException` from `AddPermission` as already-converged, not a failure.
+
+</details>

@@ -1,3 +1,7 @@
+---
+title: kubespin fleet status
+---
+
 # kubespin fleet status
 
 Report sync, drift, and staleness across the fleet
