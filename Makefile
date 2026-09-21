@@ -69,6 +69,12 @@ lint:
 docs:
 	go run ./internal/tools/docsgen
 
+## Serves the docs site locally (Docusaurus, reading from docs/). Installs
+## website/node_modules on first run.
+.PHONY: docs-serve
+docs-serve:
+	cd website && npm install && npm start
+
 ## Prepends a dated CHANGELOG.md section for VERSION, built from Conventional
 ## Commit subjects since the last tag. Mainly for local preview — the release
 ## workflow (.github/workflows/release.yml) runs the same generator itself on

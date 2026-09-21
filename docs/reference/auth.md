@@ -17,7 +17,7 @@
 | [Login](#login) | func | auth.go | Concurrently authenticates every provider |
 | [Logout](#logout) | func | auth.go | Concurrently clears every provider's cached session |
 | [EnsureAll](#ensureall) | func | auth.go | Preflight that errors fast if any provider is unauthenticated |
-| [commandRunner / commandOutput](#commandrunner-commandoutput) | func type | auth.go | Abstractions over shelling out to a CLI |
+| [commandRunner / commandOutput](#commandrunner--commandoutput) | func type | auth.go | Abstractions over shelling out to a CLI |
 | [AWSProvider](#awsprovider) | struct | aws.go | Authenticates via AWS IAM Identity Center (SSO) |
 | [NewAWSProvider](#newawsprovider) | func | aws.go | Builds a provider scoped to one named AWS profile |
 | [stsAPI](#stsapi) | interface | aws.go | Narrowed AWS STS client interface for testability |
@@ -32,292 +32,358 @@
 
 #### Provider
 
-??? abstract "Signature — `Provider` interface"
+<details>
+<summary>Signature — `Provider` interface</summary>
 
-    ```go
-    type Provider interface {
-        Name() string
-        IsAuthenticated(ctx context.Context) (bool, StatusDetail, error)
-        Login(ctx context.Context) error
-        Logout(ctx context.Context) error
-    }
-    ```
+```go
+type Provider interface {
+    Name() string
+    IsAuthenticated(ctx context.Context) (bool, StatusDetail, error)
+    Login(ctx context.Context) error
+    Logout(ctx context.Context) error
+}
+```
 
-    - **Fields/Params:**
-        - `Name() string` — identifies the provider for `--only`, status output, and error messages (e.g. `"aws"`).
-        - `IsAuthenticated(ctx) (bool, StatusDetail, error)` — makes a real call (not just "does a token file exist") so a stale or revoked session is reported accurately. A `false` result is *not* itself an error — `err` is reserved for failures unrelated to auth state, such as the provider's CLI missing from PATH.
-        - `Login(ctx) error` — authenticates interactively (typically opens a browser); blocks until the flow completes or fails.
-        - `Logout(ctx) error` — clears the provider's cached session.
-    - **Behavior:** reached uniformly by the orchestrator functions and by every command that needs credentials, so none of them branch on which cloud they're talking to.
-    - **Invariants:** implemented by `AWSProvider`, `GCPProvider`, and `AzureProvider`; adding a new cloud is a new file implementing this interface, not a change to `login`/`status`/`logout`.
+- **Fields/Params:**
+    - `Name() string` — identifies the provider for `--only`, status output, and error messages (e.g. `"aws"`).
+    - `IsAuthenticated(ctx) (bool, StatusDetail, error)` — makes a real call (not just "does a token file exist") so a stale or revoked session is reported accurately. A `false` result is *not* itself an error — `err` is reserved for failures unrelated to auth state, such as the provider's CLI missing from PATH.
+    - `Login(ctx) error` — authenticates interactively (typically opens a browser); blocks until the flow completes or fails.
+    - `Logout(ctx) error` — clears the provider's cached session.
+- **Behavior:** reached uniformly by the orchestrator functions and by every command that needs credentials, so none of them branch on which cloud they're talking to.
+- **Invariants:** implemented by `AWSProvider`, `GCPProvider`, and `AzureProvider`; adding a new cloud is a new file implementing this interface, not a change to `login`/`status`/`logout`.
+
+</details>
 
 #### StatusDetail
 
-??? abstract "Signature — `StatusDetail` struct"
+<details>
+<summary>Signature — `StatusDetail` struct</summary>
 
-    ```go
-    type StatusDetail struct {
-        Message   string
-        ExpiresAt *time.Time
-    }
-    ```
+```go
+type StatusDetail struct {
+    Message   string
+    ExpiresAt *time.Time
+}
+```
 
-    - **Fields/Params:**
-        - `Message` — short human-readable summary, e.g. `"4 accounts reachable"` or `"logged in as you@org.com"`.
-        - `ExpiresAt` — when the current session expires, if determinable.
-    - **Behavior:** what a `Provider` reports about its own session beyond the plain authenticated/not-authenticated bit.
-    - **Invariants:** `ExpiresAt == nil` means unknown/not applicable — **not** "never expires".
+- **Fields/Params:**
+    - `Message` — short human-readable summary, e.g. `"4 accounts reachable"` or `"logged in as you@org.com"`.
+    - `ExpiresAt` — when the current session expires, if determinable.
+- **Behavior:** what a `Provider` reports about its own session beyond the plain authenticated/not-authenticated bit.
+- **Invariants:** `ExpiresAt == nil` means unknown/not applicable — **not** "never expires".
+
+</details>
 
 #### Result
 
-??? abstract "Signature — `Result` struct"
+<details>
+<summary>Signature — `Result` struct</summary>
 
-    ```go
-    type Result struct {
-        Provider      string
-        Authenticated bool
-        Status        StatusDetail
-        Err           error
-    }
-    ```
+```go
+type Result struct {
+    Provider      string
+    Authenticated bool
+    Status        StatusDetail
+    Err           error
+}
+```
 
-    - **Behavior:** the outcome of running one operation against one provider; `Status`/`Login`/`Logout` each return a slice of these — one per provider, in the same order the providers were given — rather than failing the whole batch on the first error.
-    - **Invariants:** a `login` run against three clouds still reports all three even if one fails.
+- **Behavior:** the outcome of running one operation against one provider; `Status`/`Login`/`Logout` each return a slice of these — one per provider, in the same order the providers were given — rather than failing the whole batch on the first error.
+- **Invariants:** a `login` run against three clouds still reports all three even if one fails.
+
+</details>
 
 #### Registry
 
-??? abstract "Signature — `Registry` struct"
+<details>
+<summary>Signature — `Registry` struct</summary>
 
-    ```go
-    type Registry struct {
-        providers []Provider
-    }
-    ```
+```go
+type Registry struct {
+    providers []Provider
+}
+```
 
-    - **Behavior:** holds every configured provider, in the order `status`/`login`/`logout` report them.
-    - Methods:
-        - `NewRegistry(providers ...Provider) *Registry` — builds a registry over the given providers, in report order.
-        - `(*Registry) Select(names []string) ([]Provider, error)` — returns the providers named (case-insensitively), in registry order, or an error naming any name that matched nothing. An empty `names` list selects every provider — this is what backs `--only`.
+- **Behavior:** holds every configured provider, in the order `status`/`login`/`logout` report them.
+- Methods:
+    - `NewRegistry(providers ...Provider) *Registry` — builds a registry over the given providers, in report order.
+    - `(*Registry) Select(names []string) ([]Provider, error)` — returns the providers named (case-insensitively), in registry order, or an error naming any name that matched nothing. An empty `names` list selects every provider — this is what backs `--only`.
+
+</details>
 
 #### Option
 
-??? abstract "Signature — `Option` / `options`"
+<details>
+<summary>Signature — `Option` / `options`</summary>
 
-    ```go
-    type options struct {
-        logger *slog.Logger
-    }
-    type Option func(*options)
-    ```
+```go
+type options struct {
+    logger *slog.Logger
+}
+type Option func(*options)
+```
 
-    - **Behavior:** `options` carries settings shared by every provider constructor in the package, so a caller configures all three clouds the same way; `Option` is a functional option over it.
+- **Behavior:** `options` carries settings shared by every provider constructor in the package, so a caller configures all three clouds the same way; `Option` is a functional option over it.
+
+</details>
 
 #### WithLogger
 
-??? note "Signature — `WithLogger`"
+<details>
+<summary>Signature — `WithLogger`</summary>
 
-    ```go
-    func WithLogger(logger *slog.Logger) Option
-    ```
+```go
+func WithLogger(logger *slog.Logger) Option
+```
 
-    - **Behavior:** sets the logger used by a provider constructor. Without it, a provider logs to `slog.Default()`.
-    - **Invariants:** a `nil` logger is ignored (the provider keeps `slog.Default()`); logging in this package is Debug-level on purpose since `kubespin login`/`status` already report per-provider outcomes to the operator — this is only the "which CLI did we actually shell out to" detail needed when diagnosing a problem.
+- **Behavior:** sets the logger used by a provider constructor. Without it, a provider logs to `slog.Default()`.
+- **Invariants:** a `nil` logger is ignored (the provider keeps `slog.Default()`); logging in this package is Debug-level on purpose since `kubespin login`/`status` already report per-provider outcomes to the operator — this is only the "which CLI did we actually shell out to" detail needed when diagnosing a problem.
+
+</details>
 
 #### NewRegistry
 
-??? note "Signature — `NewRegistry`"
+<details>
+<summary>Signature — `NewRegistry`</summary>
 
-    ```go
-    func NewRegistry(providers ...Provider) *Registry
-    ```
+```go
+func NewRegistry(providers ...Provider) *Registry
+```
 
-    - **Behavior:** builds a `Registry` over the given providers, in report order.
+- **Behavior:** builds a `Registry` over the given providers, in report order.
+
+</details>
 
 #### Status
 
-??? note "Signature — `Status`"
+<details>
+<summary>Signature — `Status`</summary>
 
-    ```go
-    func Status(ctx context.Context, providers []Provider) []Result
-    ```
+```go
+func Status(ctx context.Context, providers []Provider) []Result
+```
 
-    - **Behavior:** checks every provider concurrently.
-    - **Invariants:** has no side effects and never returns an error itself — per-provider failures are carried in each `Result` — so it is safe to run as often as a caller likes, including as a preflight before every cloud-calling command.
+- **Behavior:** checks every provider concurrently.
+- **Invariants:** has no side effects and never returns an error itself — per-provider failures are carried in each `Result` — so it is safe to run as often as a caller likes, including as a preflight before every cloud-calling command.
+
+</details>
 
 #### Login
 
-??? note "Signature — `Login`"
+<details>
+<summary>Signature — `Login`</summary>
 
-    ```go
-    func Login(ctx context.Context, providers []Provider, force bool) []Result
-    ```
+```go
+func Login(ctx context.Context, providers []Provider, force bool) []Result
+```
 
-    - **Behavior:** authenticates every provider concurrently — each may pop open a browser and there is no dependency between them, so running them one at a time would just be a needless wait. A provider whose session already looks valid is left alone unless `force` is set. After `Login` runs, it re-checks `IsAuthenticated` and reports that as the result's authenticated state.
+- **Behavior:** authenticates every provider concurrently — each may pop open a browser and there is no dependency between them, so running them one at a time would just be a needless wait. A provider whose session already looks valid is left alone unless `force` is set. After `Login` runs, it re-checks `IsAuthenticated` and reports that as the result's authenticated state.
+
+</details>
 
 #### Logout
 
-??? note "Signature — `Logout`"
+<details>
+<summary>Signature — `Logout`</summary>
 
-    ```go
-    func Logout(ctx context.Context, providers []Provider) []Result
-    ```
+```go
+func Logout(ctx context.Context, providers []Provider) []Result
+```
 
-    - **Behavior:** clears every provider's cached session concurrently.
+- **Behavior:** clears every provider's cached session concurrently.
+
+</details>
 
 #### EnsureAll
 
-??? note "Signature — `EnsureAll`"
+<details>
+<summary>Signature — `EnsureAll`</summary>
 
-    ```go
-    func EnsureAll(ctx context.Context, providers []Provider) error
-    ```
+```go
+func EnsureAll(ctx context.Context, providers []Provider) error
+```
 
-    - **Behavior:** the preflight every command that calls a cloud SDK should run before it does anything else. Runs `Status` and, if any provider is not authenticated, returns an error naming all of them (sorted) and pointing at `kubespin login --only <providers>`, rather than surfacing a cryptic SDK auth error partway through provisioning.
-    - **Invariants:** returns `nil` if every provider is authenticated.
+- **Behavior:** the preflight every command that calls a cloud SDK should run before it does anything else. Runs `Status` and, if any provider is not authenticated, returns an error naming all of them (sorted) and pointing at `kubespin login --only <providers>`, rather than surfacing a cryptic SDK auth error partway through provisioning.
+- **Invariants:** returns `nil` if every provider is authenticated.
+
+</details>
 
 #### commandRunner / commandOutput
 
-??? abstract "Signature — `commandRunner` / `commandOutput`"
+<details>
+<summary>Signature — `commandRunner` / `commandOutput`</summary>
 
-    ```go
-    type commandRunner func(ctx context.Context, name string, args ...string) error
-    type commandOutput func(ctx context.Context, name string, args ...string) (string, error)
-    ```
+```go
+type commandRunner func(ctx context.Context, name string, args ...string) error
+type commandOutput func(ctx context.Context, name string, args ...string) (string, error)
+```
 
-    - **Behavior:** abstract shelling out to a CLI, so `Login`/`Logout`/`IsAuthenticated` are testable without actually invoking `aws`/`gcloud`/`az`. `commandRunner` (`execRunner`) is for interactive flows with the operator's own stdio attached (`aws sso login`, `gcloud auth login`, `az login` — all print a code or open a browser). `commandOutput` (`execOutput`) is for checks that need a captured value back (an account name, a token).
+- **Behavior:** abstract shelling out to a CLI, so `Login`/`Logout`/`IsAuthenticated` are testable without actually invoking `aws`/`gcloud`/`az`. `commandRunner` (`execRunner`) is for interactive flows with the operator's own stdio attached (`aws sso login`, `gcloud auth login`, `az login` — all print a code or open a browser). `commandOutput` (`execOutput`) is for checks that need a captured value back (an account name, a token).
 
-??? note "Internal helpers"
+</details>
 
-    Unexported but relevant to how the package is wired:
+<details>
+<summary>Internal helpers</summary>
 
-    - `resolve(opts []Option) options` — applies `Option`s over the defaults (`logger: slog.Default()`).
-    - `loggerOr(logger *slog.Logger) *slog.Logger` — returns `slog.Default()` if `logger` is `nil`, so a provider built as a bare struct literal (as this package's tests do) doesn't panic.
-    - `run(providers []Provider, work func(Provider) Result) []Result` — fans work out across providers concurrently via `errgroup.Group`, collecting one `Result` per provider in original order. The worker never returns an error to the errgroup — a provider failure belongs in its own `Result`, not in stopping the other providers' work early. Backs `Status`, `Login`, and `Logout`.
-    - `execRunner` / `execOutput` — the real `commandRunner`/`commandOutput` implementations, built on `exec.CommandContext`.
-    - `checkBinary(name, installHint string) error` — reports a clear, actionable error when a provider's CLI isn't on PATH, rather than letting `exec.Command` fail with a raw "executable file not found" once `Login`/`Logout` tries to run it.
+Unexported but relevant to how the package is wired:
+
+- `resolve(opts []Option) options` — applies `Option`s over the defaults (`logger: slog.Default()`).
+- `loggerOr(logger *slog.Logger) *slog.Logger` — returns `slog.Default()` if `logger` is `nil`, so a provider built as a bare struct literal (as this package's tests do) doesn't panic.
+- `run(providers []Provider, work func(Provider) Result) []Result` — fans work out across providers concurrently via `errgroup.Group`, collecting one `Result` per provider in original order. The worker never returns an error to the errgroup — a provider failure belongs in its own `Result`, not in stopping the other providers' work early. Backs `Status`, `Login`, and `Logout`.
+- `execRunner` / `execOutput` — the real `commandRunner`/`commandOutput` implementations, built on `exec.CommandContext`.
+- `checkBinary(name, installHint string) error` — reports a clear, actionable error when a provider's CLI isn't on PATH, rather than letting `exec.Command` fail with a raw "executable file not found" once `Login`/`Logout` tries to run it.
+
+</details>
 
 ## aws.go
 
 #### AWSProvider
 
-??? abstract "Signature — `AWSProvider` struct"
+<details>
+<summary>Signature — `AWSProvider` struct</summary>
 
-    ```go
-    type AWSProvider struct {
-        profile string
-        sts     stsAPI
-        run     commandRunner
-        logger  *slog.Logger
-    }
-    ```
+```go
+type AWSProvider struct {
+    profile string
+    sts     stsAPI
+    run     commandRunner
+    logger  *slog.Logger
+}
+```
 
-    - **Fields/Params:**
-        - `profile` — the named profile in `~/.aws/config` this provider is scoped to.
-        - `sts` — narrowed to `stsAPI`'s single method (`GetCallerIdentity`), the same narrowing pattern `internal/fleetinfra`'s client interfaces use, so `IsAuthenticated` is testable without real AWS credentials.
-    - **Behavior:** authenticates via AWS IAM Identity Center (SSO) — the same flow documented in `docs/fleet-bootstrap.md` for the Fleet Registry account.
-    - **Invariants:** constructing an `AWSProvider` succeeds even before the operator has ever logged in or run `aws configure` — a missing `"default"` profile section falls back to the SDK's unscoped default resolution, but a named profile that doesn't exist still errors since the operator explicitly asked for it.
+- **Fields/Params:**
+    - `profile` — the named profile in `~/.aws/config` this provider is scoped to.
+    - `sts` — narrowed to `stsAPI`'s single method (`GetCallerIdentity`), the same narrowing pattern `internal/fleetinfra`'s client interfaces use, so `IsAuthenticated` is testable without real AWS credentials.
+- **Behavior:** authenticates via AWS IAM Identity Center (SSO) — the same flow documented in `docs/fleet-bootstrap.md` for the Fleet Registry account.
+- **Invariants:** constructing an `AWSProvider` succeeds even before the operator has ever logged in or run `aws configure` — a missing `"default"` profile section falls back to the SDK's unscoped default resolution, but a named profile that doesn't exist still errors since the operator explicitly asked for it.
+
+</details>
 
 #### NewAWSProvider
 
-??? note "Signature — `NewAWSProvider`"
+<details>
+<summary>Signature — `NewAWSProvider`</summary>
 
-    ```go
-    func NewAWSProvider(ctx context.Context, profile string, opts ...Option) (*AWSProvider, error)
-    ```
+```go
+func NewAWSProvider(ctx context.Context, profile string, opts ...Option) (*AWSProvider, error)
+```
 
-    - **Behavior:** builds a provider scoped to one named profile in `~/.aws/config`. An empty `profile` defaults to `"default"`.
-    - **Invariants:** see the `AWSProvider` invariant above for the fallback behavior on a missing default profile.
+- **Behavior:** builds a provider scoped to one named profile in `~/.aws/config`. An empty `profile` defaults to `"default"`.
+- **Invariants:** see the `AWSProvider` invariant above for the fallback behavior on a missing default profile.
+
+</details>
 
 #### stsAPI
 
-??? abstract "Signature — `stsAPI` interface"
+<details>
+<summary>Signature — `stsAPI` interface</summary>
 
-    ```go
-    type stsAPI interface {
-        GetCallerIdentity(...) (...)
-    }
-    ```
+```go
+type stsAPI interface {
+    GetCallerIdentity(...) (...)
+}
+```
 
-    - **Behavior:** narrow single-method interface over the AWS STS client, existing solely to make `AWSProvider.IsAuthenticated` testable without live cloud credentials.
+- **Behavior:** narrow single-method interface over the AWS STS client, existing solely to make `AWSProvider.IsAuthenticated` testable without live cloud credentials.
+
+</details>
 
 ## azure.go
 
 #### AzureProvider
 
-??? abstract "Signature — `AzureProvider` struct"
+<details>
+<summary>Signature — `AzureProvider` struct</summary>
 
-    ```go
-    type AzureProvider struct {
-        run     commandRunner
-        newCred func() (tokenCredential, error)
-        logger  *slog.Logger
-    }
-    ```
+```go
+type AzureProvider struct {
+    run     commandRunner
+    newCred func() (tokenCredential, error)
+    logger  *slog.Logger
+}
+```
 
-    - **Fields/Params:** `newCred` is a factory over `azidentity.NewAzureCLICredential`, narrowed to the `tokenCredential` interface (`GetToken`) for testability — the same pattern as `stsAPI`.
-    - **Behavior:** authenticates via the `az` CLI. `internal/provisioner/azure`'s `NewDefaultAzureCredential` falls back to exactly this cached session once no environment/managed-identity credential is available, so a logged-in `az` CLI is what makes kubespin's own Azure client construction work.
-    - **Invariants:** `IsAuthenticated` requests a real management-plane token (`azureManagementScope = "https://management.azure.com/.default"`) rather than just checking `az account show`, so an expired or revoked session is reported accurately.
+- **Fields/Params:** `newCred` is a factory over `azidentity.NewAzureCLICredential`, narrowed to the `tokenCredential` interface (`GetToken`) for testability — the same pattern as `stsAPI`.
+- **Behavior:** authenticates via the `az` CLI. `internal/provisioner/azure`'s `NewDefaultAzureCredential` falls back to exactly this cached session once no environment/managed-identity credential is available, so a logged-in `az` CLI is what makes kubespin's own Azure client construction work.
+- **Invariants:** `IsAuthenticated` requests a real management-plane token (`azureManagementScope = "https://management.azure.com/.default"`) rather than just checking `az account show`, so an expired or revoked session is reported accurately.
+
+</details>
 
 #### NewAzureProvider
 
-??? note "Signature — `NewAzureProvider`"
+<details>
+<summary>Signature — `NewAzureProvider`</summary>
 
-    ```go
-    func NewAzureProvider(opts ...Option) *AzureProvider
-    ```
+```go
+func NewAzureProvider(opts ...Option) *AzureProvider
+```
 
-    - **Behavior:** builds a provider over the `az` CLI's cached session.
+- **Behavior:** builds a provider over the `az` CLI's cached session.
+
+</details>
 
 #### tokenCredential
 
-??? abstract "Signature — `tokenCredential` interface"
+<details>
+<summary>Signature — `tokenCredential` interface</summary>
 
-    ```go
-    type tokenCredential interface {
-        GetToken(...) (...)
-    }
-    ```
+```go
+type tokenCredential interface {
+    GetToken(...) (...)
+}
+```
 
-    - **Behavior:** narrow single-method interface over the Azure `azidentity` credential, existing solely to make `AzureProvider.IsAuthenticated` testable without live cloud credentials.
+- **Behavior:** narrow single-method interface over the Azure `azidentity` credential, existing solely to make `AzureProvider.IsAuthenticated` testable without live cloud credentials.
+
+</details>
 
 ## gcp.go
 
 #### GCPProvider
 
-??? abstract "Signature — `GCPProvider` struct"
+<details>
+<summary>Signature — `GCPProvider` struct</summary>
 
-    ```go
-    type GCPProvider struct {
-        run    commandRunner
-        out    commandOutput
-        logger *slog.Logger
-    }
-    ```
+```go
+type GCPProvider struct {
+    run    commandRunner
+    out    commandOutput
+    logger *slog.Logger
+}
+```
 
-    - **Behavior:** authenticates via `gcloud`: a user login (for interactive/CLI use) plus Application Default Credentials (what the GCP SDK clients in `internal/provisioner/gcp` actually read).
-    - **Invariants:** `Login`/`Logout` always perform *both* the user login/revoke and the Application Default Credentials login/revoke — skipping the ADC leg is the classic "gcloud works but my Go program can't authenticate" trap.
+- **Behavior:** authenticates via `gcloud`: a user login (for interactive/CLI use) plus Application Default Credentials (what the GCP SDK clients in `internal/provisioner/gcp` actually read).
+- **Invariants:** `Login`/`Logout` always perform *both* the user login/revoke and the Application Default Credentials login/revoke — skipping the ADC leg is the classic "gcloud works but my Go program can't authenticate" trap.
+
+</details>
 
 #### NewGCPProvider
 
-??? note "Signature — `NewGCPProvider`"
+<details>
+<summary>Signature — `NewGCPProvider`</summary>
 
-    ```go
-    func NewGCPProvider(opts ...Option) *GCPProvider
-    ```
+```go
+func NewGCPProvider(opts ...Option) *GCPProvider
+```
 
-    - **Behavior:** builds a provider that shells out to the `gcloud` CLI.
+- **Behavior:** builds a provider that shells out to the `gcloud` CLI.
+
+</details>
 
 ## status.go
 
 #### WriteTable
 
-??? note "Signature — `WriteTable`"
+<details>
+<summary>Signature — `WriteTable`</summary>
 
-    ```go
-    func WriteTable(w io.Writer, results []Result)
-    ```
+```go
+func WriteTable(w io.Writer, results []Result)
+```
 
-    - **Behavior:** renders `Result`s the way `login`/`status`/`logout` show them: one line per provider via `tabwriter`, a `✓`/`✗` mark, and whatever detail `IsAuthenticated` reported.
-        - `Err != nil` → `✗`, detail is the error text.
-        - not authenticated and no error → `✗`, detail defaults to `"not authenticated — run: kubespin login --only <provider>"` if `Status.Message` is empty.
-        - authenticated with `Status.ExpiresAt` set → detail is suffixed with `"(session expires in <duration>)"`.
+- **Behavior:** renders `Result`s the way `login`/`status`/`logout` show them: one line per provider via `tabwriter`, a `✓`/`✗` mark, and whatever detail `IsAuthenticated` reported.
+    - `Err != nil` → `✗`, detail is the error text.
+    - not authenticated and no error → `✗`, detail defaults to `"not authenticated — run: kubespin login --only <provider>"` if `Status.Message` is empty.
+    - authenticated with `Status.ExpiresAt` set → detail is suffixed with `"(session expires in <duration>)"`.
+
+</details>

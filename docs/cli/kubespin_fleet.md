@@ -1,3 +1,7 @@
+---
+title: kubespin fleet
+---
+
 # kubespin fleet
 
 Operate on the whole fleet rather than a single cluster

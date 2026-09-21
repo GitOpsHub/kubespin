@@ -1,3 +1,7 @@
+---
+title: kubespin logout
+---
+
 # kubespin logout
 
 Clear cached sessions for one or more cloud providers

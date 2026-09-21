@@ -13,6 +13,7 @@ go build ./...              # or: make build (also builds the ingestion Lambda h
 go test ./...                # or: make test (-race -cover)
 golangci-lint run             # or: make lint
 make docs                     # regenerates docs/cli/*.md from the command tree; must be a no-op when current
+make docs-serve                # serves the Docusaurus docs site locally, reading content from docs/
 ```
 
 `make bootstrap` installs `golangci-lint` if it isn't already on PATH. `make lambda` cross-compiles the ingestion handler alone (`GOOS=linux GOARCH=arm64`, required before `kubespin fleet bootstrap` — see [docs/fleet-bootstrap.md](docs/fleet-bootstrap.md)).

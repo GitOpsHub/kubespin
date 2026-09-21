@@ -1,3 +1,8 @@
+---
+slug: /
+title: kubespin documentation
+---
+
 # kubespin documentation
 
 kubespin provisions Kubernetes clusters across EKS, GKE, and AKS. Each cluster

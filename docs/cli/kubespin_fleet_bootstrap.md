@@ -1,3 +1,7 @@
+---
+title: kubespin fleet bootstrap
+---
+
 # kubespin fleet bootstrap
 
 Provision the shared fleet infrastructure in the fleet account

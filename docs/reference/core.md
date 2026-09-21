@@ -27,154 +27,187 @@
 
 #### ErrInvalidSpec
 
-??? warning "Signature: `ErrInvalidSpec`"
+<details>
+<summary>Signature: `ErrInvalidSpec`</summary>
 
-    ```go
-    var ErrInvalidSpec = errors.New("invalid spec")
-    ```
+```go
+var ErrInvalidSpec = errors.New("invalid spec")
+```
 
-    - **Behavior:** sentinel wrapping every validation failure produced by this package's `Validate` methods.
-    - **Invariants:** callers must branch with `errors.Is(err, core.ErrInvalidSpec)` rather than matching on message text.
+- **Behavior:** sentinel wrapping every validation failure produced by this package's `Validate` methods.
+- **Invariants:** callers must branch with `errors.Is(err, core.ErrInvalidSpec)` rather than matching on message text.
+
+</details>
 
 #### Provider
 
-??? abstract "Signature: `Provider`"
+<details>
+<summary>Signature: `Provider`</summary>
 
-    ```go
-    type Provider string
+```go
+type Provider string
 
-    const (
-        ProviderAWS   Provider = "aws"
-        ProviderGCP   Provider = "gcp"
-        ProviderAzure Provider = "azure"
-    )
-    ```
+const (
+    ProviderAWS   Provider = "aws"
+    ProviderGCP   Provider = "gcp"
+    ProviderAzure Provider = "azure"
+)
+```
 
-    - **Behavior:** identifies the cloud a cluster is provisioned on; each has an implementation under `internal/provisioner`.
+- **Behavior:** identifies the cloud a cluster is provisioned on; each has an implementation under `internal/provisioner`.
+
+</details>
 
 #### Providers
 
-??? note "Signature: `Providers`, `(Provider) Valid`, `(Provider) String`"
+<details>
+<summary>Signature: `Providers`, `(Provider) Valid`, `(Provider) String`</summary>
 
-    ```go
-    func Providers() []Provider
-    func (p Provider) Valid() bool
-    func (p Provider) String() string
-    ```
+```go
+func Providers() []Provider
+func (p Provider) Valid() bool
+func (p Provider) String() string
+```
 
-    - **Behavior:** `Providers` returns all three constants in the order help text should show them; `Valid` is true only for the three constants; `String` renders the raw value.
+- **Behavior:** `Providers` returns all three constants in the order help text should show them; `Valid` is true only for the three constants; `String` renders the raw value.
+
+</details>
 
 #### Access
 
-??? abstract "Signature: `Access`"
+<details>
+<summary>Signature: `Access`</summary>
 
-    ```go
-    type Access string
+```go
+type Access string
 
-    const (
-        AccessPrivate Access = "private"
-        AccessPublic  Access = "public"
-    )
-    ```
+const (
+    AccessPrivate Access = "private"
+    AccessPublic  Access = "public"
+)
+```
 
-    - **Behavior:** the cluster's API server exposure model.
-    - **Invariants:** it is a first-class field rather than a per-cloud option because it branches behavior in two places: cluster creation (endpoint/authorized-network config, per cloud) and addon templating (internal load balancer unless `AccessPublic` combines with an external ingress exposure).
+- **Behavior:** the cluster's API server exposure model.
+- **Invariants:** it is a first-class field rather than a per-cloud option because it branches behavior in two places: cluster creation (endpoint/authorized-network config, per cloud) and addon templating (internal load balancer unless `AccessPublic` combines with an external ingress exposure).
 
-??? note "Signature: `(Access) Valid`, `(Access) String`"
+</details>
 
-    ```go
-    func (a Access) Valid() bool
-    func (a Access) String() string
-    ```
+<details>
+<summary>Signature: `(Access) Valid`, `(Access) String`</summary>
 
-    - **Behavior:** `Valid` is true for `AccessPrivate` or `AccessPublic`; `String` renders the raw value.
+```go
+func (a Access) Valid() bool
+func (a Access) String() string
+```
+
+- **Behavior:** `Valid` is true for `AccessPrivate` or `AccessPublic`; `String` renders the raw value.
+
+</details>
 
 #### ClusterID
 
-??? abstract "Signature: `ClusterID`"
+<details>
+<summary>Signature: `ClusterID`</summary>
 
-    ```go
-    type ClusterID string
-    ```
+```go
+type ClusterID string
+```
 
-    - **Behavior:** uniquely identifies a cluster across the whole fleet.
-    - **Invariants:** it is the Fleet Registry partition key and the suffix of the cluster's repository name, so it is immutable once a cluster reaches `PhaseClusterCreated`.
+- **Behavior:** uniquely identifies a cluster across the whole fleet.
+- **Invariants:** it is the Fleet Registry partition key and the suffix of the cluster's repository name, so it is immutable once a cluster reaches `PhaseClusterCreated`.
 
-??? note "Signature: `(ClusterID) Validate`, `(ClusterID) String`"
+</details>
 
-    ```go
-    func (id ClusterID) Validate() error
-    func (id ClusterID) String() string
-    ```
+<details>
+<summary>Signature: `(ClusterID) Validate`, `(ClusterID) String`</summary>
 
-    - **Behavior:** `Validate` requires a match against `^[a-z][a-z0-9-]{1,38}[a-z0-9]$` (3-40 chars, lowercase alphanumeric or hyphen, starting with a letter, ending alphanumeric — legal simultaneously as a GitHub repo suffix, a DNS label, and a cloud resource name); empty IDs get a dedicated message.
+```go
+func (id ClusterID) Validate() error
+func (id ClusterID) String() string
+```
+
+- **Behavior:** `Validate` requires a match against `^[a-z][a-z0-9-]{1,38}[a-z0-9]$` (3-40 chars, lowercase alphanumeric or hyphen, starting with a letter, ending alphanumeric — legal simultaneously as a GitHub repo suffix, a DNS label, and a cloud resource name); empty IDs get a dedicated message.
+
+</details>
 
 #### NodePool
 
-??? abstract "Signature: `NodePool`"
+<details>
+<summary>Signature: `NodePool`</summary>
 
-    ```go
-    type NodePool struct {
-        Name         string
-        InstanceType string
-        MinSize      int32
-        MaxSize      int32
-        DesiredSize  int32
-        DiskSizeGB   int32             // optional
-        Labels       map[string]string // optional
-    }
-    ```
+```go
+type NodePool struct {
+    Name         string
+    InstanceType string
+    MinSize      int32
+    MaxSize      int32
+    DesiredSize  int32
+    DiskSizeGB   int32             // optional
+    Labels       map[string]string // optional
+}
+```
 
-    - **Behavior:** a homogeneous group of worker nodes; sizing changes here are infra diffs that resolve to a cloud SDK reconcile call, never a git commit.
+- **Behavior:** a homogeneous group of worker nodes; sizing changes here are infra diffs that resolve to a cloud SDK reconcile call, never a git commit.
 
-??? note "Signature: `(NodePool) Validate`"
+</details>
 
-    ```go
-    func (np NodePool) Validate() error
-    ```
+<details>
+<summary>Signature: `(NodePool) Validate`</summary>
 
-    - **Behavior:** joins every violation found rather than stopping at the first.
-    - **Invariants:** `Name` required; `InstanceType` required; `MinSize >= 0`; `MaxSize >= 1`; `MinSize <= MaxSize`; `DesiredSize` within `[MinSize, MaxSize]`; `DiskSizeGB >= 0`. Cross-pool checks (unique names within a spec) live on `ClusterSpec.Validate`, not here.
+```go
+func (np NodePool) Validate() error
+```
+
+- **Behavior:** joins every violation found rather than stopping at the first.
+- **Invariants:** `Name` required; `InstanceType` required; `MinSize >= 0`; `MaxSize >= 1`; `MinSize <= MaxSize`; `DesiredSize` within `[MinSize, MaxSize]`; `DiskSizeGB >= 0`. Cross-pool checks (unique names within a spec) live on `ClusterSpec.Validate`, not here.
+
+</details>
 
 #### ClusterSpec
 
-??? abstract "Signature: `ClusterSpec`"
+<details>
+<summary>Signature: `ClusterSpec`</summary>
 
-    ```go
-    type ClusterSpec struct {
-        ID                ClusterID
-        Provider          Provider
-        Region            string
-        Access            Access
-        KubernetesVersion string          // optional, "MAJOR.MINOR"
-        NodePools         []NodePool
-        Size              ClusterSize
-        AuthorizedCIDRs   []string        // optional
-        Subnets           []string
-        VPCCIDR           string          // optional, AWS only
-        VNetCIDR          string          // optional, Azure only
-        SubnetCIDR        string          // optional, Azure/GCP only
-        Overrides         []AddonOverride // optional
-    }
-    ```
+```go
+type ClusterSpec struct {
+    ID                ClusterID
+    Provider          Provider
+    Region            string
+    Access            Access
+    KubernetesVersion string          // optional, "MAJOR.MINOR"
+    NodePools         []NodePool
+    Size              ClusterSize
+    AuthorizedCIDRs   []string        // optional
+    Subnets           []string
+    VPCCIDR           string          // optional, AWS only
+    VNetCIDR          string          // optional, Azure only
+    SubnetCIDR        string          // optional, Azure/GCP only
+    Overrides         []AddonOverride // optional
+}
+```
 
-    - **Behavior:** the desired state of one cluster — the contents of `cluster.yaml` in that cluster's repository.
-    - **Fields:**
-        - `AuthorizedCIDRs` — restricts API server access; meaningful only for `AccessPublic` (a private cluster has no public endpoint to restrict).
-        - `Subnets` — places the cluster on an existing network (subnet IDs on AWS, a subnetwork on GCP, a subnet resource ID on Azure); when empty, `EnsureNetwork` creates a network deterministically named from the cluster ID on every provider, so a resumed or repeated `apply` adopts existing resources instead of duplicating them — leaving this empty in the persisted `cluster.yaml` durably means "kubespin manages this cluster's network."
-        - `VPCCIDR` — sizes the VPC kubespin creates on AWS when `Subnets` is empty; AWS-only, ignored otherwise; empty means kubespin's default.
-        - `VNetCIDR` — sizes the VNet kubespin creates on Azure when `Subnets` is empty; Azure-only, ignored otherwise.
-        - `SubnetCIDR` — sizes the single subnet/subnetwork kubespin creates when `Subnets` is empty, on Azure or GCP; ignored on AWS (which derives two subnets from `VPCCIDR` instead).
-        - `Overrides` — per-cluster patch onto `Size`'s resolved addon set; lives in the user-authored `cluster.yaml` rather than a separate file, since the derived `addons.yaml` is not user-edited.
+- **Behavior:** the desired state of one cluster — the contents of `cluster.yaml` in that cluster's repository.
+- **Fields:**
+    - `AuthorizedCIDRs` — restricts API server access; meaningful only for `AccessPublic` (a private cluster has no public endpoint to restrict).
+    - `Subnets` — places the cluster on an existing network (subnet IDs on AWS, a subnetwork on GCP, a subnet resource ID on Azure); when empty, `EnsureNetwork` creates a network deterministically named from the cluster ID on every provider, so a resumed or repeated `apply` adopts existing resources instead of duplicating them — leaving this empty in the persisted `cluster.yaml` durably means "kubespin manages this cluster's network."
+    - `VPCCIDR` — sizes the VPC kubespin creates on AWS when `Subnets` is empty; AWS-only, ignored otherwise; empty means kubespin's default.
+    - `VNetCIDR` — sizes the VNet kubespin creates on Azure when `Subnets` is empty; Azure-only, ignored otherwise.
+    - `SubnetCIDR` — sizes the single subnet/subnetwork kubespin creates when `Subnets` is empty, on Azure or GCP; ignored on AWS (which derives two subnets from `VPCCIDR` instead).
+    - `Overrides` — per-cluster patch onto `Size`'s resolved addon set; lives in the user-authored `cluster.yaml` rather than a separate file, since the derived `addons.yaml` is not user-edited.
 
-??? note "Signature: `(ClusterSpec) Validate`"
+</details>
 
-    ```go
-    func (s ClusterSpec) Validate() error
-    ```
+<details>
+<summary>Signature: `(ClusterSpec) Validate`</summary>
 
-    - **Behavior:** joins every problem found rather than stopping at the first, so a user fixing a spec sees the full list in one run.
-    - **Invariants:** `ID.Validate()`; `Provider.Valid()`; `Region` non-empty; `Access.Valid()`; `KubernetesVersion`, if set, matches `^\d+\.\d+$`; `AuthorizedCIDRs` must be empty when `Access == AccessPrivate`; at least one `NodePool`; `VPCCIDR`/`VNetCIDR`/`SubnetCIDR`, if set, must each parse as a valid CIDR; each `NodePool.Validate()` plus rejection of duplicate node pool names; `Size.Valid()`; each `Overrides[i].Validate()` plus rejection of duplicate override addon names. Subnets themselves are not required to be non-empty — every provider is allowed to omit them, since `EnsureNetwork` creates a network when none is supplied.
+```go
+func (s ClusterSpec) Validate() error
+```
+
+- **Behavior:** joins every problem found rather than stopping at the first, so a user fixing a spec sees the full list in one run.
+- **Invariants:** `ID.Validate()`; `Provider.Valid()`; `Region` non-empty; `Access.Valid()`; `KubernetesVersion`, if set, matches `^\d+\.\d+$`; `AuthorizedCIDRs` must be empty when `Access == AccessPrivate`; at least one `NodePool`; `VPCCIDR`/`VNetCIDR`/`SubnetCIDR`, if set, must each parse as a valid CIDR; each `NodePool.Validate()` plus rejection of duplicate node pool names; `Size.Valid()`; each `Overrides[i].Validate()` plus rejection of duplicate override addon names. Subnets themselves are not required to be non-empty — every provider is allowed to omit them, since `EnsureNetwork` creates a network when none is supplied.
+
+</details>
 
 ## Phase state machine (phase.go)
 
@@ -182,187 +215,227 @@ A cluster's position in the provisioning state machine. The orchestrator resumes
 
 #### ErrInvalidTransition
 
-??? warning "Signature: `ErrInvalidTransition`"
+<details>
+<summary>Signature: `ErrInvalidTransition`</summary>
 
-    ```go
-    var ErrInvalidTransition = errors.New("invalid phase transition")
-    ```
+```go
+var ErrInvalidTransition = errors.New("invalid phase transition")
+```
 
-    - **Behavior:** returned by `ValidateTransition` when a phase change is not legal.
-    - **Invariants:** the Fleet Registry checks this on every write, so an illegal state machine move fails at the storage boundary instead of being silently persisted.
+- **Behavior:** returned by `ValidateTransition` when a phase change is not legal.
+- **Invariants:** the Fleet Registry checks this on every write, so an illegal state machine move fails at the storage boundary instead of being silently persisted.
+
+</details>
 
 #### Phase
 
-??? abstract "Signature: `Phase`"
+<details>
+<summary>Signature: `Phase`</summary>
 
-    ```go
-    type Phase string
+```go
+type Phase string
 
-    const (
-        PhasePending          Phase = "pending"
-        PhaseClusterCreated   Phase = "cluster-created"
-        PhaseIdentityBound    Phase = "identity-bound"
-        PhaseRepoPushed       Phase = "repo-pushed"
-        PhaseArgoCDInstalled  Phase = "argocd-installed"
-        PhaseReady            Phase = "ready"
-        PhaseDecommissioning  Phase = "decommissioning"
-        PhaseDecommissioned   Phase = "decommissioned"
-    )
-    ```
+const (
+    PhasePending          Phase = "pending"
+    PhaseClusterCreated   Phase = "cluster-created"
+    PhaseIdentityBound    Phase = "identity-bound"
+    PhaseRepoPushed       Phase = "repo-pushed"
+    PhaseArgoCDInstalled  Phase = "argocd-installed"
+    PhaseReady            Phase = "ready"
+    PhaseDecommissioning  Phase = "decommissioning"
+    PhaseDecommissioned   Phase = "decommissioned"
+)
+```
 
-    - **Behavior:** `PhasePending` is the initial state; `PhaseReady` is the terminal happy-path state; `PhaseDecommissioning` is reachable from any live phase so a half-built cluster can still be deleted; `PhaseDecommissioned` is the only `Terminal()` phase.
+- **Behavior:** `PhasePending` is the initial state; `PhaseReady` is the terminal happy-path state; `PhaseDecommissioning` is reachable from any live phase so a half-built cluster can still be deleted; `PhaseDecommissioned` is the only `Terminal()` phase.
 
-??? note "Signature: `(Phase) Valid`, `(Phase) String`, `(Phase) Terminal`, `(Phase) Next`"
+</details>
 
-    ```go
-    func (p Phase) Valid() bool
-    func (p Phase) String() string
-    func (p Phase) Terminal() bool
-    func (p Phase) Next() (Phase, bool)
-    ```
+<details>
+<summary>Signature: `(Phase) Valid`, `(Phase) String`, `(Phase) Terminal`, `(Phase) Next`</summary>
 
-    - **Behavior:** `Valid` is derived from `PhaseOrder`, not the transition table, since terminal phases have no successor but are still valid phases to be in; `Terminal` is true only for `PhaseDecommissioned`; `Next` returns the happy-path successor phase from `forwardTransitions`, and `false` if `p` has none (i.e. `PhaseReady` or `PhaseDecommissioned`).
+```go
+func (p Phase) Valid() bool
+func (p Phase) String() string
+func (p Phase) Terminal() bool
+func (p Phase) Next() (Phase, bool)
+```
+
+- **Behavior:** `Valid` is derived from `PhaseOrder`, not the transition table, since terminal phases have no successor but are still valid phases to be in; `Terminal` is true only for `PhaseDecommissioned`; `Next` returns the happy-path successor phase from `forwardTransitions`, and `false` if `p` has none (i.e. `PhaseReady` or `PhaseDecommissioned`).
+
+</details>
 
 #### PhaseOrder
 
-??? abstract "Signature: `PhaseOrder`"
+<details>
+<summary>Signature: `PhaseOrder`</summary>
 
-    ```go
-    var PhaseOrder = []Phase{
-        PhasePending, PhaseClusterCreated, PhaseIdentityBound,
-        PhaseRepoPushed, PhaseArgoCDInstalled, PhaseReady,
-        PhaseDecommissioning, PhaseDecommissioned,
-    }
-    ```
+```go
+var PhaseOrder = []Phase{
+    PhasePending, PhaseClusterCreated, PhaseIdentityBound,
+    PhaseRepoPushed, PhaseArgoCDInstalled, PhaseReady,
+    PhaseDecommissioning, PhaseDecommissioned,
+}
+```
 
-    - **Behavior:** every phase, in state machine order, for display and iteration.
-    - **Invariants:** this is the authoritative list of phases — `Phase.Valid` is derived from it, so a new phase constant is only recognized once it is registered here.
+- **Behavior:** every phase, in state machine order, for display and iteration.
+- **Invariants:** this is the authoritative list of phases — `Phase.Valid` is derived from it, so a new phase constant is only recognized once it is registered here.
+
+</details>
 
 #### CanTransition
 
-??? note "Signature: `CanTransition`"
+<details>
+<summary>Signature: `CanTransition`</summary>
 
-    ```go
-    func CanTransition(from, to Phase) bool
-    ```
+```go
+func CanTransition(from, to Phase) bool
+```
 
-    - **Behavior:** reports whether `from -> to` is legal; both phases must be `Valid`.
-    - **Invariants:** three rules in precedence order: (1) a phase may always transition to itself (idempotent no-op on retry); (2) any live (non-terminal) phase may enter `PhaseDecommissioning`; (3) otherwise only the single forward step recorded in `forwardTransitions` is legal — no skipping ahead, no rollback.
+- **Behavior:** reports whether `from -> to` is legal; both phases must be `Valid`.
+- **Invariants:** three rules in precedence order: (1) a phase may always transition to itself (idempotent no-op on retry); (2) any live (non-terminal) phase may enter `PhaseDecommissioning`; (3) otherwise only the single forward step recorded in `forwardTransitions` is legal — no skipping ahead, no rollback.
+
+</details>
 
 #### ValidateTransition
 
-??? note "Signature: `ValidateTransition`"
+<details>
+<summary>Signature: `ValidateTransition`</summary>
 
-    ```go
-    func ValidateTransition(from, to Phase) error
-    ```
+```go
+func ValidateTransition(from, to Phase) error
+```
 
-    - **Behavior:** wraps `CanTransition` with a descriptive, `ErrInvalidTransition`-wrapped error — reports unknown phases by name, or `from -> to` when both are known but the move isn't allowed; returns `nil` when the transition is legal.
+- **Behavior:** wraps `CanTransition` with a descriptive, `ErrInvalidTransition`-wrapped error — reports unknown phases by name, or `from -> to` when both are known but the move isn't allowed; returns `nil` when the transition is legal.
+
+</details>
 
 ## size.go
 
 #### ClusterSize
 
-??? abstract "Signature: `ClusterSize`"
+<details>
+<summary>Signature: `ClusterSize`</summary>
 
-    ```go
-    type ClusterSize string
+```go
+type ClusterSize string
 
-    const (
-        SizeSmall  ClusterSize = "small"
-        SizeMedium ClusterSize = "medium"
-        SizeLarge  ClusterSize = "large"
-    )
+const (
+    SizeSmall  ClusterSize = "small"
+    SizeMedium ClusterSize = "medium"
+    SizeLarge  ClusterSize = "large"
+)
 
-    func Sizes() []ClusterSize
-    func (s ClusterSize) Valid() bool
-    func (s ClusterSize) String() string
-    ```
+func Sizes() []ClusterSize
+func (s ClusterSize) Valid() bool
+func (s ClusterSize) String() string
+```
 
-    - **Behavior:** picks a cluster's default addon footprint from the builtin catalog (`internal/catalog`) — no external profile repository, no version to pin. Changing what a size includes means shipping a new kubespin build.
-    - **Behavior:** `Sizes()` lists every supported size in help-text order; `Valid()` reports whether a value is one of the three consts; `String()` is the identity conversion.
-    - **Invariants:** there is no "latest" or unpinned concept here — every size is a fixed, named entry in the builtin catalog, not a moving target.
+- **Behavior:** picks a cluster's default addon footprint from the builtin catalog (`internal/catalog`) — no external profile repository, no version to pin. Changing what a size includes means shipping a new kubespin build.
+- **Behavior:** `Sizes()` lists every supported size in help-text order; `Valid()` reports whether a value is one of the three consts; `String()` is the identity conversion.
+- **Invariants:** there is no "latest" or unpinned concept here — every size is a fixed, named entry in the builtin catalog, not a moving target.
+
+</details>
 
 ## profile.go
 
 #### AddonRef
 
-??? abstract "Signature: `AddonRef`"
+<details>
+<summary>Signature: `AddonRef`</summary>
 
-    ```go
-    type AddonRef struct {
-        Name       string
-        Chart      string
-        Repository string
-        Version    string
-        Namespace  string
-        Values     map[string]any
-        Providers  []Provider // optional
-    }
-    ```
+```go
+type AddonRef struct {
+    Name       string
+    Chart      string
+    Repository string
+    Version    string
+    Namespace  string
+    Values     map[string]any
+    Providers  []Provider // optional
+}
+```
 
-    - **Behavior:** one Helm chart delivered to a cluster; each addon becomes its own Argo CD Application, so addons sync and fail independently.
-    - **Fields:** `Providers` restricts the addon to the named clouds (e.g. Karpenter, EKS-only); empty means every provider — only `Profile.ForProvider` acts on it, so a profile resolved without going through `ForProvider` still carries every addon regardless of this field.
+- **Behavior:** one Helm chart delivered to a cluster; each addon becomes its own Argo CD Application, so addons sync and fail independently.
+- **Fields:** `Providers` restricts the addon to the named clouds (e.g. Karpenter, EKS-only); empty means every provider — only `Profile.ForProvider` acts on it, so a profile resolved without going through `ForProvider` still carries every addon regardless of this field.
 
-??? note "Signature: `(AddonRef) Validate`, `(AddonRef) SupportsProvider`"
+</details>
 
-    ```go
-    func (a AddonRef) Validate() error
-    func (a AddonRef) SupportsProvider(provider Provider) bool
-    ```
+<details>
+<summary>Signature: `(AddonRef) Validate`, `(AddonRef) SupportsProvider`</summary>
 
-    - **Behavior:** `Validate` requires `Name` (valid name pattern), `Chart`, `Repository`, `Namespace`, and each entry in `Providers` to be `Valid()`; `SupportsProvider` is true when `Providers` is empty or contains `provider`.
-    - **Invariants:** `Version` is mandatory — an unpinned addon would make a cluster's resolved state unreproducible, breaking the `.state.yaml` no-op guarantee.
+```go
+func (a AddonRef) Validate() error
+func (a AddonRef) SupportsProvider(provider Provider) bool
+```
+
+- **Behavior:** `Validate` requires `Name` (valid name pattern), `Chart`, `Repository`, `Namespace`, and each entry in `Providers` to be `Valid()`; `SupportsProvider` is true when `Providers` is empty or contains `provider`.
+- **Invariants:** `Version` is mandatory — an unpinned addon would make a cluster's resolved state unreproducible, breaking the `.state.yaml` no-op guarantee.
+
+</details>
 
 #### AddonOverride
 
-??? abstract "Signature: `AddonOverride`"
+<details>
+<summary>Signature: `AddonOverride`</summary>
 
-    ```go
-    type AddonOverride struct {
-        Name    string
-        Version string         // optional
-        Values  map[string]any // optional
-        Disable bool           // optional
-    }
-    ```
+```go
+type AddonOverride struct {
+    Name    string
+    Version string         // optional
+    Values  map[string]any // optional
+    Disable bool           // optional
+}
+```
 
-    - **Behavior:** patches one addon of a resolved profile, by name, as part of a cluster's per-cluster override patch; `Disable` drops the addon from the resolved set entirely.
-    - **Invariants:** every field but `Name` is optional and additive (a zero `Version` leaves the profile's pinned version alone, a nil `Values` leaves the profile's values alone); it never introduces a new addon — `Name` must match one the profile already carries, checked by `internal/catalog.Merge`, not here.
+- **Behavior:** patches one addon of a resolved profile, by name, as part of a cluster's per-cluster override patch; `Disable` drops the addon from the resolved set entirely.
+- **Invariants:** every field but `Name` is optional and additive (a zero `Version` leaves the profile's pinned version alone, a nil `Values` leaves the profile's values alone); it never introduces a new addon — `Name` must match one the profile already carries, checked by `internal/catalog.Merge`, not here.
 
-??? note "Signature: `(AddonOverride) Validate`"
+</details>
 
-    ```go
-    func (o AddonOverride) Validate() error
-    ```
+<details>
+<summary>Signature: `(AddonOverride) Validate`</summary>
 
-    - **Behavior:** checks only that `Name` matches the shared name pattern.
-    - **Invariants:** it cannot check that `Name` matches an addon in the profile being overridden, since that is a property of a `(profile, override)` pair, not of the override alone.
+```go
+func (o AddonOverride) Validate() error
+```
+
+- **Behavior:** checks only that `Name` matches the shared name pattern.
+- **Invariants:** it cannot check that `Name` matches an addon in the profile being overridden, since that is a property of a `(profile, override)` pair, not of the override alone.
+
+</details>
 
 #### Profile
 
-??? abstract "Signature: `Profile`"
+<details>
+<summary>Signature: `Profile`</summary>
 
-    ```go
-    type Profile struct {
-        Name   string
-        Addons []AddonRef
-    }
-    ```
+```go
+type Profile struct {
+    Name   string
+    Addons []AddonRef
+}
+```
 
-    - **Behavior:** a resolved size tier from the builtin catalog (`internal/catalog`) — the addon set a cluster gets before any per-cluster override patch is applied. `Name` holds the size string (e.g. `"small"`).
+- **Behavior:** a resolved size tier from the builtin catalog (`internal/catalog`) — the addon set a cluster gets before any per-cluster override patch is applied. `Name` holds the size string (e.g. `"small"`).
 
-??? note "Signature: `(Profile) ForProvider`, `(Profile) Addon`, `(Profile) Validate`"
+</details>
 
-    ```go
-    func (p Profile) ForProvider(provider Provider) Profile
-    func (p Profile) Addon(name string) (AddonRef, bool)
-    func (p Profile) Validate() error
-    ```
+<details>
+<summary>Signature: `(Profile) ForProvider`, `(Profile) Addon`, `(Profile) Validate`</summary>
 
-    - **Behavior:** `ForProvider` returns a copy of `p` with every addon that does not support `provider` dropped (via `AddonRef.SupportsProvider`); `Addon` looks up an addon by name, reporting whether it was found; `Validate` requires a non-empty `Name`, requires at least one addon, validates each `AddonRef`, and rejects duplicate addon names (two Argo CD Applications cannot share a name).
-    - **Invariants:** callers resolve a profile for a specific cluster's provider through `ForProvider` before applying override patches, so e.g. Karpenter never renders into a GCP or Azure cluster's `addons.yaml`, and an override naming it on those clouds correctly fails as unknown rather than silently applying.
-    - **Behavior:** `Addon` is what `internal/orchestrator.installArgoCDStep` uses to pull the `"argocd"` entry `catalog.ResolveForCluster` guarantees is always present, instead of a caller-side loop.
+```go
+func (p Profile) ForProvider(provider Provider) Profile
+func (p Profile) Addon(name string) (AddonRef, bool)
+func (p Profile) Validate() error
+```
 
-!!! note
-    `namePattern` (`^[a-z][a-z0-9-]{1,61}[a-z0-9]$`) is shared by `AddonRef` and `AddonOverride` name validation, since both surface as Argo CD Application names.
+- **Behavior:** `ForProvider` returns a copy of `p` with every addon that does not support `provider` dropped (via `AddonRef.SupportsProvider`); `Addon` looks up an addon by name, reporting whether it was found; `Validate` requires a non-empty `Name`, requires at least one addon, validates each `AddonRef`, and rejects duplicate addon names (two Argo CD Applications cannot share a name).
+- **Invariants:** callers resolve a profile for a specific cluster's provider through `ForProvider` before applying override patches, so e.g. Karpenter never renders into a GCP or Azure cluster's `addons.yaml`, and an override naming it on those clouds correctly fails as unknown rather than silently applying.
+- **Behavior:** `Addon` is what `internal/orchestrator.installArgoCDStep` uses to pull the `"argocd"` entry `catalog.ResolveForCluster` guarantees is always present, instead of a caller-side loop.
+
+</details>
+
+:::note
+`namePattern` (`^[a-z][a-z0-9-]{1,61}[a-z0-9]$`) is shared by `AddonRef` and `AddonOverride` name validation, since both surface as Argo CD Application names.
+:::

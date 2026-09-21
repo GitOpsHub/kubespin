@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - "docs/**"
-      - "mkdocs.yml"
+      - "website/**"
       - ".github/workflows/docs.yml"
   workflow_dispatch: {}
 
@@ -24,20 +24,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.12"
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: website/package-lock.json
 
-      - run: pip install -r docs/requirements.txt
+      - run: npm ci
+        working-directory: website
 
-      # --strict turns broken links and bad nav references into build failures.
-      # Without it the site published fine while carrying links to source files
-      # that only resolve when browsing the repository, not on Pages.
-      - run: mkdocs build --strict
+      # onBrokenLinks/onBrokenAnchors are set to "throw" in docusaurus.config.js,
+      # so a broken internal link or heading anchor fails the build here rather
+      # than shipping silently to Pages.
+      - run: npm run build
+        working-directory: website
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: website/build
 
   deploy:
     needs: build

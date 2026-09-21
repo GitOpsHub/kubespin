@@ -1,3 +1,7 @@
+---
+title: kubespin fleet audit
+---
+
 # kubespin fleet audit
 
 Diff live cloud infrastructure against each cluster's desired state

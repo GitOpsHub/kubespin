@@ -73,20 +73,24 @@ func polishAll(dir string) error {
 
 // polish applies the per-page rewrites.
 //
-// Three things cobra emits do not match the rest of the site:
+// Four things cobra emits do not match the rest of the site:
 //
-//   - The page title is an H2, so the page has no H1 at all. MkDocs derives a
-//     page's title and its table of contents from the H1, so every reference
-//     page arrived untitled and with its sections one level too deep.
+//   - The page title is an H2, so the page has no H1 at all. The site derives
+//     a page's title and its table of contents from the H1, so every
+//     reference page arrived untitled and with its sections one level too
+//     deep.
+//   - There is no frontmatter, so Docusaurus's sidebar has no title to show
+//     for the page other than its filename.
 //   - Code fences carry no language, so nothing is syntax-highlighted — the
 //     examples are the part of these pages people actually read.
 //   - "SEE ALSO" is shouted, where every hand-written heading is sentence case.
 func polish(md string) string {
 	lines := strings.Split(md, "\n")
-	out := make([]string, 0, len(lines))
+	out := make([]string, 0, len(lines)+4)
 
 	var section string
 	inFence := false
+	titled := false
 
 	for _, line := range lines {
 		switch {
@@ -112,8 +116,14 @@ func polish(md string) string {
 			continue
 
 		case strings.HasPrefix(line, "## "):
-			// Cobra's page title. Promoted to the H1 the page is missing.
-			out = append(out, "# "+strings.TrimPrefix(line, "## "))
+			// Cobra's page title. Promoted to the H1 the page is missing, and
+			// used as the page's frontmatter title for Docusaurus's sidebar.
+			title := strings.TrimPrefix(line, "## ")
+			if !titled {
+				out = append(out, frontmatter(title)...)
+				titled = true
+			}
+			out = append(out, "# "+title)
 			continue
 
 		case strings.HasPrefix(line, "* ["):
@@ -127,6 +137,12 @@ func polish(md string) string {
 	}
 
 	return strings.Join(out, "\n")
+}
+
+// frontmatter renders the YAML frontmatter block Docusaurus reads a page's
+// sidebar title from.
+func frontmatter(title string) []string {
+	return []string{"---", "title: " + title, "---", ""}
 }
 
 // fenceLanguage picks the highlighter for a code block by the section it sits

@@ -1,3 +1,7 @@
+---
+title: kubespin
+---
+
 # kubespin
 
 Provision and manage Kubernetes clusters across EKS, GKE, and AKS

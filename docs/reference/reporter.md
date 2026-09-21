@@ -36,205 +36,241 @@ constructors into a single `Push` call under a 30-second timeout.
 
 #### `Option`
 
-??? abstract "`Option` — Signature"
+<details>
+<summary>`Option` — Signature</summary>
 
-    ```go
-    type Option func(*options)
-    ```
+```go
+type Option func(*options)
+```
 
-    - Shared functional-option type for this package's constructors.
+- Shared functional-option type for this package's constructors.
+
+</details>
 
 #### `WithLogger`
 
-??? note "`WithLogger` — Signature"
+<details>
+<summary>`WithLogger` — Signature</summary>
 
-    ```go
-    func WithLogger(logger *slog.Logger) Option
-    ```
+```go
+func WithLogger(logger *slog.Logger) Option
+```
 
-    - **Behavior:** sets the logger a component uses; without it, a component
-      logs to `slog.Default()`. A nil `logger` argument is ignored rather than
-      clearing the default.
+- **Behavior:** sets the logger a component uses; without it, a component
+  logs to `slog.Default()`. A nil `logger` argument is ignored rather than
+  clearing the default.
+
+</details>
 
 #### `Summary`
 
-??? abstract "`Summary` — Signature"
+<details>
+<summary>`Summary` — Signature</summary>
 
-    ```go
-    type Summary struct {
-    	SyncedApps   int
-    	HealthyApps  int
-    	DegradedApps int
-    	CommitSHA    string
-    }
-    ```
+```go
+type Summary struct {
+	SyncedApps   int
+	HealthyApps  int
+	DegradedApps int
+	CommitSHA    string
+}
+```
 
-    - The compact status extracted from Argo CD: counts, not the full
-      application list, because the Central Ingestion API and Fleet Registry
-      only need to know "is this cluster healthy."
-    - **Invariants:**
-        - `CommitSHA` is set from the first synced application's revision seen
-          while iterating (see `summarize`, `argocd.go`).
-        - `DegradedApps` counts only Argo CD's `Degraded` health status —
-          deliberately narrow. Argo CD also reports `Progressing`, `Missing`,
-          `Unknown`, which are transient/informational and are not folded in,
-          so fleet status doesn't get noisy on every routine rollout.
+- The compact status extracted from Argo CD: counts, not the full
+  application list, because the Central Ingestion API and Fleet Registry
+  only need to know "is this cluster healthy."
+- **Invariants:**
+    - `CommitSHA` is set from the first synced application's revision seen
+      while iterating (see `summarize`, `argocd.go`).
+    - `DegradedApps` counts only Argo CD's `Degraded` health status —
+      deliberately narrow. Argo CD also reports `Progressing`, `Missing`,
+      `Unknown`, which are transient/informational and are not folded in,
+      so fleet status doesn't get noisy on every routine rollout.
+
+</details>
 
 #### `ArgoCDClient`
 
-??? abstract "`ArgoCDClient` — Signature"
+<details>
+<summary>`ArgoCDClient` — Signature</summary>
 
-    ```go
-    type ArgoCDClient interface {
-    	Summarize(ctx context.Context) (Summary, error)
-    }
-    ```
+```go
+type ArgoCDClient interface {
+	Summarize(ctx context.Context) (Summary, error)
+}
+```
 
-    - Interface a `Pusher` depends on to summarize the local Argo CD
-      instance's application state.
+- Interface a `Pusher` depends on to summarize the local Argo CD
+  instance's application state.
+
+</details>
 
 #### `HTTPArgoCDClient`
 
-??? abstract "`HTTPArgoCDClient` — Signature"
+<details>
+<summary>`HTTPArgoCDClient` — Signature</summary>
 
-    ```go
-    type HTTPArgoCDClient struct {
-    	// unexported: client *http.Client, baseURL, token string, logger *slog.Logger
-    }
-    ```
+```go
+type HTTPArgoCDClient struct {
+	// unexported: client *http.Client, baseURL, token string, logger *slog.Logger
+}
+```
 
-    - Calls the local Argo CD server's REST API over the in-cluster network —
-      the one connection inbound-to-the-namespace (fleet-status-reporter to
-      Argo CD) that this architecture allows, as distinct from
-      inbound-to-the-cluster from outside, which it never allows.
-    - Implements `ArgoCDClient`.
-    - Constructed via `NewHTTPArgoCDClient`.
-    - Authenticates to Argo CD with its own API token (`token`) — distinct
-      from the workload identity token `Pusher` later signs the ingestion
-      push with; the two prove different things to different services.
+- Calls the local Argo CD server's REST API over the in-cluster network —
+  the one connection inbound-to-the-namespace (fleet-status-reporter to
+  Argo CD) that this architecture allows, as distinct from
+  inbound-to-the-cluster from outside, which it never allows.
+- Implements `ArgoCDClient`.
+- Constructed via `NewHTTPArgoCDClient`.
+- Authenticates to Argo CD with its own API token (`token`) — distinct
+  from the workload identity token `Pusher` later signs the ingestion
+  push with; the two prove different things to different services.
+
+</details>
 
 #### `NewHTTPArgoCDClient`
 
-??? note "`NewHTTPArgoCDClient` — Signature"
+<details>
+<summary>`NewHTTPArgoCDClient` — Signature</summary>
 
-    ```go
-    func NewHTTPArgoCDClient(client *http.Client, baseURL, token string, opts ...Option) *HTTPArgoCDClient
-    ```
+```go
+func NewHTTPArgoCDClient(client *http.Client, baseURL, token string, opts ...Option) *HTTPArgoCDClient
+```
 
-    - **Params:** `client` (nil defaults to `http.DefaultClient`), `baseURL`
-      (typically `"https://argocd-server.argocd.svc:443"`), `token` (Argo
-      CD's own API token), `opts` (e.g. `WithLogger`).
-    - **Returns:** a configured `*HTTPArgoCDClient`.
-    - **Behavior:** pure construction, no I/O.
+- **Params:** `client` (nil defaults to `http.DefaultClient`), `baseURL`
+  (typically `"https://argocd-server.argocd.svc:443"`), `token` (Argo
+  CD's own API token), `opts` (e.g. `WithLogger`).
+- **Returns:** a configured `*HTTPArgoCDClient`.
+- **Behavior:** pure construction, no I/O.
+
+</details>
 
 #### `(*HTTPArgoCDClient) Summarize`
 
-??? note "`(*HTTPArgoCDClient) Summarize` — Signature"
+<details>
+<summary>`(*HTTPArgoCDClient) Summarize` — Signature</summary>
 
-    ```go
-    func (c *HTTPArgoCDClient) Summarize(ctx context.Context) (Summary, error)
-    ```
+```go
+func (c *HTTPArgoCDClient) Summarize(ctx context.Context) (Summary, error)
+```
 
-    - **Params:** `ctx` for request cancellation/timeout.
-    - **Returns:** a `Summary` built from Argo CD's application list, or an
-      error wrapping a request-building, network, non-200-status, or
-      JSON-decode failure.
-    - **Behavior:** `GET`s `{baseURL}/api/v1/applications`
-      (Bearer-authenticated if `token` is non-empty), decodes the response
-      into an internal `applicationList`/`application` shape (mirroring only
-      `status.sync.status`, `status.sync.revision`, and `status.health.status`),
-      and reduces it via `summarize`. Logs the query, the resulting counts,
-      and a warning if any application is degraded.
+- **Params:** `ctx` for request cancellation/timeout.
+- **Returns:** a `Summary` built from Argo CD's application list, or an
+  error wrapping a request-building, network, non-200-status, or
+  JSON-decode failure.
+- **Behavior:** `GET`s `{baseURL}/api/v1/applications`
+  (Bearer-authenticated if `token` is non-empty), decodes the response
+  into an internal `applicationList`/`application` shape (mirroring only
+  `status.sync.status`, `status.sync.revision`, and `status.health.status`),
+  and reduces it via `summarize`. Logs the query, the resulting counts,
+  and a warning if any application is degraded.
+
+</details>
 
 ## pusher.go
 
 #### `TokenSource`
 
-??? abstract "`TokenSource` — Signature"
+<details>
+<summary>`TokenSource` — Signature</summary>
 
-    ```go
-    type TokenSource interface {
-    	Token() (string, error)
-    }
-    ```
+```go
+type TokenSource interface {
+	Token() (string, error)
+}
+```
 
-    - Interface for reading the workload identity token `Pusher` signs its
-      push with. Nothing in this package mints or signs a token itself.
+- Interface for reading the workload identity token `Pusher` signs its
+  push with. Nothing in this package mints or signs a token itself.
+
+</details>
 
 #### `FileTokenSource`
 
-??? abstract "`FileTokenSource` — Signature"
+<details>
+<summary>`FileTokenSource` — Signature</summary>
 
-    ```go
-    type FileTokenSource struct {
-    	Path string
-    }
-    ```
+```go
+type FileTokenSource struct {
+	Path string
+}
+```
 
-    - Reads a token from a projected volume file — the standard Kubernetes
-      pattern for an audience-scoped service account token
-      (`serviceAccountToken` volume projection).
-    - Implements `TokenSource`.
-    - `Token()` reads `Path`, trims surrounding whitespace, and returns the
-      contents as a string.
+- Reads a token from a projected volume file — the standard Kubernetes
+  pattern for an audience-scoped service account token
+  (`serviceAccountToken` volume projection).
+- Implements `TokenSource`.
+- `Token()` reads `Path`, trims surrounding whitespace, and returns the
+  contents as a string.
+
+</details>
 
 #### `Pusher`
 
-??? abstract "`Pusher` — Signature"
+<details>
+<summary>`Pusher` — Signature</summary>
 
-    ```go
-    type Pusher struct {
-    	// unexported: client *http.Client, endpoint string, clusterID core.ClusterID,
-    	// tokens TokenSource, logger *slog.Logger
-    }
-    ```
+```go
+type Pusher struct {
+	// unexported: client *http.Client, endpoint string, clusterID core.ClusterID,
+	// tokens TokenSource, logger *slog.Logger
+}
+```
 
-    - Pushes one cluster's status to the Central Ingestion API.
-    - Constructed via `NewPusher`.
-    - `Push` is the only method (see below).
+- Pushes one cluster's status to the Central Ingestion API.
+- Constructed via `NewPusher`.
+- `Push` is the only method (see below).
+
+</details>
 
 #### `NewPusher`
 
-??? note "`NewPusher` — Signature"
+<details>
+<summary>`NewPusher` — Signature</summary>
 
-    ```go
-    func NewPusher(
-    	client *http.Client, endpoint string, clusterID core.ClusterID, tokens TokenSource, opts ...Option,
-    ) *Pusher
-    ```
+```go
+func NewPusher(
+	client *http.Client, endpoint string, clusterID core.ClusterID, tokens TokenSource, opts ...Option,
+) *Pusher
+```
 
-    - **Params:** `client` (nil defaults to `http.DefaultClient`), `endpoint`
-      (Central Ingestion API base URL, e.g.
-      `"https://ingest.kubespin.example.com"`), `clusterID`, `tokens`, `opts`.
-    - **Returns:** a configured `*Pusher`.
-    - **Behavior:** pure construction, no I/O.
+- **Params:** `client` (nil defaults to `http.DefaultClient`), `endpoint`
+  (Central Ingestion API base URL, e.g.
+  `"https://ingest.kubespin.example.com"`), `clusterID`, `tokens`, `opts`.
+- **Returns:** a configured `*Pusher`.
+- **Behavior:** pure construction, no I/O.
+
+</details>
 
 #### `(*Pusher) Push`
 
-??? note "`(*Pusher) Push` — Signature"
+<details>
+<summary>`(*Pusher) Push` — Signature</summary>
 
-    ```go
-    func (p *Pusher) Push(ctx context.Context, argocd ArgoCDClient) (accepted bool, err error)
-    ```
+```go
+func (p *Pusher) Push(ctx context.Context, argocd ArgoCDClient) (accepted bool, err error)
+```
 
-    - **Params:** `ctx`, and `argocd` — the `ArgoCDClient` to summarize before
-      pushing.
-    - **Returns:** `accepted` reports whether the ingestion API's HTTP status
-      was 2xx; `err` is non-nil only for a failure in this method's own steps
-      (summarizing Argo CD, reading the token, encoding the payload, building
-      or sending the HTTP request). A non-2xx response (bad token, unknown
-      cluster) is **not** a Go error — the doc comment is explicit that this
-      is a normal, expected outcome the caller's exit code decides how to
-      react to, mirroring how `ingestion.HandleStatus` on the receiving end
-      returns a status code rather than only an error.
-    - **Behavior:**
-        1. Calls `argocd.Summarize(ctx)`.
-        2. Calls `p.tokens.Token()` to get the workload identity token.
-        3. Marshals an `ingestion.StatusPayload{SyncedApps, HealthyApps, DegradedApps, CommitSHA}` from the summary.
-        4. `POST`s the JSON payload to `{endpoint}/clusters/{clusterID}/status`
-           with `Authorization: Bearer {token}` and `Content-Type: application/json`.
-        5. Logs acceptance (info) or rejection (warn), including the response
-           status code.
+- **Params:** `ctx`, and `argocd` — the `ArgoCDClient` to summarize before
+  pushing.
+- **Returns:** `accepted` reports whether the ingestion API's HTTP status
+  was 2xx; `err` is non-nil only for a failure in this method's own steps
+  (summarizing Argo CD, reading the token, encoding the payload, building
+  or sending the HTTP request). A non-2xx response (bad token, unknown
+  cluster) is **not** a Go error — the doc comment is explicit that this
+  is a normal, expected outcome the caller's exit code decides how to
+  react to, mirroring how `ingestion.HandleStatus` on the receiving end
+  returns a status code rather than only an error.
+- **Behavior:**
+    1. Calls `argocd.Summarize(ctx)`.
+    2. Calls `p.tokens.Token()` to get the workload identity token.
+    3. Marshals an `ingestion.StatusPayload{SyncedApps, HealthyApps, DegradedApps, CommitSHA}` from the summary.
+    4. `POST`s the JSON payload to `{endpoint}/clusters/{clusterID}/status`
+       with `Authorization: Bearer {token}` and `Content-Type: application/json`.
+    5. Logs acceptance (info) or rejection (warn), including the response
+       status code.
+
+</details>
 
 ## Wiring
 
