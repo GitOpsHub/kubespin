@@ -93,6 +93,15 @@ func TestClusterSpecValidate_Invalid(t *testing.T) {
 	}
 }
 
+func TestClusterSpecValidate_AutopilotSkipsNodePoolRequirement(t *testing.T) {
+	s := validSpec()
+	s.Autopilot = true
+	s.NodePools = nil
+	if err := s.Validate(); err != nil {
+		t.Fatalf("expected Autopilot with no node pools to be valid, got %v", err)
+	}
+}
+
 // Every provider's EnsureNetwork creates a network when none is supplied, so
 // an empty Subnets is valid on every cloud, not just Azure.
 func TestClusterSpecValidate_AllowsEmptySubnets(t *testing.T) {

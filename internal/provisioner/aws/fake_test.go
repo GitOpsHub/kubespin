@@ -29,14 +29,15 @@ import (
 type fakeAWS struct {
 	calls []string
 
-	cluster    *ekstypes.Cluster
-	nodeGroups map[string]*ekstypes.Nodegroup
-	addons     map[string]*ekstypes.Addon // name -> addon
-	roles      map[string]string          // name -> arn
-	rolePolicy map[string]string          // name -> assume role policy document
-	attached   map[string][]string
-	oidc       map[string]string // arn -> url host
-	sgRules    []ec2types.SecurityGroupRule
+	cluster           *ekstypes.Cluster
+	lastCreateCluster *eks.CreateClusterInput
+	nodeGroups        map[string]*ekstypes.Nodegroup
+	addons            map[string]*ekstypes.Addon // name -> addon
+	roles             map[string]string          // name -> arn
+	rolePolicy        map[string]string          // name -> assume role policy document
+	attached          map[string][]string
+	oidc              map[string]string // arn -> url host
+	sgRules           []ec2types.SecurityGroupRule
 
 	// nodeGroupDeletePolls models the real asynchrony of DeleteNodegroup: how
 	// many ListNodegroups calls a deleted node group survives before it is
@@ -134,6 +135,7 @@ func (f *fakeAWS) DescribeCluster(context.Context, *eks.DescribeClusterInput, ..
 
 func (f *fakeAWS) CreateCluster(_ context.Context, in *eks.CreateClusterInput, _ ...func(*eks.Options)) (*eks.CreateClusterOutput, error) {
 	f.record("CreateCluster")
+	f.lastCreateCluster = in
 	f.cluster = &ekstypes.Cluster{
 		Name:    in.Name,
 		Status:  ekstypes.ClusterStatusCreating,
@@ -682,6 +684,9 @@ func (f *fakeAWS) activeCluster(spec core.ClusterSpec) {
 			EndpointPrivateAccess:  true,
 			ClusterSecurityGroupId: aws.String("sg-cluster"),
 		},
+	}
+	if spec.Autopilot {
+		f.cluster.ComputeConfig = &ekstypes.ComputeConfigResponse{Enabled: aws.Bool(true)}
 	}
 }
 

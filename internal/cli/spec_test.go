@@ -385,6 +385,45 @@ func TestLoadSpec_NetworkCIDRFlags(t *testing.T) {
 	}
 }
 
+func TestLoadSpec_Autopilot_RejectsConflictingNodePoolFlags(t *testing.T) {
+	_, err := loadSpec(applyCmd(t,
+		"--cluster-id", "team-alpha",
+		"--provider", "gcp",
+		"--region", "us-central1",
+		"--subnets", "projects/p/regions/us-central1/subnetworks/default",
+		"--autopilot",
+		"--instance-type", "c5.xlarge",
+	))
+	if err == nil {
+		t.Fatal("expected an error combining --autopilot with --instance-type")
+	}
+	if !errors.Is(err, core.ErrInvalidSpec) {
+		t.Errorf("error %v does not wrap ErrInvalidSpec", err)
+	}
+	if !strings.Contains(err.Error(), "--instance-type") {
+		t.Errorf("error %q does not name the conflicting flag", err)
+	}
+}
+
+func TestLoadSpec_Autopilot_NoSyntheticNodePool(t *testing.T) {
+	spec, err := loadSpec(applyCmd(t,
+		"--cluster-id", "team-alpha",
+		"--provider", "gcp",
+		"--region", "us-central1",
+		"--subnets", "projects/p/regions/us-central1/subnetworks/default",
+		"--autopilot",
+	))
+	if err != nil {
+		t.Fatalf("loadSpec: %v", err)
+	}
+	if len(spec.NodePools) != 0 {
+		t.Errorf("NodePools = %v, want none synthesised under --autopilot", spec.NodePools)
+	}
+	if !spec.Autopilot {
+		t.Error("expected spec.Autopilot to be true")
+	}
+}
+
 func TestApply_ProvidersRequireCloudCredentials(t *testing.T) {
 	// GCP and Azure provisioners exist, but building their clients requires
 	// operator-supplied cloud scoping (project, subscription) that has no

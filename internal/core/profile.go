@@ -117,6 +117,22 @@ func (p Profile) ForProvider(provider Provider) Profile {
 	return out
 }
 
+// ForAutopilot returns a copy of p with every addon dropped when autopilot is
+// true. GKE Autopilot and EKS Auto Mode manage compute, storage, load
+// balancing, and node autoscaling themselves — none of a size tier's addons
+// (cluster-autoscaler, CSI drivers, ingress controllers, and so on) are
+// meaningful on top of that, so an Autopilot/Auto Mode cluster gets nothing
+// from the catalog beyond Argo CD itself (added back by
+// catalog.withArgoCDAddon regardless of this).
+func (p Profile) ForAutopilot(autopilot bool) Profile {
+	if !autopilot {
+		return p
+	}
+	out := p
+	out.Addons = nil
+	return out
+}
+
 // Addon returns the addon named name from p's addon set, if present.
 func (p Profile) Addon(name string) (AddonRef, bool) {
 	for _, a := range p.Addons {

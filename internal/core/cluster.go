@@ -217,6 +217,13 @@ type ClusterSpec struct {
 	// taking an explicit per-subnet size. Empty means "use kubespin's default."
 	SubnetCIDR string `yaml:"subnetCIDR,omitempty" json:"subnetCIDR,omitempty"`
 
+	// Autopilot requests each provider's fully-managed node mode instead of
+	// standard node-pool provisioning: GKE Autopilot on GCP, EKS Auto Mode on
+	// AWS. Azure has no equivalent and ignores this field. When true,
+	// NodePools is not required and is ignored if supplied — the provider
+	// manages compute itself.
+	Autopilot bool `yaml:"autopilot,omitempty" json:"autopilot,omitempty"`
+
 	// Overrides is this cluster's per-cluster patch onto the chosen ClusterSize's
 	// resolved addon Profile. It lives here, in the user-authored cluster.yaml, rather than
 	// in a separate file: the addons.yaml the catalog resolves to is derived
@@ -255,7 +262,7 @@ func (s ClusterSpec) Validate() error {
 	if s.Provider != ProviderGCP && s.PublicNodes {
 		errs = append(errs, fmt.Errorf("%w: publicNodes is meaningful only for provider gcp", ErrInvalidSpec))
 	}
-	if len(s.NodePools) == 0 {
+	if len(s.NodePools) == 0 && !s.Autopilot {
 		errs = append(errs, fmt.Errorf("%w: at least one node pool is required", ErrInvalidSpec))
 	}
 	// Subnets is optional on every provider: EnsureNetwork creates a network

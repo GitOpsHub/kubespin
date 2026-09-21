@@ -46,8 +46,14 @@ func (p *ClusterProvisioner) Create(ctx context.Context, spec core.ClusterSpec) 
 		return err
 	}
 
+	clusterPolicies := []string{policyEKSCluster}
+	if spec.Autopilot {
+		clusterPolicies = append(clusterPolicies,
+			policyEKSComputePolicy, policyEKSBlockStoragePolicy,
+			policyEKSLoadBalancingPolicy, policyEKSNetworkingPolicy)
+	}
 	clusterRoleARN, err := p.ensureRole(ctx, names{spec}.clusterRole(),
-		eksServiceTrust("eks.amazonaws.com"), []string{policyEKSCluster})
+		eksServiceTrust("eks.amazonaws.com"), clusterPolicies)
 	if err != nil {
 		return err
 	}
@@ -67,8 +73,10 @@ func (p *ClusterProvisioner) Create(ctx context.Context, spec core.ClusterSpec) 
 	}
 
 	if state.Status == provisioner.StatusActive {
-		if err := p.ensureNodeGroups(ctx, spec, nil); err != nil {
-			return err
+		if !state.Autopilot {
+			if err := p.ensureNodeGroups(ctx, spec, nil); err != nil {
+				return err
+			}
 		}
 		return p.ensureCSIAddons(ctx, spec, state, nil)
 	}
@@ -84,6 +92,28 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 	}
 	if spec.KubernetesVersion != "" {
 		in.Version = aws.String(spec.KubernetesVersion)
+	}
+	if spec.Autopilot {
+		autoNodeRoleARN, err := p.ensureRole(ctx, names{spec}.autoNodeRole(),
+			eksServiceTrust("ec2.amazonaws.com"), []string{policyEKSAutoNodePolicy})
+		if err != nil {
+			return fmt.Errorf("ensuring Auto Mode node role for %s: %w", spec.ID, err)
+		}
+		in.AccessConfig = &ekstypes.CreateAccessConfigRequest{
+			AuthenticationMode:                      ekstypes.AuthenticationModeApiAndConfigMap,
+			BootstrapClusterCreatorAdminPermissions: aws.Bool(true),
+		}
+		in.ComputeConfig = &ekstypes.ComputeConfigRequest{
+			Enabled:     aws.Bool(true),
+			NodePools:   []string{"general-purpose", "system"},
+			NodeRoleArn: aws.String(autoNodeRoleARN),
+		}
+		in.KubernetesNetworkConfig = &ekstypes.KubernetesNetworkConfigRequest{
+			ElasticLoadBalancing: &ekstypes.ElasticLoadBalancing{Enabled: aws.Bool(true)},
+		}
+		in.StorageConfig = &ekstypes.StorageConfigRequest{
+			BlockStorage: &ekstypes.BlockStorage{Enabled: aws.Bool(true)},
+		}
 	}
 
 	if _, err := p.c.eks.CreateCluster(ctx, in); err != nil {
@@ -136,10 +166,11 @@ func (p *ClusterProvisioner) Describe(ctx context.Context, spec core.ClusterSpec
 	}
 
 	state := provisioner.ClusterState{
-		Status:   normaliseStatus(cluster.Status),
-		Endpoint: aws.ToString(cluster.Endpoint),
-		Version:  aws.ToString(cluster.Version),
-		Access:   accessFrom(cluster.ResourcesVpcConfig),
+		Status:    normaliseStatus(cluster.Status),
+		Endpoint:  aws.ToString(cluster.Endpoint),
+		Version:   aws.ToString(cluster.Version),
+		Access:    accessFrom(cluster.ResourcesVpcConfig),
+		Autopilot: cluster.ComputeConfig != nil && aws.ToBool(cluster.ComputeConfig.Enabled),
 	}
 	if cluster.Identity != nil && cluster.Identity.Oidc != nil {
 		state.OIDCIssuer = aws.ToString(cluster.Identity.Oidc.Issuer)
@@ -260,8 +291,10 @@ func (p *ClusterProvisioner) Reconcile(ctx context.Context, spec core.ClusterSpe
 	}
 	change.Merge(accessChange)
 
-	if err := p.ensureNodeGroups(ctx, spec, &change); err != nil {
-		return change, err
+	if !state.Autopilot {
+		if err := p.ensureNodeGroups(ctx, spec, &change); err != nil {
+			return change, err
+		}
 	}
 	if err := p.ensureCSIAddons(ctx, spec, state, &change); err != nil {
 		return change, err
@@ -308,6 +341,12 @@ func (p *ClusterProvisioner) ensureCSIAddons(
 			comp:      provisioner.Component{Name: "efs-csi", Namespace: "kube-system", ServiceAccount: "efs-csi-controller-sa"},
 		},
 	} {
+		// EKS Auto Mode's StorageConfig.BlockStorage replaces the EBS CSI
+		// driver addon entirely; installing it alongside would be redundant.
+		// EFS has no Auto Mode equivalent and is still installed.
+		if state.Autopilot && d.addonName == addonEBSCSIDriver {
+			continue
+		}
 		trust := irsaTrustPolicy(providerARN, state.OIDCIssuer, d.comp)
 		roleARN, err := p.ensureRole(ctx, d.roleName, trust, []string{d.policy})
 		if err != nil {
@@ -576,6 +615,9 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 	}
 
 	if err := p.deleteRole(ctx, names{spec}.clusterRole()); err != nil {
+		return err
+	}
+	if err := p.deleteRole(ctx, names{spec}.autoNodeRole()); err != nil {
 		return err
 	}
 	if err := p.deleteRole(ctx, names{spec}.ebsCSIRole()); err != nil {

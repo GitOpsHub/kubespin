@@ -508,6 +508,163 @@ func TestPoolNameRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCreate_Autopilot_SetsComputeConfig(t *testing.T) {
+	f := newFakeAWS()
+	p := NewClusterProvisioner(f.clients())
+	spec := testSpec()
+	spec.Autopilot = true
+	spec.NodePools = nil
+
+	if err := p.Create(t.Context(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	in := f.lastCreateCluster
+	if in == nil {
+		t.Fatal("expected CreateCluster to have been called")
+	}
+	if in.ComputeConfig == nil || !aws.ToBool(in.ComputeConfig.Enabled) {
+		t.Error("expected ComputeConfig.Enabled = true")
+	}
+	if want := []string{"general-purpose", "system"}; !slices.Equal(in.ComputeConfig.NodePools, want) {
+		t.Errorf("ComputeConfig.NodePools = %v, want %v", in.ComputeConfig.NodePools, want)
+	}
+	if in.ComputeConfig.NodeRoleArn == nil || *in.ComputeConfig.NodeRoleArn == "" {
+		t.Error("expected ComputeConfig.NodeRoleArn to be set")
+	}
+	if in.KubernetesNetworkConfig == nil || in.KubernetesNetworkConfig.ElasticLoadBalancing == nil ||
+		!aws.ToBool(in.KubernetesNetworkConfig.ElasticLoadBalancing.Enabled) {
+		t.Error("expected KubernetesNetworkConfig.ElasticLoadBalancing.Enabled = true")
+	}
+	if in.StorageConfig == nil || in.StorageConfig.BlockStorage == nil ||
+		!aws.ToBool(in.StorageConfig.BlockStorage.Enabled) {
+		t.Error("expected StorageConfig.BlockStorage.Enabled = true")
+	}
+	if in.AccessConfig == nil || in.AccessConfig.AuthenticationMode != ekstypes.AuthenticationModeApiAndConfigMap {
+		t.Errorf("AccessConfig.AuthenticationMode = %v, want %v", in.AccessConfig, ekstypes.AuthenticationModeApiAndConfigMap)
+	}
+	if in.AccessConfig == nil || !aws.ToBool(in.AccessConfig.BootstrapClusterCreatorAdminPermissions) {
+		t.Error("expected BootstrapClusterCreatorAdminPermissions = true")
+	}
+}
+
+func TestCreate_Autopilot_AttachesExtraClusterPolicies(t *testing.T) {
+	f := newFakeAWS()
+	p := NewClusterProvisioner(f.clients())
+	spec := testSpec()
+	spec.Autopilot = true
+	spec.NodePools = nil
+
+	if err := p.Create(t.Context(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	attached := f.attached[names{spec}.clusterRole()]
+	for _, want := range []string{
+		policyEKSCluster, policyEKSComputePolicy, policyEKSBlockStoragePolicy,
+		policyEKSLoadBalancingPolicy, policyEKSNetworkingPolicy,
+	} {
+		if !slices.Contains(attached, want) {
+			t.Errorf("cluster role policies = %v, want to include %s", attached, want)
+		}
+	}
+}
+
+func TestCreate_Autopilot_CreatesAutoNodeRole(t *testing.T) {
+	f := newFakeAWS()
+	p := NewClusterProvisioner(f.clients())
+	spec := testSpec()
+	spec.Autopilot = true
+	spec.NodePools = nil
+
+	if err := p.Create(t.Context(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	roleName := names{spec}.autoNodeRole()
+	if _, ok := f.roles[roleName]; !ok {
+		t.Fatalf("expected auto-node role %s to be created", roleName)
+	}
+	if !slices.Contains(f.attached[roleName], policyEKSAutoNodePolicy) {
+		t.Errorf("auto-node role policies = %v, want to include %s", f.attached[roleName], policyEKSAutoNodePolicy)
+	}
+}
+
+// A `delete`/`fleet` invocation rebuilds ClusterSpec from flags with no
+// --spec file, so it will not necessarily have --autopilot set even for a
+// cluster created with it. Describe must detect Auto Mode from the live
+// cluster's ComputeConfig, not trust the caller's spec.
+func TestDescribe_DetectsAutopilotFromLiveCluster(t *testing.T) {
+	f := newFakeAWS()
+	spec := testSpec()
+	spec.Autopilot = true
+	f.activeCluster(spec)
+
+	describeSpec := spec
+	describeSpec.Autopilot = false
+
+	state, err := NewClusterProvisioner(f.clients()).Describe(t.Context(), describeSpec)
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	if !state.Autopilot {
+		t.Error("expected Describe to detect Auto Mode from the live cluster, regardless of spec.Autopilot")
+	}
+}
+
+func TestReconcile_Autopilot_SkipsEnsureNodeGroups(t *testing.T) {
+	f := newFakeAWS()
+	spec := testSpec()
+	spec.Autopilot = true
+	spec.NodePools = nil
+	f.activeCluster(spec)
+	f.calls = nil
+
+	if _, err := NewClusterProvisioner(f.clients()).Reconcile(t.Context(), spec); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if f.called("CreateNodegroup", "UpdateNodegroupConfig") {
+		t.Errorf("unexpected node-group call under Autopilot: %v", f.calls)
+	}
+}
+
+func TestCreate_Autopilot_SkipsEBSCSIAddonInstallsEFS(t *testing.T) {
+	f := newFakeAWS()
+	p := NewClusterProvisioner(f.clients())
+	spec := testSpec()
+	spec.Autopilot = true
+	spec.NodePools = nil
+	f.activeCluster(spec)
+
+	if err := p.Create(t.Context(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if _, ok := f.addons[addonEBSCSIDriver]; ok {
+		t.Error("expected EBS CSI addon to be skipped under Autopilot")
+	}
+	if _, ok := f.addons[addonEFSCSIDriver]; !ok {
+		t.Error("expected EFS CSI addon to still be installed under Autopilot")
+	}
+}
+
+func TestDelete_Autopilot_CleansUpAutoNodeRole(t *testing.T) {
+	f := newFakeAWS()
+	spec := testSpec()
+	spec.Autopilot = true
+	spec.NodePools = nil
+	f.activeCluster(spec)
+	roleName := names{spec}.autoNodeRole()
+	f.roles[roleName] = "arn:aws:iam::123456789012:role/" + roleName
+
+	if err := NewClusterProvisioner(f.clients()).Delete(t.Context(), spec); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, ok := f.roles[roleName]; ok {
+		t.Error("expected auto-node role to be deleted")
+	}
+}
+
 func TestVpcConfig_PrivateIgnoresAuthorizedCIDRs(t *testing.T) {
 	// A private cluster has no public endpoint to restrict; sending CIDRs
 	// anyway would imply otherwise.

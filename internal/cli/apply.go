@@ -113,6 +113,7 @@ addons that silently never sync.`,
 	fs.Bool("spot", false, "one flag for the cheapest dev/learning cluster on any cloud: spot/preemptible instances (AWS/GCP; AKS's default pool must stay on-demand, so this part is a no-op on --provider azure), plus a smaller default --instance-type/--min-size/--max-size/--desired-size/--disk-size sized to still run the default (--size small) addon set (t3.medium/e2-medium/Standard_B2s, 1/2/1 nodes) — pass any of those flags explicitly to override just that piece. On GCP this also switches to a zonal cluster (eligible for GCP's free zonal-cluster tier) and gives nodes public IPs instead of provisioning Cloud NAT, unless --zone/--gcp-public-nodes override it.")
 	fs.String("zone", "", "GCP zone (e.g. us-central1-a) requesting a zonal GKE cluster instead of the default regional one (GCP only). --spot already sets this; only needed to pick a specific zone, or to go zonal without spot.")
 	fs.Bool("gcp-public-nodes", false, "give GKE nodes public IPs instead of provisioning a Cloud Router + Cloud NAT for them (GCP only). --spot already enables this; only needed to use it without spot.")
+	fs.Bool("autopilot", false, "use each provider's fully-managed node mode instead of standard node pools: GKE Autopilot (GCP) or EKS Auto Mode (AWS). No Azure equivalent. --instance-type/--min-size/--max-size/--desired-size/--disk-size/--spot are rejected when set explicitly alongside this, since the provider manages compute itself.")
 
 	fs.Bool("update-kubeconfig", true, "update the local kubeconfig with a context for this cluster once apply succeeds, by shelling out to aws/gcloud/az (disable with --update-kubeconfig=false)")
 	fs.String("kubeconfig", "", "path to the kubeconfig file to update when --update-kubeconfig is set (defaults to the cloud CLI's own default, typically ~/.kube/config or $KUBECONFIG)")
@@ -617,6 +618,7 @@ you mean it.`,
 	fs.Bool("spot", false, "unused by delete, kept for spec compatibility")
 	fs.String("zone", "", "unused by delete, kept for spec compatibility")
 	fs.Bool("gcp-public-nodes", false, "unused by delete, kept for spec compatibility")
+	fs.Bool("autopilot", false, "unused by delete, kept for spec compatibility")
 	fs.Bool("yes", false, "skip the interactive confirmation prompt")
 
 	return cmd

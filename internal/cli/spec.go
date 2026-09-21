@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"go.yaml.in/yaml/v3"
@@ -173,6 +174,17 @@ func applySpecFlags(cmd *cobra.Command, spec *core.ClusterSpec) error {
 		spec.PublicNodes = publicNodes
 	}
 
+	if flags.Changed("autopilot") {
+		autopilot, err := flags.GetBool("autopilot")
+		if err != nil {
+			return fmt.Errorf("reading --autopilot: %w", err)
+		}
+		spec.Autopilot = autopilot
+	}
+	if err := rejectAutopilotNodePoolFlags(cmd, spec); err != nil {
+		return err
+	}
+
 	spot, err := flags.GetBool("spot")
 	if err != nil {
 		return fmt.Errorf("reading --spot: %w", err)
@@ -194,10 +206,43 @@ func applySpecFlags(cmd *cobra.Command, spec *core.ClusterSpec) error {
 	return applyNodePoolFlags(cmd, spec)
 }
 
+// autopilotConflictingFlags lists the node-pool-shaping flags --autopilot
+// makes meaningless: GKE Autopilot / EKS Auto Mode manage compute
+// themselves, so an operator who passes one of these explicitly almost
+// certainly does not realize it will be silently discarded — erroring is
+// safer than guessing whether "left at default" or "explicitly asked for"
+// applies, since these flags all have non-zero registered defaults.
+var autopilotConflictingFlags = []string{
+	"instance-type", "min-size", "max-size", "desired-size", "disk-size", "spot",
+}
+
+// rejectAutopilotNodePoolFlags errors when an operator combines --autopilot
+// with a flag that only makes sense for standard node-pool provisioning.
+func rejectAutopilotNodePoolFlags(cmd *cobra.Command, spec *core.ClusterSpec) error {
+	if !spec.Autopilot {
+		return nil
+	}
+	flags := cmd.Flags()
+	var conflicts []string
+	for _, name := range autopilotConflictingFlags {
+		if flags.Changed(name) {
+			conflicts = append(conflicts, "--"+name)
+		}
+	}
+	if len(conflicts) > 0 {
+		return fmt.Errorf("%w: --autopilot manages compute itself; remove %s",
+			core.ErrInvalidSpec, strings.Join(conflicts, ", "))
+	}
+	return nil
+}
+
 // applyNodePoolFlags builds a single default node pool when the spec has none.
 // Richer topologies belong in a spec file: expressing several pools through
 // flags is more error-prone than editing the file the repository will hold.
 func applyNodePoolFlags(cmd *cobra.Command, spec *core.ClusterSpec) error {
+	if spec.Autopilot {
+		return nil
+	}
 	if len(spec.NodePools) > 0 {
 		return nil
 	}

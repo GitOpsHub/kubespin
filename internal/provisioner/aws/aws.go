@@ -131,6 +131,17 @@ const (
 	eksOIDCThumbprint       = "9e99a48a9960b14926bb7f3b02e22da2b0ab7280"
 	eksOIDCClientIDAudience = "sts.amazonaws.com"
 
+	// EKS Auto Mode policies: the cluster role needs four extra managed
+	// policies beyond policyEKSCluster, and Auto Mode's self-managed nodes
+	// assume a dedicated role with its own policy rather than the
+	// policyEKSWorkerNode/policyEKSCNI/policyECRReadOnly trio manually
+	// managed node groups use.
+	policyEKSComputePolicy       = "arn:aws:iam::aws:policy/AmazonEKSComputePolicy"
+	policyEKSBlockStoragePolicy  = "arn:aws:iam::aws:policy/AmazonEKSBlockStoragePolicy"
+	policyEKSLoadBalancingPolicy = "arn:aws:iam::aws:policy/AmazonEKSLoadBalancingPolicy"
+	policyEKSNetworkingPolicy    = "arn:aws:iam::aws:policy/AmazonEKSNetworkingPolicy"
+	policyEKSAutoNodePolicy      = "arn:aws:iam::aws:policy/AmazonEKSAutoNodePolicy"
+
 	// addonEBSCSIDriver and addonEFSCSIDriver are the EKS-managed addon names
 	// (not Helm charts): EKS installs and updates these itself, so kubespin
 	// only has to provision the IRSA role each one assumes and request the
@@ -148,6 +159,9 @@ type names struct {
 func (n names) cluster() string     { return n.spec.ID.String() }
 func (n names) clusterRole() string { return "kubespin-" + n.spec.ID.String() + "-cluster" }
 func (n names) nodeRole() string    { return "kubespin-" + n.spec.ID.String() + "-node" }
+func (n names) autoNodeRole() string {
+	return "kubespin-" + n.spec.ID.String() + "-auto-node"
+}
 func (n names) nodeGroup(pool string) string {
 	return n.spec.ID.String() + "-" + pool
 }

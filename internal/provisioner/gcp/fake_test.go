@@ -428,6 +428,9 @@ func (f *fakeGCP) activeCluster(spec core.ClusterSpec) {
 			EnablePrivateEndpoint: spec.Access == core.AccessPrivate,
 		},
 	}
+	if spec.Autopilot {
+		f.cluster.Autopilot = &containerpb.Autopilot{Enabled: true}
+	}
 }
 
 // withNodePool registers a node pool matching the given pool.

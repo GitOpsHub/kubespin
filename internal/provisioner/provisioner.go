@@ -62,6 +62,16 @@ type ClusterState struct {
 	Access    core.Access
 	NodePools []core.NodePool
 
+	// Autopilot reports whether the cloud itself says this cluster runs GKE
+	// Autopilot or EKS Auto Mode, read back from the live API rather than
+	// trusted from the caller's spec — a `delete` invocation reconstructs a
+	// ClusterSpec from flags without a --spec file, so it does not
+	// necessarily know a cluster was created with --autopilot. Describe is
+	// what re-derives this from the cloud's own answer, which is why
+	// callers that need to skip node-pool operations gate on this field
+	// rather than on spec.Autopilot once a ClusterState is in hand.
+	Autopilot bool
+
 	// NetworkID identifies the cluster's network scope for egress rules: the
 	// security group on AWS, the network on GCP, the NSG on Azure.
 	NetworkID string
