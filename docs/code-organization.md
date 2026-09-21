@@ -23,8 +23,10 @@ internal/catalog/             size resolution (small/medium/large, fully builtin
 internal/argocd/              app-of-apps manifest rendering, ingress/Gateway access-mode templating, Argo CD install
 internal/orchestrator/        per-cluster phase state machine (apply) and reverse teardown (delete)
 internal/fleet/               fleet-wide operations: audit, update, status, dashboard
+internal/kubeconfig/          operator kubeconfig update after apply (shells out to aws/gcloud/az)
 internal/ingestion/           Central Ingestion API's verification (JWT/JWKS, per-cluster issuer binding) and write path
 internal/reporter/            fleet-status-reporter's Argo CD summary + signed push logic
+internal/tools/changeloggen/  derives CHANGELOG.md and next SemVer from Conventional Commits (`make changelog`)
 internal/tools/docsgen/       regenerates docs/cli/*.md from the cobra command tree (`make docs`)
 internal/version/             build-time version metadata
 ```
@@ -99,6 +101,7 @@ flowchart TB
     fleet["internal/fleet"]
     cli["internal/cli"]
     fleetinfra["internal/fleetinfra"]
+    kubeconfig["internal/kubeconfig"]
 
     reporter["internal/reporter<br/>(runs in-cluster)"]
     ingestion["internal/ingestion<br/>(runs in Lambda)"]
@@ -107,6 +110,7 @@ flowchart TB
     cli --> orchestrator
     cli --> fleet
     cli --> fleetinfra
+    cli --> kubeconfig
 
     orchestrator --> provisioning
     orchestrator --> gitops
@@ -116,6 +120,7 @@ flowchart TB
 
     provisioning --> core
     gitops --> core
+    kubeconfig --> core
 
     reporter -->|"signed POST, outbound only"| ingestion
     ingestion --> registry

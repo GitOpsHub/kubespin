@@ -81,7 +81,7 @@ See [internal/core](https://github.com/GitOpsHub/kubespin/tree/main/internal/cor
 lease, [internal/orchestrator](https://github.com/GitOpsHub/kubespin/tree/main/internal/orchestrator) for the per-cluster
 phase state machine `apply` walks and the reverse teardown `delete` walks,
 and [internal/fleet](https://github.com/GitOpsHub/kubespin/tree/main/internal/fleet) for the fleet-wide operations
-(`audit`/`update`/`status`) that fan out across it.
+(`audit`/`update`/`status`/`dashboard`) that fan out across it.
 
 ## Open questions
 
