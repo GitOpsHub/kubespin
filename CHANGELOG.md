@@ -12,6 +12,11 @@ Do not hand-edit past entries.
 
 ## [Unreleased]
 
+## [v1.0.0] - 2026-09-22
+### Changed
+- Remove fleet functionality
+
+
 ## [v0.1.0] - 2026-09-21
 ### Added
 - Add Argo CD access capture and storage functionality for clusters
