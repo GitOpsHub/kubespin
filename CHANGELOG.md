@@ -12,6 +12,11 @@ Do not hand-edit past entries.
 
 ## [Unreleased]
 
+## [v1.2.0] - 2026-09-22
+### Added
+- Enhance Helm installation logic to prevent unnecessary upgrades and improve state checks
+
+
 ## [v1.1.0] - 2026-09-22
 ### Added
 - Add dotenv support for environment variable loading and autopilot cluster management
