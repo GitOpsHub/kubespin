@@ -177,8 +177,10 @@ func seedRepoStep(
 // cluster.yaml override touching the "argocd" addon (e.g. exposing
 // argocd-server) would commit into addons.yaml on every subsequent apply but
 // never actually reach the live release. installer.Install is documented
-// safe to call on every apply (see the Installer interface), so this costs
-// nothing on the common no-change path.
+// safe to call on every apply (see the Installer interface): it compares the
+// deployed release against the resolved addon and returns without a single
+// cluster-mutating Helm call when the two already match, so this genuinely
+// costs nothing on the common no-change path.
 func ReadyReconcile(
 	cloud Cloud, installer argocd.Installer, repoProv repo.Provisioner, resolver catalog.Resolver, logger *slog.Logger,
 ) ReconcileFunc {

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	helmchart "helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/release"
 	"k8s.io/client-go/rest"
 
@@ -118,5 +119,88 @@ func TestHelmInstaller_WaitTimeout(t *testing.T) {
 
 	if got := (&HelmInstaller{timeout: time.Minute}).waitTimeout(); got != time.Minute {
 		t.Errorf("waitTimeout = %s, want the configured 1m", got)
+	}
+}
+
+// TestUpToDate covers the decision that keeps a no-change apply from issuing
+// a Helm upgrade at all — the thing that made a repeat apply re-run argo-cd's
+// pre-upgrade hooks and fail on RBAC left behind by its own install. Pure, so
+// it needs no live cluster.
+func TestUpToDate(t *testing.T) {
+	deployed := func(chart, version string, values map[string]any) *release.Release {
+		return &release.Release{
+			Version: 3,
+			Info:    &release.Info{Status: release.StatusDeployed},
+			Chart:   &helmchart.Chart{Metadata: &helmchart.Metadata{Name: chart, Version: version}},
+			Config:  values,
+		}
+	}
+	addon := core.AddonRef{
+		Name: "argocd", Chart: "argo-cd", Version: "10.9.2",
+		Namespace: Namespace, Values: ServerLoadBalancerValues,
+	}
+
+	t.Run("same chart, version and values", func(t *testing.T) {
+		if !upToDate(deployed("argo-cd", "10.9.2", ServerLoadBalancerValues), addon) {
+			t.Error("upToDate = false, want true: an unchanged release must not be upgraded")
+		}
+	})
+
+	t.Run("values that only differ by type after a store round trip", func(t *testing.T) {
+		// The release store hands back numbers as float64; the catalog holds
+		// them as ints. A reflect.DeepEqual would call these different and
+		// upgrade on every apply forever.
+		a := core.AddonRef{Name: "argocd", Chart: "argo-cd", Version: "10.9.2",
+			Values: map[string]any{"replicas": 2}}
+		rel := deployed("argo-cd", "10.9.2", map[string]any{"replicas": float64(2)})
+		if !upToDate(rel, a) {
+			t.Error("upToDate = false, want true: int/float64 is a round-trip artifact, not a change")
+		}
+	})
+
+	t.Run("version bump", func(t *testing.T) {
+		if upToDate(deployed("argo-cd", "10.9.1", ServerLoadBalancerValues), addon) {
+			t.Error("upToDate = true, want false: a pinned version change must upgrade")
+		}
+	})
+
+	t.Run("values change", func(t *testing.T) {
+		rel := deployed("argo-cd", "10.9.2", map[string]any{
+			"server": map[string]any{"service": map[string]any{"type": "ClusterIP"}},
+		})
+		if upToDate(rel, addon) {
+			t.Error("upToDate = true, want false: a values change must reach the live release")
+		}
+	})
+
+	t.Run("release not cleanly deployed", func(t *testing.T) {
+		rel := deployed("argo-cd", "10.9.2", ServerLoadBalancerValues)
+		rel.Info.Status = release.StatusFailed
+		if upToDate(rel, addon) {
+			t.Error("upToDate = true, want false: a failed release must be converged")
+		}
+	})
+
+	t.Run("addon pins no version", func(t *testing.T) {
+		unpinned := addon
+		unpinned.Version = ""
+		if upToDate(deployed("argo-cd", "10.9.2", ServerLoadBalancerValues), unpinned) {
+			t.Error("upToDate = true, want false: 'newest in the repository' cannot be answered from the release")
+		}
+	})
+
+	t.Run("nil and half-built releases", func(t *testing.T) {
+		if upToDate(nil, addon) {
+			t.Error("upToDate(nil) = true, want false")
+		}
+		if upToDate(&release.Release{Info: &release.Info{Status: release.StatusDeployed}}, addon) {
+			t.Error("upToDate on a release with no chart = true, want false")
+		}
+	})
+}
+
+func TestSameValues_BothEmpty(t *testing.T) {
+	if !sameValues(nil, map[string]any{}) {
+		t.Error("sameValues(nil, empty) = false, want true")
 	}
 }

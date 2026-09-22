@@ -1,7 +1,9 @@
 package argocd
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -69,8 +71,9 @@ type Installer interface {
 	// Install converges the cluster reachable via restConfig onto addon's
 	// chart/version: installing it if this is the first apply, upgrading it
 	// in place otherwise. It must be safe to call on every apply — a
-	// no-change call should not error, matching every other Reconcile-shaped
-	// call in this codebase.
+	// no-change call performs no cluster-mutating Helm operation at all and
+	// returns nil, matching every other Reconcile-shaped call in this
+	// codebase.
 	//
 	// It returns only once Argo CD is actually running, not merely once its
 	// manifests have been submitted. Callers rely on that: the caller's very
@@ -137,6 +140,28 @@ func (h *HelmInstaller) Install(ctx context.Context, restConfig *rest.Config, ad
 
 	settings := cli.New()
 	if exists {
+		// Skip the upgrade entirely when the deployed release already carries
+		// exactly this chart version and these values. Every apply on a ready
+		// cluster calls Install (orchestrator.ReadyReconcile), so without this
+		// a no-change apply issued a full Helm upgrade — re-running the
+		// chart's pre-upgrade hooks each time, which is how a repeat apply
+		// against a healthy cluster came to fail on argo-cd's
+		// redis-secret-init RBAC ("rolebindings ... already exists"). A
+		// no-change apply now makes no cluster-mutating Helm call at all,
+		// matching the same convergence contract every provisioner follows.
+		current, err := h.deployedRelease(cfg, ReleaseName)
+		switch {
+		case err != nil:
+			// Not fatal: an unreadable release is a reason to converge, not
+			// to fail an apply. Fall through to the upgrade.
+			h.logger.Warn("could not read the current argocd release; upgrading to converge",
+				"release", ReleaseName, "error", err)
+		case upToDate(current, addon):
+			h.logger.Info("argocd already at the desired chart version and values; nothing to upgrade",
+				"chart", addon.Chart, "version", addon.Version, "revision", current.Version)
+			return nil
+		}
+
 		up := action.NewUpgrade(cfg)
 		up.Namespace = installNamespace
 		up.RepoURL = addon.Repository
@@ -203,6 +228,62 @@ func (h *HelmInstaller) Install(ctx context.Context, restConfig *rest.Config, ad
 	}
 	h.logger.Info("installed argocd release", "chart", addon.Chart, "version", addon.Version)
 	return nil
+}
+
+// deployedRelease returns the release's latest revision, whatever its status.
+func (h *HelmInstaller) deployedRelease(cfg *action.Configuration, releaseName string) (*release.Release, error) {
+	rel, err := action.NewGet(cfg).Run(releaseName)
+	if err != nil {
+		return nil, fmt.Errorf("reading release %s: %w", releaseName, err)
+	}
+	return rel, nil
+}
+
+// upToDate reports whether rel already is exactly what addon asks for, so
+// that Install can return without touching the cluster. Deliberately strict:
+// anything it cannot positively confirm — a release mid-failure, an unpinned
+// addon version, values it cannot compare — reports false and converges,
+// since a redundant upgrade is recoverable where a skipped necessary one is
+// silent drift.
+func upToDate(rel *release.Release, addon core.AddonRef) bool {
+	if rel == nil || rel.Info == nil || rel.Chart == nil || rel.Chart.Metadata == nil {
+		return false
+	}
+	// Only a cleanly deployed release is known-good. A failed or superseded
+	// one has to be converged even if its chart reference matches.
+	if rel.Info.Status != release.StatusDeployed {
+		return false
+	}
+	// An addon pinning no version asks for "whatever is newest in the
+	// repository", a question the deployed release cannot answer.
+	if addon.Version == "" {
+		return false
+	}
+	if rel.Chart.Metadata.Name != addon.Chart || rel.Chart.Metadata.Version != addon.Version {
+		return false
+	}
+	return sameValues(rel.Config, addon.Values)
+}
+
+// sameValues compares two Helm values trees. Marshalling to JSON normalises
+// what a round trip through the release store does to the types inside
+// (an int becomes a float64, and so on), which a reflect.DeepEqual would
+// report as a difference on every single apply; json.Marshal also orders map
+// keys, so two equal trees always produce identical bytes. A tree that will
+// not marshal (YAML's map[any]any, say) reports false and converges.
+func sameValues(a, b map[string]any) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	aj, err := json.Marshal(a)
+	if err != nil {
+		return false
+	}
+	bj, err := json.Marshal(b)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(aj, bj)
 }
 
 // releaseExists reports whether releaseName already has a Helm release
