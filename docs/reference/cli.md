@@ -13,9 +13,7 @@ reference for every command lives in [docs/cli/kubespin.md](../cli/kubespin.md)
 | [config.go](#configgo) | (global flags) | Resolves `Config` (flags > env > file > defaults) via viper. |
 | [spec.go](#specgo) | `apply`, `delete` (spec building) | Builds a `core.ClusterSpec` from `--spec`/flags for `apply`/`delete`. |
 | [apply.go](#applygo--apply-and-delete) | `apply`, `delete` | Reaches `internal/orchestrator`, the cloud provisioners, `internal/repo`, `internal/catalog`, `internal/registry`. |
-| [bootstrap.go](#bootstrapgo--fleet-bootstrap) | `fleet bootstrap` | Converges fleet infrastructure via `internal/fleetinfra`. |
-| [fleet.go](#fleetgo--fleet-update-fleet-audit-fleet-status) | `fleet update`, `fleet audit`, `fleet status` | Fleet-wide operations, all read/write through `internal/registry`. |
-| [dashboard.go](#dashboardgo--fleet-dashboard) | `fleet dashboard` | Renders a static HTML snapshot of fleet status. |
+| [registry.go](#registrygo) | `apply`, `delete` (registry connection) | `registryPrereqs`: resolves config and connects to the cluster registry. |
 | [login.go](#logingo--login-status-logout) | `login`, `status`, `logout` | Operator-facing cloud auth via `internal/auth`, plus the `apply`/`delete` preflight. |
 
 ## `root.go`
@@ -39,10 +37,10 @@ func LoggerFrom(ctx context.Context) *slog.Logger
 ```
 
 - **Behavior:**
-    - `NewRootCommand() *cobra.Command` — assembles the full tree: `apply`, `delete`, `fleet` (with its subcommands attached in `fleet.go`), `login`, `status`, `logout`. Registers global persistent flags via `registerGlobalFlags` (from `config.go`) and sets the version template to just the version string.
+    - `NewRootCommand() *cobra.Command` — assembles the full tree: `apply`, `delete`, `login`, `status`, `logout`. Registers global persistent flags via `registerGlobalFlags` (from `config.go`) and sets the version template to just the version string.
     - `ConfigFrom(ctx) (*Config, bool)` — retrieves the `*Config` stashed by `PersistentPreRunE`; `ok` is `false` if called outside a command run (e.g. in a test that skips the root command).
     - `LoggerFrom(ctx) *slog.Logger` — retrieves the logger, falling back to `slog.Default()` so callers never nil-check.
-- **Calls into:** `config.go` (`LoadConfig`, `registerGlobalFlags`); attaches subcommands built in `apply.go`, `fleet.go`, `bootstrap.go`, `login.go`.
+- **Calls into:** `config.go` (`LoadConfig`, `registerGlobalFlags`); attaches subcommands built in `apply.go` and `login.go`.
 - **Non-obvious control flow:** `PersistentPreRunE` runs before *every* subcommand and is the only place `Config`/`slog.Logger` are constructed and placed on context — subcommands never build their own.
 
 </details>
@@ -102,16 +100,15 @@ type RegistryConfig struct {
 }
 ```
 
-Locates the Postgres-backed Fleet Registry. `DSN` has no default and — unlike
-every other piece of `Config` — no flag either: it is read only from
+Locates the Postgres-backed cluster registry. `DSN` has no default and —
+unlike every other piece of `Config` — no flag either: it is read only from
 `KUBESPIN_REGISTRY_DSN` (or a `.env` file, or `registry-dsn` in the config
 file), deliberately, so a connection string carrying a password never
-appears in shell history or a process listing. `apply`/`delete`/every
-`fleet` subcommand (via `registryPrereqs` in `fleet.go`) explicitly checks
-it's non-empty and returns an `ErrConfig`-wrapped error ("the Postgres
-registry DSN is required (KUBESPIN_REGISTRY_DSN)") rather than silently
-defaulting, since defaulting risks splitting a fleet across two databases
-with no error.
+appears in shell history or a process listing. `apply` and `delete` (via
+`registryPrereqs` in `registry.go`) explicitly check it's non-empty and
+return an `ErrConfig`-wrapped error ("the Postgres registry DSN is required
+(KUBESPIN_REGISTRY_DSN)") rather than silently defaulting, since defaulting
+risks splitting a set of clusters across two databases with no error.
 
 ### Functions
 
@@ -129,7 +126,7 @@ func parseLogLevel(s string) (slog.Level, error)
     - `registerGlobalFlags` — declares `--config`, `--log-level`, `--log-format`, `--dry-run` on the given flag set; called once on the root command's persistent flags. Deliberately no `--registry-dsn` flag — see `RegistryConfig` above.
     - `parseLogLevel` — maps a case-insensitive string to `slog.Level`; also used by `(*Config) Logger` with a fallback to `slog.LevelInfo` since `validate()` has already run by the time `Logger` is called.
 - **Calls into:** none (this is the base layer other files build on).
-- **Non-obvious control flow:** `LoadConfig` takes a `*pflag.FlagSet` (not a `*cobra.Command`) so tests can exercise precedence against a bare flag set. `ErrConfig = errors.New("configuration error")` wraps every configuration resolution failure across the whole package (not just `config.go`) — `apply.go` (via `fleet.go`'s `registryPrereqs`), `fleet.go`, and `bootstrap.go` all wrap a missing registry DSN with it.
+- **Non-obvious control flow:** `LoadConfig` takes a `*pflag.FlagSet` (not a `*cobra.Command`) so tests can exercise precedence against a bare flag set. `ErrConfig = errors.New("configuration error")` wraps every configuration resolution failure across the whole package (not just `config.go`) — `apply.go`, via `registry.go`'s `registryPrereqs`, wraps a missing registry DSN with it.
 
 </details>
 
@@ -180,8 +177,8 @@ func runApply(cmd *cobra.Command, _ []string) error
 
 - **Behavior — steps in order:**
     1. Load spec (`loadSpec`).
-    2. Resolve config and connect to the Fleet Registry (`registryPrereqs`, shared with `runDelete` and every `fleet` subcommand — errors if `cfg.Registry.DSN` is empty).
-    3. Pick which cloud auth providers to preflight: a **dry run** preflights `aws` alone, unconditionally, regardless of `spec.Provider` — not because the Fleet Registry is AWS-hosted (it is a Postgres database that can be hosted anywhere, reached only via `KUBESPIN_REGISTRY_DSN`, no IAM involved), but because this code path predates that migration and has not been revisited; a real (non-dry-run) run instead calls `cloudAuthProviders`, which preflights `aws` plus the cluster's own provider (skipped if the cluster's own provider is already `aws`, to avoid checking it twice) — again unconditionally including `aws` regardless of `spec.Provider`.
+    2. Resolve config and connect to the cluster registry (`registryPrereqs`, shared with `runDelete` — errors if `cfg.Registry.DSN` is empty).
+    3. Pick which cloud auth providers to preflight: a **dry run** preflights `aws` alone, unconditionally, regardless of `spec.Provider` — not because the registry is AWS-hosted (it is a Postgres database that can be hosted anywhere, reached only via `KUBESPIN_REGISTRY_DSN`, no IAM involved), but because this code path predates that migration and has not been revisited; a real (non-dry-run) run instead calls `cloudAuthProviders`, which preflights `aws` plus the cluster's own provider (skipped if the cluster's own provider is already `aws`, to avoid checking it twice) — again unconditionally including `aws` regardless of `spec.Provider`.
     4. Dry-run branch: call `reportPlan` and return.
     5. Otherwise: `buildCloud` (provisioner set), `buildRepoClients` + `repo.NewProvisioner`, `catalog.NewBuiltinResolver()` (size catalog), then construct an `orchestrator.Orchestrator` with `orchestrator.ProvisioningSteps` and `orchestrator.ReadyReconcile`, and call `o.Apply(ctx, spec)`.
     6. On error, print the phase the run stopped at (so the operator knows where a retry resumes from) before wrapping and returning the error.
@@ -197,7 +194,7 @@ func runApply(cmd *cobra.Command, _ []string) error
 func runDelete(cmd *cobra.Command, _ []string) error
 ```
 
-- **Behavior:** Same shape through spec loading, `registryPrereqs`, and auth preflight (`cloudAuthProviders`, same as apply). Then: read `--yes`; if not set, prompt via `confirmDelete` and abort (printing `"aborted"`, exit 0) unless the operator types the exact cluster ID. Then `buildCloud`, `buildRepoClients`/`repo.NewProvisioner`, and build a bare `orchestrator.New(reg, ...)` (no provisioning steps) and call `o.Delete(ctx, spec, orchestrator.Teardown(cloud, repoProv, logger))`.
+- **Behavior:** Same shape through spec loading, `registryPrereqs` (`registry.go`), and auth preflight (`cloudAuthProviders`, same as apply). Then: read `--yes`; if not set, prompt via `confirmDelete` and abort (printing `"aborted"`, exit 0) unless the operator types the exact cluster ID. Then `buildCloud`, `buildRepoClients`/`repo.NewProvisioner`, and build a bare `orchestrator.New(reg, ...)` (no provisioning steps) and call `o.Delete(ctx, spec, orchestrator.Teardown(cloud, repoProv, logger))`.
 - **Calls into:** `internal/registry`, `internal/orchestrator`, `internal/provisioner/{aws,gcp,azure}`, `internal/repo`.
 - **Non-obvious control flow:** `delete` does **not** honor `--dry-run` — passing it does not turn `delete` into a preview; only `--yes` skips the confirmation prompt. `registryPrereqs` connects to the registry before the deletion confirmation prompt, not after — only the actual `Delete` call is gated on confirming.
 
@@ -219,11 +216,11 @@ func confirmDelete(cmd *cobra.Command, spec core.ClusterSpec) (bool, error)
 - **Behavior:**
     - `reportPlan` — reads the registry (not a mutation) and prints either "not registered, would create from phase pending", "already ready, would run no steps", or the phase it's at plus the remaining phase transitions (via `core.Phase.Next()`) it would walk through.
     - `cloudAuthProviders` — see above; shared by `runApply` (non-dry-run path) and `runDelete`.
-    - `buildCloud` — switches on `spec.Provider` (`core.ProviderAWS`/`GCP`/`Azure`) to build the matching `awsprov`/`gcpprov`/`azureprov` clients and assemble an `orchestrator.Cloud{Cluster, Identity, Network, IngestionEndpoint, Wait}`. GCP requires `--gcp-project`, Azure requires `--azure-subscription` (both returned as `core.ErrInvalidSpec` if empty). `--ingestion-endpoint` is looked up rather than required — `delete` and `fleet audit` share `buildCloud` but never use `IngestionEndpoint` (`delete` doesn't open egress; `audit` only Describes), so requiring the flag there would fail those commands before they do any work. Also shared with `fleet.go`'s `clusterProvisionerFactory`.
-    - `buildRepoClients` — builds `*repo.Clients` from `--github-org` (required), `GITHUB_TOKEN` env var (required — not a flag, so it never lands in shell history, matching how every other cloud credential in this CLI is sourced from the ambient environment), and `--github-base-url`/`--github-upload-url` for GitHub Enterprise. Shared by `apply`, `delete`, `fleet update`, and `fleet audit`.
+    - `buildCloud` — switches on `spec.Provider` (`core.ProviderAWS`/`GCP`/`Azure`) to build the matching `awsprov`/`gcpprov`/`azureprov` clients and assemble an `orchestrator.Cloud{Cluster, Network, Wait}`. GCP requires `--gcp-project`, Azure requires `--azure-subscription` (both returned as `core.ErrInvalidSpec` if empty).
+    - `buildRepoClients` — builds `*repo.Clients` from `--github-org` (required), `GITHUB_TOKEN` env var (required — not a flag, so it never lands in shell history, matching how every other cloud credential in this CLI is sourced from the ambient environment), and `--github-base-url`/`--github-upload-url` for GitHub Enterprise. Shared by `apply` and `delete`.
     - `confirmDelete` — prompts on stdin for the cluster ID; reads a full line (`bufio.Reader.ReadString('\n')`) rather than a whitespace-delimited token so that pressing Enter or piping EOF is treated as "decline" (returns `false, nil`) instead of erroring with "unexpected newline" — an intentional abort must not look like a command failure.
 - **Calls into:** `internal/registry`, `internal/orchestrator`, `internal/provisioner/{aws,gcp,azure}`, `internal/repo`, `internal/catalog`, `internal/core`.
-- **Non-obvious control flow:** `buildCloud` is intentionally reused by `delete` and `fleet audit`, both of which ignore `IngestionEndpoint` — that's why the flag is optional rather than required at the `buildCloud` level.
+- **Non-obvious control flow:** `buildCloud` is shared by `apply` and `delete`, so it never requires a flag only one of them declares.
 
 </details>
 
@@ -242,157 +239,26 @@ func newDeleteCommand() *cobra.Command
 
 </details>
 
-## `bootstrap.go` — `fleet bootstrap`
+## `registry.go`
 
-Backs `fleet bootstrap`, the one command that talks to `internal/fleetinfra`
-instead of `internal/orchestrator`.
-
-<details>
-<summary>Signature</summary>
-
-```go
-func newFleetBootstrapCommand() *cobra.Command
-func runFleetBootstrap(cmd *cobra.Command, _ []string) error
-func bootstrapSpec(cmd *cobra.Command, cfg *Config) (fleetinfra.Spec, error)
-func printReport(cmd *cobra.Command, report fleetinfra.Report)
-```
-
-- **Behavior:**
-    - `runFleetBootstrap` — requires `cfg.Registry.DSN` (returning an `ErrConfig`-wrapped error if empty); builds a `fleetinfra.Spec` (`bootstrapSpec`, which threads `cfg.Registry.DSN` through as `Spec.RegistryDSN`), builds `fleetinfra.Clients`, then calls `fleetinfra.Converge(ctx, clients, spec, cfg.DryRun, ...)`. Note `fleet bootstrap` reads its AWS region from its own required `--region` flag, not from the registry config — the two are unrelated since bootstrap only provisions the Central Ingestion API, never the registry itself.
-    - `bootstrapSpec` — reads flags (`--account-id` required via `cmd.MarkFlagRequired`, `--lambda-binary`, `--name-prefix`, `--log-retention-days`, `--throttle-burst`, `--throttle-rate`) and packages the compiled ingestion Lambda handler off disk via `fleetinfra.PackageLambda(binaryPath)`. The handler is read from disk (default `bin/ingestion/bootstrap`, i.e. `defaultLambdaBinary`) rather than embedded, so `go build ./...` never depends on build ordering with `make lambda`. A missing binary is translated from a raw `fs.ErrNotExist` into an actionable message pointing at `make lambda`.
-    - `printReport` — prints each `report.Actions` entry, then a dry-run/converged summary line based on `report.DryRun` and `report.Changed()`, and finally the ingestion endpoint URL (with a reminder that every cluster's egress allowlist must permit it) if `report.IngestionURL` is set.
-- **Calls into:** `internal/fleetinfra` (`Converge`, `PackageLambda`, `Spec`, `Report`, `Clients`).
-- **Non-obvious control flow:** the report is printed via `printReport` **even on error** — a partial run may already have created resources, and the operator needs to see which before retrying.
-
-</details>
-
-`defaultLambdaBinary = "bin/ingestion/bootstrap"` is the package constant
-naming where `make lambda` puts the compiled handler.
-
-## `fleet.go` — `fleet update`, `fleet audit`, `fleet status`
-
-`newFleetCommand` builds the `fleet` parent command (its `RunE` just prints
-help when called with no subcommand) and attaches
-`newFleetBootstrapCommand` (from `bootstrap.go`), `newFleetUpdateCommand`,
-`newFleetAuditCommand`, `newFleetStatusCommand`, and
-`newFleetDashboardCommand` (from `dashboard.go`).
-
-### `fleet update`
-
-<details>
-<summary>Signature</summary>
-
-```go
-func newFleetUpdateCommand() *cobra.Command
-func runFleetUpdate(cmd *cobra.Command, _ []string) error
-func reportUpdateResults(cmd *cobra.Command, results []fleet.UpdateResult, _ *Config) error
-```
-
-- **Behavior:** `runFleetUpdate` resolves prereqs (`registryPrereqs`), requires `--component` and `--version`, builds a `registry.Filter` (`fleetFilter`, `--provider` only — there is no `--size` filter; the registry's query filter has no size dimension to select on), builds repo clients/provisioner and a `catalog.NewBuiltinResolver()`, then calls `fleet.Update(...)` with `--concurrency` and `--canary-count`. `reportUpdateResults` prints per-cluster outcomes (`updated` / `already up to date` / `FAILED: ...` / `skipped (canary wave failed)`).
-- **Calls into:** `internal/fleet` (`Update`), `internal/registry`, `internal/repo`, `internal/catalog`.
-- **Non-obvious control flow:** `reportUpdateResults` returns a non-nil error if any cluster failed, so the process exit code reflects a partial failure. `fleet update` does not honor global `--dry-run` — it always commits.
-
-</details>
-
-### `fleet audit`
-
-<details>
-<summary>Signature</summary>
-
-```go
-func newFleetAuditCommand() *cobra.Command
-func runFleetAudit(cmd *cobra.Command, _ []string) error
-func reportAuditResults(cmd *cobra.Command, results []fleet.AuditResult) error
-func clusterProvisionerFactory(cmd *cobra.Command) fleet.ClusterProvisionerFactory
-```
-
-- **Behavior:** `runFleetAudit` resolves prereqs, builds a `--provider` filter, repo clients/provisioner, and calls `fleet.Audit(ctx, reg, filter, clusterProvisionerFactory(cmd), repoProv, concurrency, ...)`. `clusterProvisionerFactory` adapts `buildCloud` (which builds a full `orchestrator.Cloud` with identity binding and egress) into the narrower `fleet.ClusterProvisionerFactory` signature audit needs.
-- **Calls into:** `internal/fleet` (`Audit`), `internal/registry`, `internal/repo`, `apply.go`'s `buildCloud`.
-- **Non-obvious control flow:** `fleet.Audit` is read-only (Describe only, never Reconcile), but does persist findings back to the registry so `fleet status`/`fleet dashboard` can read the latest audit without re-running one. An audit never binds identity or opens egress, so `clusterProvisionerFactory` deliberately narrows `buildCloud`'s output rather than reusing the full `orchestrator.Cloud` per cluster — building the rest of `Cloud` per cluster would mean real, wasted cloud calls per audited cluster.
-
-</details>
-
-### `fleet status`
-
-<details>
-<summary>Signature</summary>
-
-```go
-func newFleetStatusCommand() *cobra.Command
-func runFleetStatus(cmd *cobra.Command, _ []string) error
-func reportStatuses(cmd *cobra.Command, statuses []fleet.ClusterStatus, output string) error
-```
-
-- **Behavior:** `runFleetStatus` resolves prereqs, applies `--provider`/`--phase` filters, `--stale-only`, and `--stale-threshold`, calls `fleet.Status(...)`, then renders via `reportStatuses` as either a fixed-width table (default / `--output table`) or `--output json` (via `json.NewEncoder` with 2-space indent).
-- **Calls into:** `internal/fleet` (`Status`), `internal/registry`.
-- **Non-obvious control flow:** an unrecognized `--output` value returns `core.ErrInvalidSpec`. `fleet status` never connects to a cluster — everything comes from what `fleet-status-reporter` and `fleet audit` have already pushed into the registry, so an unreachable cluster shows as *stale* rather than hanging the command.
-
-</details>
-
-### Shared helpers
+One helper, extracted so both `apply` and `delete` share it rather than each
+carrying its own copy of the check-and-connect sequence.
 
 <details>
 <summary>Signature</summary>
 
 ```go
 func registryPrereqs(cmd *cobra.Command) (*Config, registry.Registry, error)
-func fleetFilter(cmd *cobra.Command, flagName string) (registry.Filter, error)
 ```
 
-- **Behavior:**
-    - `registryPrereqs` — resolves `Config` from context and connects to the Fleet Registry via `registry.NewPostgres(ctx, cfg.Registry.DSN, ...)`; the two things every command that talks to the registry needs before doing anything else. Errors (`ErrConfig`-wrapped, "the Postgres registry DSN is required (KUBESPIN_REGISTRY_DSN)") if `cfg.Registry.DSN` is empty. Despite living in `fleet.go`, it is shared beyond the `fleet` subcommands: `runApply` and `runDelete` (`apply.go`) call it too, replacing what used to be their own copy of the same check-and-connect sequence.
-    - `fleetFilter` — builds a `registry.Filter{Provider: ...}` from a named flag (defaulting the flag name to `"provider"` when called with `""`).
+- **Behavior:** resolves `Config` from context and connects to the cluster
+  registry via `registry.NewPostgres(ctx, cfg.Registry.DSN, ...)` — the two
+  things every command that talks to the registry needs before doing anything
+  else. Errors (`ErrConfig`-wrapped, "the Postgres registry DSN is required
+  (KUBESPIN_REGISTRY_DSN)") if `cfg.Registry.DSN` is empty.
 - **Calls into:** `internal/registry`.
-- **Non-obvious control flow:** if the calling command doesn't define the named flag at all (`cmd.Flags().Lookup(flagName) == nil`), `fleetFilter` returns a zero-value filter matching every provider rather than erroring — this is why `dashboard.go` and `fleet status`, which do declare `--provider`, get filtering while a hypothetical command without the flag wouldn't panic.
 
 </details>
-
-## `dashboard.go` — `fleet dashboard`
-
-Renders a self-contained static HTML snapshot of the same data `fleet
-status` reads — no server, no external assets, nothing to deploy.
-
-<details>
-<summary>Signature</summary>
-
-```go
-func newFleetDashboardCommand() *cobra.Command
-func runFleetDashboard(cmd *cobra.Command, _ []string) error
-func renderDashboardHTML(rows []fleet.DashboardRow, generatedAt time.Time) ([]byte, error)
-```
-
-- **Behavior:** `runFleetDashboard` resolves prereqs, applies `--provider`/`--phase` filters and `--stale-threshold`, calls `fleet.Dashboard(ctx, reg, filter, threshold, now, ...)`, renders the result via `renderDashboardHTML`, and writes it to `--output` (default `fleet-dashboard.html`) with `os.WriteFile(..., 0o600)`. `renderDashboardHTML` executes the package-level `dashboardTemplate` (`html/template`, inlined CSS, no CDN dependency) against a `dashboardData` built by mapping each `fleet.DashboardRow` to a `dashboardRowView` — computing summary counts (`Total`, `Stale`, `Drifted`) and formatting timestamps (`"never"` for a zero `LastReportedAt`) along the way.
-- **Calls into:** `internal/fleet` (`Dashboard`), `internal/registry`.
-- **Non-obvious control flow:** rows are correlated by cluster ID only — no per-cluster commit SHA is shown, since the registry doesn't track one (that lives in each cluster's own `.state.yaml`), and showing it here would require a repository read per cluster this command doesn't otherwise make.
-
-</details>
-
-### `dashboardData` / `dashboardRowView`
-
-```go
-type dashboardData struct {
-    GeneratedAt string
-    Rows        []dashboardRowView
-    Total       int
-    Stale       int
-    Drifted     int
-}
-
-type dashboardRowView struct {
-    ClusterID      string
-    Provider       string
-    Phase          string
-    Stale          bool
-    LastReportedAt string
-    Findings       []string
-    FindingsAt     string
-    Audited        bool
-}
-```
-
-Purely template-facing view types — string-formatted fields so the template
-itself does no formatting logic. `Audited` is `!r.FindingsAt.IsZero()`, i.e.
-whether `fleet audit` has ever run against that cluster.
 
 ## `login.go` — `login`, `status`, `logout`
 

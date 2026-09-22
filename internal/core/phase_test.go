@@ -24,7 +24,9 @@ func allowedTransitions() map[Phase]map[Phase]bool {
 	// Single forward step on the happy path.
 	forward := [][2]Phase{
 		{PhasePending, PhaseClusterCreated},
-		{PhaseClusterCreated, PhaseIdentityBound},
+		{PhaseClusterCreated, PhaseRepoPushed},
+		// Legacy: a row left at identity-bound by an older binary still steps
+		// forward rather than becoming unreadable.
 		{PhaseIdentityBound, PhaseRepoPushed},
 		{PhaseRepoPushed, PhaseArgoCDInstalled},
 		{PhaseArgoCDInstalled, PhaseReady},

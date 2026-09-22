@@ -10,9 +10,9 @@ import (
 
 // ResolveForCluster resolves spec's profile, applies its per-cluster override
 // patch, and templates ingress/Gateway addons for spec's access mode, so
-// every caller — the orchestrator (apply) and fleet update — renders the
-// same resolved addon set for a given cluster rather than each reimplementing
-// the resolve-merge-template sequence and risking the two diverging.
+// every caller renders the same resolved addon set for a given cluster rather
+// than each reimplementing the resolve-merge-template sequence and risking the
+// two diverging.
 func ResolveForCluster(ctx context.Context, resolver Resolver, spec core.ClusterSpec) (core.Profile, error) {
 	profile, err := resolver.Resolve(ctx, spec.Size)
 	if err != nil {

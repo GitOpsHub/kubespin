@@ -320,8 +320,7 @@ func (p *ClusterProvisioner) ensureCSIAddons(
 		return fmt.Errorf("cluster %s reports no OIDC issuer", spec.ID)
 	}
 
-	idp := NewIdentityProvisioner(p.c)
-	providerARN, err := idp.ensureOIDCProvider(ctx, state.OIDCIssuer)
+	providerARN, err := p.ensureOIDCProvider(ctx, state.OIDCIssuer)
 	if err != nil {
 		return err
 	}
@@ -642,8 +641,7 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 // instance profile it belongs to, then deletes the role. IAM refuses to
 // delete a role that still has policies attached or is still in an instance
 // profile, so an orphaned role would survive teardown if either step were
-// skipped — the same reasoning IdentityProvisioner.Deprovision follows for
-// the IRSA role. The instance-profile case matters for the EKS Auto Mode
+// skipped. The instance-profile case matters for the EKS Auto Mode
 // node role: EKS itself creates and attaches an instance profile for it
 // (kubespin never calls CreateInstanceProfile), so teardown has to find and
 // detach that profile rather than assuming it owns every attachment.

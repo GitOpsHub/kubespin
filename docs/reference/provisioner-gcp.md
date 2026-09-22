@@ -1,11 +1,11 @@
 # internal/provisioner/gcp
 
-`internal/provisioner/gcp` is the GKE implementation of the three shared
-provisioner interfaces defined in [`internal/provisioner/provisioner.go`](../architecture.md):
-`ClusterProvisioner`, `IdentityProvisioner`, `NetworkProvisioner`, plus
-`RESTConfigProvisioner` for the Argo CD installer. Every GCP service the
-package touches — GKE Cluster Manager, IAM service accounts, Compute networks/
-subnetworks/routers/firewalls — is reached through a narrow interface declared
+`internal/provisioner/gcp` is the GKE implementation of the shared provisioner
+interfaces defined in [`internal/provisioner/provisioner.go`](../architecture.md):
+`ClusterProvisioner` and `NetworkProvisioner`, plus `RESTConfigProvisioner`
+for the Argo CD installer. Every GCP service the package touches — GKE Cluster
+Manager, Compute networks/subnetworks/routers/firewalls — is reached through a
+narrow interface declared
 in [`gcp.go`](https://github.com/GitOpsHub/kubespin/blob/main/internal/provisioner/gcp/gcp.go), so the whole provisioner is testable
 without credentials and the interfaces double as the exact permission set an
 operator must grant.
@@ -41,16 +41,10 @@ operator must grant.
 | [`(*ClusterProvisioner) Reconcile`](#clusterprovisioner-reconcile) | method | cluster.go | Reconciles access mode and node pools. |
 | [`(*ClusterProvisioner) Delete`](#clusterprovisioner-delete) | method | cluster.go | Idempotently deletes the cluster. |
 | [`(*ClusterProvisioner) RESTConfig`](#clusterprovisioner-restconfig) | method | kubeauth.go | Builds a `*rest.Config` for the Argo CD installer. |
-| [`IdentityProvisioner`](#identityprovisioner) | type | identity.go | Binds in-cluster service accounts via Workload Identity. |
-| [`NewIdentityProvisioner`](#newidentityprovisioner) | func | identity.go | Wraps `Clients` as an `IdentityProvisioner`. |
-| [`(*IdentityProvisioner) Provider`](#identityprovisioner-provider) | method | identity.go | Returns `core.ProviderGCP`. |
-| [`(*IdentityProvisioner) ProvisionForComponent`](#identityprovisioner-provisionforcomponent) | method | identity.go | Ensures a GSA and binds Workload Identity. |
-| [`(*IdentityProvisioner) Deprovision`](#identityprovisioner-deprovision) | method | identity.go | Deletes a component's GSA. |
 | [`NetworkProvisioner`](#networkprovisioner) | type | network.go | Resolves/creates the VPC network and subnetwork. |
 | [`NewNetworkProvisioner`](#newnetworkprovisioner) | func | network.go | Wraps `Clients` as a `NetworkProvisioner`. |
 | [`(*NetworkProvisioner) Provider`](#networkprovisioner-provider) | method | network.go | Returns `core.ProviderGCP`. |
 | [`(*NetworkProvisioner) EnsureNetwork`](#networkprovisioner-ensurenetwork) | method | network.go | Creates or adopts VPC/subnetwork/Cloud NAT. |
-| [`(*NetworkProvisioner) AllowEgress`](#networkprovisioner-allowegress) | method | network.go | Opens the status-reporter's outbound firewall rule. |
 
 ## gcp.go
 
@@ -150,8 +144,10 @@ this package needs and are worth citing for anyone auditing IAM grants:
   `CreateNodePool`, `SetNodePoolSize`, `DeleteNodePool`.
 - `serviceAccountsAPI` — IAM service accounts: `Get`, `Create`, `Delete`,
   `GetIamPolicy`, `SetIamPolicy`.
-- `firewallsAPI` — used only for the status reporter's egress rule:
-  `GetFirewall`, `Insert`. Named `GetFirewall` rather than `Get` because a
+- `firewallsAPI` — used only to clean up the egress firewall rule older
+  kubespin versions created, which would otherwise block the network's
+  deletion: `GetFirewall`, `DeleteFirewall`. Named `GetFirewall` rather
+  than `Get` because a
   single fake stands in for both this and `serviceAccountsAPI` in tests,
   and Go disallows two same-named methods with different signatures on
   one type.
@@ -341,120 +337,6 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 
 </details>
 
-## identity.go
-
-#### `IdentityProvisioner`
-
-<details>
-<summary>`type IdentityProvisioner struct { ... }`</summary>
-
-```go
-type IdentityProvisioner struct {
-    c *Clients
-}
-```
-
-- Implements `provisioner.IdentityProvisioner`.
-- Binds in-cluster Kubernetes service accounts to Google service accounts
-  via Workload Identity.
-
-Invariants:
-
-- The bound Google service account carries no IAM permission policy — it
-  exists only so a component (`fleet-status-reporter`) can prove which
-  cluster it is when signing its push, not to grant it GCP access.
-- Workload Identity needs no separate OIDC provider registration the way
-  AWS IRSA does: GKE's workload pool (`<project>.svc.id.goog`) is the
-  trust root for every cluster in the project, so the entire binding is
-  one IAM policy member (`roles/iam.workloadIdentityUser`) scoped to
-  `serviceAccount:<project>.svc.id.goog[<namespace>/<serviceaccount>]`.
-- `ProvisionForComponent` requires the cluster to already be
-  `StatusActive` (returns `provisioner.ErrNotFound` wrapped otherwise) —
-  binding identity before the cluster is usable is not meaningful work,
-  kept as a separate phase like AWS's IRSA binding.
-- The IAM policy is rewritten in place (existing binding's `Members`
-  appended to, or a new `Binding` appended to `policy.Bindings`) rather
-  than replaced wholesale, so unrelated bindings an operator added by
-  hand survive `apply`.
-- `Deprovision` deletes the service account, which also removes its IAM
-  policy bindings; deleting an absent one is a no-op (HTTP 404).
-
-</details>
-
-#### `NewIdentityProvisioner`
-
-<details>
-<summary>func NewIdentityProvisioner(c *Clients) *IdentityProvisioner</summary>
-
-```go
-func NewIdentityProvisioner(c *Clients) *IdentityProvisioner
-```
-
-- Wraps `c` as an `IdentityProvisioner`.
-
-</details>
-
-#### `(*IdentityProvisioner) Provider`
-
-<details>
-<summary>func (p *IdentityProvisioner) Provider() core.Provider</summary>
-
-```go
-func (p *IdentityProvisioner) Provider() core.Provider
-```
-
-- Returns `core.ProviderGCP`.
-
-</details>
-
-#### `(*IdentityProvisioner) ProvisionForComponent`
-
-<details>
-<summary>func (p *IdentityProvisioner) ProvisionForComponent(...) (provisioner.Binding, error)</summary>
-
-```go
-func (p *IdentityProvisioner) ProvisionForComponent(
-    ctx context.Context, spec core.ClusterSpec, comp provisioner.Component,
-) (provisioner.Binding, error)
-```
-
-- Requires the cluster `StatusActive`.
-- Ensures the Google service account exists (`ensureServiceAccount`),
-  binds Workload Identity (`bindWorkloadIdentity`).
-- Returns a `provisioner.Binding` whose `Identifier` is the service
-  account email and whose `Annotations` carries
-  `iam.gke.io/gcp-service-account: <email>` — the key the caller applies
-  blind to the Kubernetes ServiceAccount to complete the binding.
-
-</details>
-
-#### `(*IdentityProvisioner) Deprovision`
-
-<details>
-<summary>func (p *IdentityProvisioner) Deprovision(...) error</summary>
-
-```go
-func (p *IdentityProvisioner) Deprovision(
-    ctx context.Context, spec core.ClusterSpec, comp provisioner.Component,
-) error
-```
-
-- Deletes the component's Google service account (which drops its IAM
-  policy bindings too).
-- A 404 is treated as success.
-
-</details>
-
-<details>
-<summary>Package-level helpers</summary>
-
-- `code(err error) int` — extracts the HTTP status from a
-  `googleapi.Error`, since REST-based GCP clients (IAM, Compute) report
-  errors this way, unlike the gRPC-based GKE client (which uses
-  `google.golang.org/grpc/status` codes instead).
-
-</details>
-
 ## network.go
 
 #### `NetworkProvisioner`
@@ -471,7 +353,7 @@ type NetworkProvisioner struct {
 
 - Implements `provisioner.NetworkProvisioner`.
 - Resolves/creates the VPC network and subnetwork a cluster is created
-  in, and opens the one outbound firewall rule fleet state depends on.
+  in, and tears down what it created.
 
 Invariants:
 
@@ -482,11 +364,6 @@ Invariants:
   Cloud Router + Cloud NAT — all deterministically named from the
   cluster ID via `names`, so a resumed or repeated `apply` converges
   instead of duplicating resources.
-- `AllowEgress` requires the cluster to already have a network
-  (`state.NetworkID` populated), i.e. cluster creation (or at least
-  `EnsureNetwork`) must precede it; an existing firewall rule with the
-  cluster's deterministic name is left alone, so a resumed apply does
-  not accumulate duplicate rules.
 - Compute Engine v1 `Insert` calls are long-running operations: a
   successful `Do()` only means the request was accepted.
   `waitGlobalOperation` / `waitRegionOperation` poll until
@@ -511,7 +388,7 @@ func NewNetworkProvisioner(c *Clients) *NetworkProvisioner
 ```
 
 - Wraps `c` as a `NetworkProvisioner`, also constructing an internal
-  `ClusterProvisioner` (used by `AllowEgress` to read `state.NetworkID`).
+  `ClusterProvisioner` used to read the cluster's current state.
 
 </details>
 
@@ -548,35 +425,6 @@ func (p *NetworkProvisioner) EnsureNetwork(
   always run with `EnablePrivateNodes`.
 - Returns the subnetwork's resource path as the single `SubnetIDs`
   entry.
-
-</details>
-
-#### `(*NetworkProvisioner) AllowEgress`
-
-<details>
-<summary>func (p *NetworkProvisioner) AllowEgress(...) (provisioner.Change, error)</summary>
-
-```go
-func (p *NetworkProvisioner) AllowEgress(
-    ctx context.Context, spec core.ClusterSpec, dest provisioner.EgressDestination,
-) (provisioner.Change, error)
-```
-
-- Describes the cluster to obtain `state.NetworkID` (errors with
-  `provisioner.ErrNotFound` if the cluster has no network yet).
-- Idempotently creates an `EGRESS` VPC firewall rule named
-  `kubespin-<clusterID>-egress` allowing TCP to `dest.CIDR` (default
-  `0.0.0.0/0`) on `dest.Port` (default `443`), tagged with the cluster
-  ID.
-
-</details>
-
-<details>
-<summary>Package-level helpers</summary>
-
-- `isResourceNotReady(err error) bool` — detects the transient 400
-  `resourceNotReady` reason GCP returns while a just-created network
-  propagates.
 
 </details>
 

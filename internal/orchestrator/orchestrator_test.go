@@ -90,7 +90,6 @@ func TestApply_ProvisionsAFreshCluster(t *testing.T) {
 
 	want := []string{
 		"create cluster",
-		"bind workload identity",
 		"create and seed repository",
 		"install Argo CD",
 		"verify addons healthy",
@@ -137,7 +136,7 @@ func TestApply_ResumesFromTheRecordedPhase(t *testing.T) {
 	spec := testSpec()
 
 	failing := newRecorder()
-	failing.fail[core.PhaseIdentityBound] = errors.New("github is down")
+	failing.fail[core.PhaseClusterCreated] = errors.New("github is down")
 
 	if _, err := newOrchestrator(t, reg, failing.steps()).Apply(t.Context(), spec); err == nil {
 		t.Fatal("expected the seeded failure to surface")
@@ -147,8 +146,8 @@ func TestApply_ResumesFromTheRecordedPhase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if stored.Phase != core.PhaseIdentityBound {
-		t.Fatalf("Phase = %s, want identity-bound: the phase must not advance past a failed step", stored.Phase)
+	if stored.Phase != core.PhaseClusterCreated {
+		t.Fatalf("Phase = %s, want cluster-created: the phase must not advance past a failed step", stored.Phase)
 	}
 
 	// The retry re-runs the failed step and everything after it, and nothing

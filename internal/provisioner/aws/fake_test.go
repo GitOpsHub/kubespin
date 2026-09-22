@@ -3,10 +3,8 @@ package aws
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -741,23 +739,4 @@ func (f *fakeAWS) withNodePool(spec core.ClusterSpec, pool core.NodePool) {
 			DesiredSize: aws.Int32(pool.DesiredSize),
 		},
 	}
-}
-
-// trustPolicy returns a role's decoded assume-role policy document.
-func (f *fakeAWS) trustPolicy(t *testing.T, role string) map[string]any {
-	t.Helper()
-
-	raw, ok := f.rolePolicy[role]
-	if !ok {
-		t.Fatalf("no trust policy recorded for role %s", role)
-	}
-	if decoded, err := url.QueryUnescape(raw); err == nil {
-		raw = decoded
-	}
-
-	var doc map[string]any
-	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
-		t.Fatalf("parsing trust policy for %s: %v", role, err)
-	}
-	return doc
 }

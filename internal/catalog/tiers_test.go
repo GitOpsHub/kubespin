@@ -38,7 +38,7 @@ func TestSizeSmall_CarriesTheFullNamedAddonSet(t *testing.T) {
 		"cilium", "cert-manager", "gateway-api", "external-secrets",
 		"kyverno", "kyverno-policies", "cluster-autoscaler", "karpenter", "argocd",
 		"kube-prometheus-stack", "fluent-bit", "opencost", "external-dns",
-		"ingress-nginx", "fleet-status-reporter",
+		"ingress-nginx",
 	} {
 		if !small[want] {
 			t.Errorf("size small is missing %s", want)

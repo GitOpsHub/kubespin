@@ -34,12 +34,12 @@ func newApplyCommand() *cobra.Command {
 		Use:   "apply",
 		Short: "Create or reconcile a cluster to match its desired state",
 		Long: `apply drives the full provisioning state machine: acquire the cluster lease,
-create the cluster, bind workload identity, create and seed its repository,
-install Argo CD, and mark the cluster ready.
+create the cluster, create and seed its repository, install Argo CD, and
+mark the cluster ready.
 
 apply is idempotent and resumable. A repeat run with no changes performs no
 cloud calls and produces no commits; a failed run resumes from the phase
-recorded in the Fleet Registry.
+recorded in the cluster registry.
 
 The spec may come from a cluster.yaml — the same file the cluster's repository
 holds — or from the flags below, which override the file when given.
@@ -98,7 +98,6 @@ addons that silently never sync.`,
 	fs.String("vpc-cidr", "", "address space for the VPC kubespin creates when --subnets is omitted (AWS only, default 10.0.0.0/16)")
 	fs.String("vnet-cidr", "", "address space for the VNet kubespin creates when --subnets is omitted (Azure only, default 10.0.0.0/16)")
 	fs.String("subnet-cidr", "", "address prefix for the subnet kubespin creates when --subnets is omitted (Azure default 10.0.1.0/24, GCP default 10.0.0.0/20)")
-	fs.String("ingestion-endpoint", "", "Central Ingestion API host the cluster must be able to reach")
 	fs.String("gcp-project", "", "GCP project hosting the cluster (required for --provider gcp)")
 	fs.String("azure-subscription", "", "Azure subscription hosting the cluster (required for --provider azure)")
 	fs.String("github-org", "", "GitHub organization cluster repositories are created in")
@@ -135,7 +134,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// A dry run only reads the AWS-hosted Fleet Registry — it never touches the
+	// A dry run only reads the AWS-hosted cluster registry — it never touches the
 	// cluster's own cloud — so it only needs AWS authenticated, regardless of
 	// spec.Provider. A real apply needs both.
 	authProviders := []string{"aws"}
@@ -233,7 +232,7 @@ const (
 )
 
 // captureAndRecordArgoCDAccess captures the cluster's Argo CD LoadBalancer
-// endpoint and admin credentials and persists them to the Fleet Registry's
+// endpoint and admin credentials and persists them to the cluster registry's
 // cluster_argocd_details table. It runs on every apply that reaches
 // PhaseReady — including a no-op reconcile against an already-ready cluster
 // — so the row stays current and a failed capture gets another chance next
@@ -419,7 +418,7 @@ func reportPlan(
 
 // cloudAuthProviders names the auth providers a real (non-dry-run) apply or
 // delete needs: the cluster's own cloud, plus AWS, which is always required
-// because the Fleet Registry is AWS-hosted regardless of spec.Provider.
+// because the cluster registry is AWS-hosted regardless of spec.Provider.
 func cloudAuthProviders(spec core.ClusterSpec) []string {
 	if spec.Provider == core.ProviderAWS {
 		return []string{"aws"}
@@ -429,16 +428,6 @@ func cloudAuthProviders(spec core.ClusterSpec) []string {
 
 // buildCloud assembles the provisioners for the spec's cloud.
 func buildCloud(ctx context.Context, cmd *cobra.Command, spec core.ClusterSpec) (orchestrator.Cloud, error) {
-	// Only apply declares --ingestion-endpoint: it is the sole caller that
-	// opens egress. delete (teardown) and fleet audit (read-only Describe)
-	// share buildCloud but have no use for the destination, so the flag is
-	// looked up rather than demanded — requiring it would make those two
-	// commands fail before doing any work.
-	endpoint := ""
-	if f := cmd.Flags().Lookup("ingestion-endpoint"); f != nil {
-		endpoint = f.Value.String()
-	}
-
 	logger := LoggerFrom(ctx)
 
 	switch spec.Provider {
@@ -449,15 +438,9 @@ func buildCloud(ctx context.Context, cmd *cobra.Command, spec core.ClusterSpec) 
 		}
 
 		return orchestrator.Cloud{
-			Cluster:  awsprov.NewClusterProvisioner(clients),
-			Identity: awsprov.NewIdentityProvisioner(clients),
-			Network:  awsprov.NewNetworkProvisioner(clients),
-			IngestionEndpoint: provisioner.EgressDestination{
-				Host:        endpoint,
-				Port:        443,
-				Description: "kubespin fleet-status-reporter egress",
-			},
-			Wait: provisioner.DefaultWaitOptions(),
+			Cluster: awsprov.NewClusterProvisioner(clients),
+			Network: awsprov.NewNetworkProvisioner(clients),
+			Wait:    provisioner.DefaultWaitOptions(),
 		}, nil
 
 	case core.ProviderGCP:
@@ -475,15 +458,9 @@ func buildCloud(ctx context.Context, cmd *cobra.Command, spec core.ClusterSpec) 
 		}
 
 		return orchestrator.Cloud{
-			Cluster:  gcpprov.NewClusterProvisioner(clients),
-			Identity: gcpprov.NewIdentityProvisioner(clients),
-			Network:  gcpprov.NewNetworkProvisioner(clients),
-			IngestionEndpoint: provisioner.EgressDestination{
-				Host:        endpoint,
-				Port:        443,
-				Description: "kubespin fleet-status-reporter egress",
-			},
-			Wait: provisioner.DefaultWaitOptions(),
+			Cluster: gcpprov.NewClusterProvisioner(clients),
+			Network: gcpprov.NewNetworkProvisioner(clients),
+			Wait:    provisioner.DefaultWaitOptions(),
 		}, nil
 
 	case core.ProviderAzure:
@@ -502,15 +479,9 @@ func buildCloud(ctx context.Context, cmd *cobra.Command, spec core.ClusterSpec) 
 		}
 
 		return orchestrator.Cloud{
-			Cluster:  azureprov.NewClusterProvisioner(clients),
-			Identity: azureprov.NewIdentityProvisioner(clients),
-			Network:  azureprov.NewNetworkProvisioner(clients),
-			IngestionEndpoint: provisioner.EgressDestination{
-				Host:        endpoint,
-				Port:        443,
-				Description: "kubespin fleet-status-reporter egress",
-			},
-			Wait: provisioner.DefaultWaitOptions(),
+			Cluster: azureprov.NewClusterProvisioner(clients),
+			Network: azureprov.NewNetworkProvisioner(clients),
+			Wait:    provisioner.DefaultWaitOptions(),
 		}, nil
 
 	default:
@@ -560,8 +531,8 @@ func newDeleteCommand() *cobra.Command {
 		Use:   "delete",
 		Short: "Decommission a cluster and its supporting resources",
 		Long: `delete performs the teardown in reverse order: mark the cluster
-decommissioning in the Fleet Registry, clean up identity and OIDC resources,
-delete the cluster, archive its repository, and record it decommissioned.
+decommissioning in the cluster registry, delete the cluster, archive its
+repository, and record it decommissioned.
 
 Repositories are archived, never deleted: history is retained.
 

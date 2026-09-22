@@ -5,8 +5,8 @@ import (
 	"fmt"
 )
 
-// ErrInvalidTransition is returned when a phase change is not legal. The Fleet
-// Registry checks this on every write, so an illegal state machine move fails at
+// ErrInvalidTransition is returned when a phase change is not legal. The cluster
+// registry checks this on every write, so an illegal state machine move fails at
 // the storage boundary instead of being silently persisted.
 var ErrInvalidTransition = errors.New("invalid phase transition")
 
@@ -19,10 +19,17 @@ type Phase string
 const (
 	PhasePending         Phase = "pending"
 	PhaseClusterCreated  Phase = "cluster-created"
-	PhaseIdentityBound   Phase = "identity-bound"
 	PhaseRepoPushed      Phase = "repo-pushed"
 	PhaseArgoCDInstalled Phase = "argocd-installed"
 	PhaseReady           Phase = "ready"
+
+	// PhaseIdentityBound is no longer part of the happy path: it existed to
+	// bind the in-cluster status reporter's workload identity, and nothing
+	// binds an identity per cluster any more. It stays a recognised phase, and
+	// still steps forward to PhaseRepoPushed, so a row left at it by an older
+	// binary resumes rather than becoming unreadable. Remove once no live
+	// registry can hold it.
+	PhaseIdentityBound Phase = "identity-bound"
 
 	// Teardown phases. Decommissioning is reachable from any live phase, so a
 	// half-built cluster can still be deleted.
@@ -33,7 +40,7 @@ const (
 // forwardTransitions is the happy path: each phase to its single successor.
 var forwardTransitions = map[Phase]Phase{
 	PhasePending:         PhaseClusterCreated,
-	PhaseClusterCreated:  PhaseIdentityBound,
+	PhaseClusterCreated:  PhaseRepoPushed,
 	PhaseIdentityBound:   PhaseRepoPushed,
 	PhaseRepoPushed:      PhaseArgoCDInstalled,
 	PhaseArgoCDInstalled: PhaseReady,
@@ -44,9 +51,12 @@ var forwardTransitions = map[Phase]Phase{
 // It is the authoritative list of phases: Valid is derived from it, so a new
 // phase constant is only recognised once it is registered here.
 var PhaseOrder = []Phase{
-	PhasePending, PhaseClusterCreated, PhaseIdentityBound,
+	PhasePending, PhaseClusterCreated,
 	PhaseRepoPushed, PhaseArgoCDInstalled, PhaseReady,
 	PhaseDecommissioning, PhaseDecommissioned,
+
+	// Legacy, off the happy path; see PhaseIdentityBound.
+	PhaseIdentityBound,
 }
 
 var validPhases = func() map[Phase]struct{} {

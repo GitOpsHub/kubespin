@@ -3,7 +3,7 @@
 // It is the piece that turns the phase state machine into an actual run:
 // acquire the cluster's lease, then walk pending → cluster-created →
 // identity-bound → repo-pushed → argocd-installed → ready, recording the phase
-// in the Fleet Registry after each step.
+// in the cluster registry after each step.
 //
 // Two properties fall out of doing this here rather than inside the apply
 // command, and both are hard to add later:
@@ -71,16 +71,18 @@ func (s StepFunc) Run(ctx context.Context, spec core.ClusterSpec, rec registry.R
 	return s.Fn(ctx, spec, rec)
 }
 
-// DefaultSteps returns a no-op step for every phase.
+// DefaultSteps returns a no-op step for every phase. Their names document what
+// each phase is waiting on; ProvisioningSteps replaces them with the real work.
 //
-// These are placeholders until the provisioners land: cluster and identity
-// creation in M2, repository seeding in M3, and the Argo CD bootstrap in M5.
-// Their names document what each phase is waiting on.
+// core.PhaseIdentityBound keeps a no-op step here and nowhere else: it is a
+// legacy phase (see its doc), so a row left at it by an older binary must
+// still find a step to run — advance errors on a phase with none — and that
+// step has nothing to do but step forward to core.PhaseRepoPushed.
 func DefaultSteps() map[core.Phase]Step {
 	return map[core.Phase]Step{
 		core.PhasePending:         StepFunc{Label: "create cluster"},
-		core.PhaseClusterCreated:  StepFunc{Label: "bind workload identity"},
-		core.PhaseIdentityBound:   StepFunc{Label: "create and seed repository"},
+		core.PhaseClusterCreated:  StepFunc{Label: "create and seed repository"},
+		core.PhaseIdentityBound:   StepFunc{Label: "skip legacy identity phase"},
 		core.PhaseRepoPushed:      StepFunc{Label: "install Argo CD"},
 		core.PhaseArgoCDInstalled: StepFunc{Label: "verify addons healthy"},
 	}

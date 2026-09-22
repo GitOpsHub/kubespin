@@ -24,10 +24,9 @@ all: lint test build
 ##
 ## Skipped when CI is set: a runner has no use for it, and writing outside the
 ## repo tree is a surprising side effect for a build to have. Use `make build
-## INSTALL_DIR=...` to redirect it, or `make lambda` plus a bare `go build` to
-## avoid it entirely.
+## INSTALL_DIR=...` to redirect it, or a bare `go build` to avoid it entirely.
 .PHONY: build
-build: lambda
+build:
 	go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/$(BINARY)
 ifndef CI
 	@$(MAKE) --no-print-directory install
@@ -41,14 +40,6 @@ install:
 	@mkdir -p '$(INSTALL_DIR)'
 	@install -m 0755 bin/$(BINARY) '$(INSTALL_DIR)/$(BINARY)'
 	@printf '==> installed %s %s to %s\n' '$(BINARY)' '$(VERSION)' '$(INSTALL_DIR)/$(BINARY)'
-
-## The ingestion Lambda runs on provided.al2023, where the handler must be a
-## Linux binary named `bootstrap`. GOOS/GOARCH are set inline so a cross-compile
-## of the main binary cannot leak into this target.
-.PHONY: lambda
-lambda:
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
-		go build -trimpath -ldflags '-s -w $(LDFLAGS)' -o bin/ingestion/bootstrap ./cmd/ingestion
 
 .PHONY: test
 test:

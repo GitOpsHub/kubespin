@@ -1,19 +1,17 @@
 # internal/provisioner/azure
 
-This package implements `provisioner.ClusterProvisioner`, `provisioner.IdentityProvisioner`,
-`provisioner.NetworkProvisioner`, and `provisioner.RESTConfigProvisioner` for AKS — those
-shared interfaces are defined in `internal/provisioner/provisioner.go` and documented
-elsewhere; this page only covers the Azure-specific implementation behind them. AKS clusters
-get a system-assigned identity plus AAD Workload Identity, and `EnsureNetwork` always ensures
-the cluster's resource group first, auto-creating a VNet/subnet only when the operator hasn't
-supplied one.
+This package implements `provisioner.ClusterProvisioner`, `provisioner.NetworkProvisioner`,
+and `provisioner.RESTConfigProvisioner` for AKS — those shared interfaces are defined in
+`internal/provisioner/provisioner.go` and documented elsewhere; this page only covers the
+Azure-specific implementation behind them. AKS clusters get a system-assigned identity plus
+AAD Workload Identity, and `EnsureNetwork` always ensures the cluster's resource group
+first, auto-creating a VNet/subnet only when the operator hasn't supplied one.
 
 ## Quick reference
 
 | Name | Kind | File | Summary |
 |---|---|---|---|
 | [`clusterAPI`](#clusterapi) | interface | azure.go | AKS surface: cluster CRUD, agent pool CRUD, kubeconfig retrieval |
-| [`identityAPI`](#identityapi) | interface | azure.go | Managed identity + federated credential CRUD |
 | [`networkAPI`](#networkapi) | interface | azure.go | NSG/security rule and VNet/subnet CRUD |
 | [`resourceGroupAPI`](#resourcegroupapi) | interface | azure.go | Resource group existence check + ensure |
 | [`Clients`](#clients) | struct | azure.go | Bundles Azure clients scoped to one subscription |
@@ -27,12 +25,8 @@ supplied one.
 | [`ClusterProvisioner Reconcile`](#clusterprovisioner-reconcile) | method | cluster.go | Reconciles access mode and node pool drift |
 | [`ClusterProvisioner Delete`](#clusterprovisioner-delete) | method | cluster.go | Asynchronous, idempotent cluster teardown |
 | [`ClusterProvisioner RESTConfig`](#clusterprovisioner-restconfig) | method | kubeauth.go | Builds a `*rest.Config` from AKS's generated kubeconfig |
-| [`IdentityProvisioner`](#identityprovisioner) | struct | identity.go | Binds service accounts to managed identities via Workload Identity |
-| [`IdentityProvisioner ProvisionForComponent`](#identityprovisioner-provisionforcomponent) | method | identity.go | Creates/upserts a managed identity + federated credential |
-| [`IdentityProvisioner Deprovision`](#identityprovisioner-deprovision) | method | identity.go | Deletes the federated credential and managed identity |
 | [`NetworkProvisioner`](#networkprovisioner) | struct | network.go | Implements `provisioner.NetworkProvisioner` for AKS |
 | [`NetworkProvisioner EnsureNetwork`](#networkprovisioner-ensurenetwork) | method | ensure_network.go | Ensures resource group, then VNet/subnet (or passes through `spec.Subnets`) |
-| [`NetworkProvisioner AllowEgress`](#networkprovisioner-allowegress) | method | network.go | Idempotently opens an outbound NSG rule for the status reporter |
 
 ## azure.go
 
@@ -51,28 +45,14 @@ The AKS surface this package uses:
 
 </details>
 
-#### `identityAPI`
-
-<details>
-<summary>`identityAPI` — interface</summary>
-
-Covers the user-assigned managed identity Workload Identity binds to, and the
-federated credential that scopes the binding:
-
-- `GetIdentity` / `CreateOrUpdateIdentity` / `DeleteIdentity`
-- `GetFederatedCredential` / `CreateOrUpdateFederatedCredential` / `DeleteFederatedCredential`
-
-</details>
-
 #### `networkAPI`
 
 <details>
 <summary>`networkAPI` — interface</summary>
 
-Covers the status reporter's egress rule and, for `EnsureNetwork`, the
-VNet/subnet kubespin creates when none is supplied:
+Covers the VNet/subnet kubespin creates for `EnsureNetwork` when none is
+supplied:
 
-- `ListSecurityGroups`, `GetSecurityRule`, `CreateOrUpdateSecurityRule`
 - `GetVirtualNetwork`, `CreateOrUpdateVirtualNetwork`
 - `GetSubnet`, `CreateOrUpdateSubnet`
 
@@ -101,7 +81,6 @@ doesn't exist yet.
 type Clients struct {
     subscription   string
     cluster        clusterAPI
-    identity       identityAPI
     network        networkAPI
     resourceGroups resourceGroupAPI
     logger         *slog.Logger
@@ -111,8 +90,8 @@ type Clients struct {
 - Bundles the Azure clients the provisioner uses, scoped to one subscription
   fixed at construction — operator configuration, not cluster desired state,
   the same way AWS's `Clients` fixes a region and GCP's fixes a project
-- Built via `NewClients`; `realCluster`, `realIdentity`, `realNetwork`,
-  `realResourceGroups` are its production adapters over the real
+- Built via `NewClients`; `realCluster`, `realNetwork`, `realResourceGroups`
+  are its production adapters over the real
   `armcontainerservice`/`armmsi`/`armnetwork`/`armresources` SDK clients
 
 **Invariant:** Azure's control-plane SDK returns a poller for long-running
@@ -284,8 +263,7 @@ func (p *ClusterProvisioner) Describe(ctx context.Context, spec core.ClusterSpec
   `Deleting`→Deleting, `Failed`/`Canceled`→Failed, anything else→Creating)
 - Populates `Endpoint` from `Fqdn` or, for private clusters, `PrivateFQDN`;
   `OIDCIssuer` from `OidcIssuerProfile.IssuerURL`; `NetworkID` from
-  `NodeResourceGroup` (where AKS places the cluster's NSG — the scope
-  `AllowEgress` provisions against)
+  `NodeResourceGroup` (where AKS places the cluster's own resources)
 - Node pools are only listed (`describeNodePools`) once the cluster is Active
 
 </details>
@@ -344,77 +322,6 @@ func (p *ClusterProvisioner) RESTConfig(ctx context.Context, spec core.ClusterSp
 
 </details>
 
-## identity.go
-
-#### `IdentityProvisioner`
-
-<details>
-<summary>`IdentityProvisioner` — struct</summary>
-
-```go
-type IdentityProvisioner struct {
-    c *Clients
-}
-```
-
-- Implements `provisioner.IdentityProvisioner`, binding in-cluster service
-  accounts to Azure managed identities via Workload Identity federated
-  credentials — the same "prove identity, not grant access" pattern IRSA and
-  GCP Workload Identity use elsewhere in kubespin
-- Built via `NewIdentityProvisioner(c *Clients) *IdentityProvisioner`
-- `Provider()` returns `core.ProviderAzure`
-
-**Invariant:** the managed identity carries no role assignment. It exists so
-a component (e.g. `fleet-status-reporter`) can *prove* which cluster it is
-when it pushes status; granting it Azure access is a separate, deliberate
-decision this type does not make.
-
-</details>
-
-#### `IdentityProvisioner ProvisionForComponent`
-
-<details>
-<summary>`IdentityProvisioner ProvisionForComponent` — Signature</summary>
-
-```go
-func (p *IdentityProvisioner) ProvisionForComponent(
-    ctx context.Context, spec core.ClusterSpec, comp provisioner.Component,
-) (provisioner.Binding, error)
-```
-
-- Describes the cluster first; errors with `provisioner.ErrNotFound` unless
-  it is Active, and errors if it reports no OIDC issuer (identity binding is
-  its own phase because the issuer only exists once the control plane is up)
-- Then:
-    1. `ensureIdentity` — gets or creates a `armmsi.Identity` named
-       `kubespin-<id>-<component>`, returning its client ID
-    2. `ensureFederatedCredential` — gets or creates (upserts on drift) a
-       federated credential named after the component, with `Issuer` = the
-       cluster's OIDC issuer, `Subject` =
-       `system:serviceaccount:<namespace>:<serviceAccount>`, and `Audiences`
-       = `["api://AzureADTokenExchange"]`. If an existing credential already
-       matches issuer and subject, it's left alone (no-op)
-- Returns a `provisioner.Binding` with `Identifier` = the identity's client
-  ID and `Annotations["azure.workload.identity/client-id"]` set — the
-  annotation key the caller applies blind, not knowing which cloud it's on
-
-</details>
-
-#### `IdentityProvisioner Deprovision`
-
-<details>
-<summary>`IdentityProvisioner Deprovision` — Signature</summary>
-
-```go
-func (p *IdentityProvisioner) Deprovision(ctx context.Context, spec core.ClusterSpec, comp provisioner.Component) error
-```
-
-- Deletes the federated credential, then the managed identity
-- Both deletes treat a 404 as success, so a retried teardown converges
-  rather than failing
-
-</details>
-
 ## network.go
 
 #### `NetworkProvisioner`
@@ -434,32 +341,6 @@ type NetworkProvisioner struct {
   also constructs an internal `ClusterProvisioner` used to look up the
   cluster's node resource group
 - `Provider()` returns `core.ProviderAzure`
-
-</details>
-
-#### `NetworkProvisioner AllowEgress`
-
-<details>
-<summary>`NetworkProvisioner AllowEgress` — Signature</summary>
-
-```go
-func (p *NetworkProvisioner) AllowEgress(
-    ctx context.Context, spec core.ClusterSpec, dest provisioner.EgressDestination,
-) (provisioner.Change, error)
-```
-
-- The only route fleet state has out of a cluster
-- Describes the cluster to get `NetworkID` (the node resource group) —
-  errors with `provisioner.ErrNotFound` if not yet set
-- Looks up the NSG within that resource group via `findSecurityGroup` (AKS
-  places the NSG there under a name it controls, so this looks it up rather
-  than assuming a fixed name; errors with `provisioner.ErrNotFound` if none
-  exists yet)
-- If a security rule named `n.securityRule()` already exists, it's left
-  alone (idempotent — no duplicate rules on a repeated apply)
-- Otherwise creates an outbound TCP allow rule at priority 200, defaulting
-  `dest.CIDR` to `0.0.0.0/0`, `dest.Port` to `443`, and `dest.Description`
-  to `"kubespin fleet-status-reporter egress"` when unset
 
 </details>
 

@@ -9,12 +9,12 @@ Create or reconcile a cluster to match its desired state
 ## Synopsis
 
 apply drives the full provisioning state machine: acquire the cluster lease,
-create the cluster, bind workload identity, create and seed its repository,
-install Argo CD, and mark the cluster ready.
+create the cluster, create and seed its repository, install Argo CD, and
+mark the cluster ready.
 
 apply is idempotent and resumable. A repeat run with no changes performs no
 cloud calls and produces no commits; a failed run resumes from the phase
-recorded in the Fleet Registry.
+recorded in the cluster registry.
 
 The spec may come from a cluster.yaml — the same file the cluster's repository
 holds — or from the flags below, which override the file when given.
@@ -82,7 +82,6 @@ kubespin apply [flags]
       --github-org string           GitHub organization cluster repositories are created in
       --github-upload-url string    GitHub Enterprise upload URL (leave empty for github.com)
   -h, --help                        help for apply
-      --ingestion-endpoint string   Central Ingestion API host the cluster must be able to reach
       --instance-type string        instance type for the default node pool (defaults to a cloud-appropriate value per --provider when unset: m6i.large on aws, e2-standard-4 on gcp, Standard_D4s_v7 on azure; --spot picks a smaller cloud-appropriate default instead, see --spot) (default "m6i.large")
       --kubeconfig string           path to the kubeconfig file to update when --update-kubeconfig is set (defaults to the cloud CLI's own default, typically ~/.kube/config or $KUBECONFIG)
       --kubernetes-version string   Kubernetes minor version, e.g. 1.34

@@ -13,15 +13,13 @@ import (
 
 const awsInstallHint = "https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
 
-// stsAPI is the one call this package needs, narrowed the same way
-// internal/fleetinfra's client interfaces are: it is what makes
-// IsAuthenticated testable without real AWS credentials.
+// stsAPI is the one call this package needs, narrowed so IsAuthenticated is
+// testable without real AWS credentials.
 type stsAPI interface {
 	GetCallerIdentity(context.Context, *sts.GetCallerIdentityInput, ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
 }
 
-// AWSProvider authenticates via AWS IAM Identity Center (SSO): the same flow
-// documented in docs/fleet-bootstrap.md for the Fleet Registry account.
+// AWSProvider authenticates via AWS IAM Identity Center (SSO).
 type AWSProvider struct {
 	profile string
 	sts     stsAPI

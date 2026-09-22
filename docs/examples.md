@@ -2,9 +2,7 @@
 
 Working commands to copy, paste, and adjust. For flag-by-flag detail see the
 [CLI reference](cli/kubespin.md); for *why* the system behaves this way see
-[Architecture](architecture.md); for the fleet-bootstrap deep dive
-(permissions, what it creates, troubleshooting) see
-[Fleet bootstrap](fleet-bootstrap.md).
+[Architecture](architecture.md).
 
 Every command below is written as `kubespin`, run from the root of a
 repository checkout after `make build`. Nothing here is a sketch: each
@@ -19,13 +17,9 @@ make build
 
 The fastest path to one running cluster:
 
-- **Fleet already bootstrapped?** Ask your platform team, or run
-  `kubespin fleet status` with `KUBESPIN_REGISTRY_DSN` set — if it runs
-  (even against a fleet with no clusters yet), the shared infra already
-  exists. Skip straight to the `apply` below.
-- **Setting up a fleet from scratch?** Run [Fleet bootstrap](fleet-bootstrap.md)
-  once, first — it provisions the shared Central Ingestion API and is a
-  one-time fleet-admin operation, not something every new cluster repeats.
+There is nothing to set up first beyond the Postgres registry
+`KUBESPIN_REGISTRY_DSN` points at, which migrates its own schema on first
+connect.
 
 ```bash
 kubespin login --only aws
@@ -37,7 +31,6 @@ kubespin apply \
   --access private \
   --github-org "$GITHUB_ORG"
 
-kubespin fleet status --phase ready
 ```
 
 That's the same AWS example as [Spin up a single cluster](#aws-private-cluster)
@@ -68,21 +61,16 @@ gcloud auth application-default login
 az login
 ```
 
-### `KUBESPIN_REGISTRY_DSN`, on nearly every command
+### `KUBESPIN_REGISTRY_DSN`, on apply and delete
 
-`apply`, `delete`, and every `fleet` subcommand read the Fleet Registry
-(a Postgres database), and its DSN has **no default and no flag** on purpose
-(see [Fleet bootstrap troubleshooting](fleet-bootstrap.md#troubleshooting)) —
-a flag would leak the password into shell history and process listings.
+`apply` and `delete` read the cluster registry (a Postgres database), and its
+DSN has **no default and no flag** on purpose — a flag would leak the password
+into shell history and process listings.
 Supply it as `KUBESPIN_REGISTRY_DSN`, or as `registry-dsn` in the config file:
 
 ```bash
 export KUBESPIN_REGISTRY_DSN=postgres://user:pass@host:5432/dbname?sslmode=require
 ```
-
-`fleet bootstrap` additionally takes its own `--region` flag — the AWS region
-for the ingestion Lambda/IAM/API Gateway it provisions, unrelated to the
-registry DSN.
 
 ### `--size`, on `apply` and `delete`
 
@@ -95,8 +83,8 @@ Velero + Falco, `large` adds strict Kyverno policies + audit logging + OTel.
 
 ### GitHub, on everything that touches a cluster repository
 
-Real (non-dry-run) `apply`, and every `delete`, `fleet update`, and
-`fleet audit`, create or read cluster repositories. Each needs both of these,
+Real (non-dry-run) `apply` and every `delete` create or read cluster
+repositories. Each needs both of these,
 from [`.env.example`](https://github.com/GitOpsHub/kubespin/blob/main/.env.example):
 
 - **`GITHUB_TOKEN`** — a token with repo-create/push scope, read from the
@@ -113,7 +101,7 @@ export GITHUB_TOKEN=ghp_...
 export GITHUB_ORG=GitOpsHub
 ```
 
-An `apply --dry-run` is the one exception: it only reads the Fleet Registry
+An `apply --dry-run` is the one exception: it only reads the cluster registry
 and returns before any repository client is built, so it needs neither.
 
 ## Auth workflows
@@ -166,7 +154,6 @@ kubespin apply \
   --access private \
   --github-org "$GITHUB_ORG"
 
-kubespin fleet status --phase ready
 ```
 
 ### GCP, public cluster with a larger node pool
@@ -184,7 +171,6 @@ kubespin apply \
   --min-size 2 --max-size 6 --desired-size 3 \
   --github-org "$GITHUB_ORG"
 
-kubespin fleet status --phase ready
 ```
 
 `--min-size`, `--max-size`, and `--desired-size` describe the single
@@ -245,7 +231,6 @@ kubespin apply \
   --subnets "/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/my-rg/providers/Microsoft.Network/virtualNetworks/my-vnet/subnets/my-subnet" \
   --github-org "$GITHUB_ORG"
 
-kubespin fleet status --phase ready
 ```
 
 `--size medium` resolves against the builtin catalog — small, medium, and
@@ -259,22 +244,6 @@ kubespin binary, and if that default changes between versions, the next
 clouds) reject changing an existing pool's instance type in place, so an
 unpinned default that moves out from under a live cluster turns an
 idempotent `apply` into a hard failure.
-
-### Telling clusters where to push status
-
-The in-cluster reporter needs egress to the Central Ingestion API, and the
-allowlist rule is provisioned during cluster creation. Pass the host that
-`fleet bootstrap` printed:
-
-```bash
-kubespin apply \
-  --provider aws \
-  --region us-east-1 \
-  --cluster-id demo-aws \
-  --access private \
-  --ingestion-endpoint abc123.execute-api.us-east-1.amazonaws.com \
-  --github-org "$GITHUB_ORG"
-```
 
 ### From a cluster.yaml instead of flags
 
@@ -368,14 +337,14 @@ kubespin apply --spec ./cluster.yaml \
 
 This is the mechanism for "extra Helm deployments this one cluster needs" —
 it lives in the cluster's own `cluster.yaml`, survives every subsequent
-`apply`/`fleet update` (which re-render `addons.yaml` from size + overrides
+`apply` (which re-renders `addons.yaml` from size + overrides
 on every run), and requires no external repository. Naming an addon the
 cluster's size doesn't carry (e.g. `karpenter` on a GCP cluster, which only
 ever gets `cluster-autoscaler`) fails validation with `ErrUnknownOverride`.
 
 ### Preview before applying
 
-An `apply --dry-run` reads the Fleet Registry and reports the phase a real
+An `apply --dry-run` reads the cluster registry and reports the phase a real
 run would resume from. It never touches the cluster's own cloud, and never
 builds a GitHub client — so it needs neither `GITHUB_TOKEN` nor
 `--github-org`:
@@ -397,7 +366,7 @@ cluster demo-aws is not registered; apply would create it from phase pending
 
 ## Smoke test: create and destroy a throwaway cluster
 
-The cheapest way to validate a kubespin install (a fresh Fleet Registry, a
+The cheapest way to validate a kubespin install (a fresh registry, a
 new environment, after upgrading) end to end: bring up one real cluster per
 cloud with the smallest footprint, confirm it reaches `ready`, then tear it
 down.
@@ -436,7 +405,6 @@ kubespin apply \
   --spot \
   --github-org "$GITHUB_ORG"
 
-kubespin fleet status --phase ready
 ```
 
 Once both clusters show `ready`, tear them down:
@@ -454,65 +422,9 @@ A GCP project with several prior test clusters can hit the account-level
 create one for the new cluster — the error surfaces as `Quota 'NETWORKS'
 exceeded` from `create cluster: ensuring network`. Check
 `gcloud compute networks list` for orphaned `kubespin-*` networks left behind
-by earlier runs (no matching entry in `kubespin fleet status`, no attached
-GKE cluster in `gcloud container clusters list`) before requesting a quota
+by earlier runs (no attached GKE cluster in
+`gcloud container clusters list`) before requesting a quota
 increase — deleting one frees a slot immediately.
-
-## Fleet lifecycle
-
-The shared fleet infrastructure — the Central Ingestion API — is provisioned
-once per fleet account, before any cluster, via `fleet bootstrap`. The Fleet
-Registry itself is a separately operated Postgres database
-(`KUBESPIN_REGISTRY_DSN`); it self-migrates its schema on first connect, so
-there is nothing to provision for it. This is a one-time fleet-admin step, not
-part of every cluster's lifecycle — full walkthrough, including required IAM
-permissions and troubleshooting, in [Fleet bootstrap](fleet-bootstrap.md).
-
-Once that's done (or if it already was — see [Quickstart](#quickstart)),
-everything below is the recurring, per-cluster/per-fleet part:
-
-```bash
-# 1. Spin up clusters (repeat per cluster; see "Spin up a single cluster")
-kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
-  --access private \
-  --github-org "$GITHUB_ORG"
-```
-
-```bash
-# 2. Watch the fleet — read-only, never connects to a cluster
-kubespin fleet status
-kubespin fleet status --stale-only --stale-threshold 30m
-kubespin fleet status --output json
-kubespin fleet status --provider aws --phase ready
-
-# Same data, rendered as a static HTML snapshot you can open in a browser
-kubespin fleet dashboard
-```
-
-```bash
-# 3. Roll a component version across every matching cluster
-kubespin fleet update --component argo-cd --version 2.11.0 --concurrency 8 \
-  --github-org "$GITHUB_ORG"
-
-# Scope a wave to one cloud
-kubespin fleet update --component cert-manager --version 1.15.1 --provider aws \
-  --github-org "$GITHUB_ORG"
-```
-
-```bash
-# 4. Check live infra against each cluster's cluster.yaml
-kubespin fleet audit \
-  --github-org "$GITHUB_ORG"
-
-kubespin fleet audit --provider gcp --concurrency 8 \
-  --gcp-project kubernetes-dev-502710 \
-  --github-org "$GITHUB_ORG"
-```
-
-`fleet audit` describes live infrastructure through each cloud's SDK, so a
-fleet containing GCP or Azure clusters needs `--gcp-project` /
-`--azure-subscription` even when they are not the audit's focus — without
-them, those clusters report `FAILED` rather than being skipped.
 
 ## Tear down
 
@@ -553,27 +465,19 @@ Several other flags (`--instance-type`, `--min-size`, `--max-size`,
 `--desired-size`, `--disk-size`, `--kubernetes-version`, the CIDR flags) are
 accepted for spec compatibility and ignored.
 
-There is no fleet-infrastructure teardown command, deliberately — see
-[Fleet bootstrap: re-running, resuming, and tearing down](fleet-bootstrap.md#re-running-resuming-and-tearing-down).
-
 ## Which commands honour `--dry-run`
 
 `--dry-run` is a root persistent flag, so every command *accepts* it, but only
-two act on it:
+one acts on it:
 
 | Command | `--dry-run` |
 |---|---|
-| `fleet bootstrap` | **Honoured.** `Plan` is strictly read-only; the test fakes fail the build if a dry run makes a mutating call. |
-| `apply` | **Honoured.** Reads the Fleet Registry and reports the phase a run would resume from; touches no cloud and no repository. |
+| `apply` | **Honoured.** Reads the cluster registry and reports the phase a run would resume from; touches no cloud and no repository. |
 | `delete` | **Ignored.** The teardown runs. |
-| `fleet update` | **Ignored.** The wave commits. |
-| `fleet audit` | Not applicable — read-only by construction. |
-| `fleet status` | Not applicable — read-only by construction. |
-| `fleet dashboard` | Not applicable — read-only by construction. |
 
 Passing `--dry-run` still logs `dry run: no changes will be made` on every
 command, because that line is emitted by the shared root pre-run. On `delete`
-and `fleet update` it does not reflect what the command then does.
+it does not reflect what the command then does.
 
 ## Global flags and configuration
 
@@ -581,14 +485,14 @@ Precedence is **flags > `KUBESPIN_*` environment variables > config file >
 defaults**.
 
 ```bash
-kubespin fleet status \
+kubespin status \
   --log-level debug --log-format json
 ```
 
 Logs go to stderr and command output to stdout, so the two can be separated:
 
 ```bash
-kubespin fleet status --output json 2>/dev/null
+kubespin status 2>/dev/null
 ```
 
 A config file at `$XDG_CONFIG_HOME/kubespin/config.yaml` or `./config.yaml`

@@ -25,17 +25,16 @@ func NewRootCommand() *cobra.Command {
 		Long: `kubespin provisions Kubernetes clusters across AWS, GCP, and Azure, each with
 its own repository and its own local Argo CD instance syncing from it.
 
-Clusters are never reached inbound: status flows outward from an in-cluster
-reporter to the Fleet Registry.`,
-		Example: `  # Spin up the shared fleet infrastructure once, then a cluster.
+There is no kubespin service and nothing kubespin-owned runs inside a cluster:
+every operation is a direct connection from the machine running the CLI.`,
+		Example: `  # Log in to the clouds, then provision a cluster.
   # KUBESPIN_REGISTRY_DSN must be set (in .env or the environment) throughout.
   kubespin login
-  make lambda
-  kubespin fleet bootstrap --account-id 465532803838 --region us-east-1
   kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
     --access private \
     --github-org GitOpsHub
-  kubespin fleet status
+  kubespin delete --provider aws --region us-east-1 --cluster-id demo-aws \
+    --github-org GitOpsHub
 
 See "kubespin <command> --help" for flags and more examples on any command.`,
 		Version:       version.String(),
@@ -68,7 +67,6 @@ See "kubespin <command> --help" for flags and more examples on any command.`,
 	root.AddCommand(
 		newApplyCommand(),
 		newDeleteCommand(),
-		newFleetCommand(),
 		newLoginCommand(),
 		newStatusCommand(),
 		newLogoutCommand(),

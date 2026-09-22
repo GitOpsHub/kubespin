@@ -15,8 +15,7 @@ golangci-lint run       # zero lint errors
 make docs               # must be a no-op if no cobra tree changed
 ```
 
-`make bootstrap` installs `golangci-lint` if absent.  
-`make lambda` cross-compiles `cmd/ingestion` for `linux/arm64` (required before `fleet bootstrap`).
+`make bootstrap` installs `golangci-lint` if absent.
 
 ---
 
@@ -25,24 +24,29 @@ make docs               # must be a no-op if no cobra tree changed
 These are hard constraints. A design that violates one is wrong, not the
 invariant.
 
-### Outbound-only
-Nothing on the fleet-management side may reach into a cluster. Status arrives
-via push (`fleet-status-reporter` CronJob → Central Ingestion API). An agent
-must never suggest polling a cluster endpoint or an in-cluster webhook.
+### No control plane, no agent
+kubespin is a CLI that runs on an operator's machine. There is no always-on
+kubespin service, no central Argo CD hub, and nothing kubespin-owned running
+inside a provisioned cluster. Every cluster-touching operation is a direct,
+operator-initiated connection from wherever the CLI runs — which is why
+`--access private` requires that machine to already have reachability into
+the cluster's VPC/VNet. An agent must never propose an in-cluster agent, a
+scheduled push, or a service that watches clusters between commands.
 
-### Fleet Registry ownership
+### Cluster registry ownership
 - One table: `fleet_registry` in a Postgres database the operator supplies via
   `KUBESPIN_REGISTRY_DSN`. Never a CLI flag — connection strings carry passwords.
+  (The table name is a fossil of the removed fleet functionality; renaming it
+  would break live deployments, so it stays.)
+- It is a resume log for `apply`/`delete` plus a lease, one row per cluster —
+  not an inventory, and never a source of liveness. Nothing reports into it.
 - Every read/write goes through `internal/registry.Registry` — no raw SQL
   outside that package.
 - `internal/registry.Postgres` self-migrates its schema on first connect (via
-  `schemaDDL` / `argoCDDetailsDDL`). **Exception:** the ingestion Lambda calls
-  `NewPostgres` with `WithoutMigration()` to avoid DDL lock contention on cold
-  starts. The CLI owns migrations; Lambda does not.
+  `schemaDDL` / `argoCDDetailsDDL`).
 - Connection-pool defaults inside `NewPostgres`: 25 open / 10 idle / 15 min
-  lifetime. The Lambda overrides these with `WithConnectionPool(2, 1, 15m)`.
-  Adjust with `WithConnectionPool` — never call `db.SetMax*` directly outside
-  `postgres.go`.
+  lifetime. Adjust with `WithConnectionPool` — never call `db.SetMax*` directly
+  outside `postgres.go`.
 
 ### Idempotent apply (split-diff)
 `apply` clones the cluster repo, hashes desired state against `.state.yaml`,
@@ -60,14 +64,16 @@ addons that were removed from the size tier. Both `githubProvisioner` and
 `Memory` honour this convention — do not add special-case deletion APIs.
 
 ### Three clouds, shared interfaces
-`ClusterProvisioner`, `IdentityProvisioner`, `NetworkProvisioner` — one
-implementation per cloud under `internal/provisioner/{aws,gcp,azure}`. No
-cloud conditionals outside those directories.
+`ClusterProvisioner` (`Create`/`Describe`/`Reconcile`/`Delete`) and
+`NetworkProvisioner` (`EnsureNetwork`/`DeleteNetwork`) — one implementation
+per cloud under `internal/provisioner/{aws,gcp,azure}`. No cloud conditionals
+outside those directories.
 
 ### No second toolchain
-Fleet infrastructure is provisioned by `internal/fleetinfra` via AWS SDK —
-no Terraform, no CloudFormation, no shell scripts. Every step is
-create-or-update; `Plan` is strictly read-only.
+Every cloud resource is provisioned by `internal/provisioner/{aws,gcp,azure}`
+through each cloud's Go SDK — no Terraform, no CloudFormation, no shell
+scripts, no `helm`/`kubectl` binaries. Every step is create-or-update, and a
+dry run is strictly read-only.
 
 ---
 
@@ -75,23 +81,16 @@ create-or-update; `Plan` is strictly read-only.
 
 ```
 cmd/kubespin/                   thin main(); delegates to internal/cli
-cmd/ingestion/                  Lambda handler; WithoutMigration + WithConnectionPool(2,1,15m)
-cmd/fleet-status-reporter/      in-cluster CronJob; Argo CD → signed push
 internal/cli/                   cobra command tree
 internal/core/                  shared domain types (dependency-free leaf)
 internal/auth/                  cloud auth: aws/gcloud/az shell integration
-internal/registry/              Fleet Registry client + lease
+internal/registry/              cluster registry client + lease
 internal/orchestrator/          per-cluster phase state machine (apply/delete)
-internal/provisioner/{aws,gcp,azure}  ClusterProvisioner + IdentityProvisioner + NetworkProvisioner
+internal/provisioner/{aws,gcp,azure}  ClusterProvisioner + NetworkProvisioner
 internal/repo/                  GitHub repo CRUD; Push nil-content = delete
 internal/catalog/               size resolution (small/medium/large, builtin) + override merge
 internal/argocd/                app-of-apps manifests, Helm install
-internal/orchestrator/          per-cluster phase state machine (apply/delete)
-internal/fleet/                 fleet-wide audit, update, status
-internal/fleetinfra/            SDK converge engine for the fleet infra (Lambda/IAM/API GW)
 internal/kubeconfig/            operator kubeconfig update after apply (shells out to aws/gcloud/az)
-internal/ingestion/             token verification + registry write path
-internal/reporter/              Argo CD summary + signed push (in-cluster)
 internal/tools/changeloggen/    derives CHANGELOG.md and next SemVer from Conventional Commits
 internal/tools/docsgen/         regenerates docs/cli/*.md from cobra tree
 internal/version/               build metadata (-ldflags)
@@ -107,9 +106,9 @@ All errors returned from non-trivial operations must be wrapped with context:
 return fmt.Errorf("doing the thing: %w", err)   // ✓
 return err                                         // ✗ — loses call-site context
 ```
-Recent improvements wrapped bare `return err` in `scanRecord`, `findingsJSON`,
-`deleteVPC`, `deleteNetwork`, `drainLoadBalancers`, and `waitForArgoCDEndpoint`.
-Follow the same pattern.
+Recent improvements wrapped bare `return err` in `scanRecord`, `deleteVPC`,
+`deleteNetwork`, `drainLoadBalancers`, and `waitForArgoCDEndpoint`. Follow the
+same pattern.
 
 ### Deferred resource close
 Use the blank-identifier pattern to silence the linter on errors that cannot be
@@ -137,9 +136,8 @@ you touch `NewPostgres`.
 |---|---|
 | `internal/registry` | Contract test suite (`contract_test.go`) runs against `Memory` always, against `Postgres` under `-tags integration`. Both must pass the same set of assertions. |
 | `internal/repo` | `fakeGitHub` / `Memory` provisioner. `fakeGitHub.CreateTree` must honour nil `SHA`+`Content` as a deletion. |
-| `internal/orchestrator`, `internal/fleet` | Use `registry.NewMemory()` and `repo.NewMemory()`. |
+| `internal/orchestrator` | Use `registry.NewMemory()` and `repo.NewMemory()`. |
 | Cloud provisioners | Narrow interface fakes per cloud; no AWS/GCP/Azure credentials needed for unit tests. |
-| `internal/fleetinfra` | Fake per-service interfaces; `Plan` vs `Converge` split keeps read-only paths testable without credentials. |
 
 When adding a new `Provisioner.Push` call-site that deletes files, write a
 table-driven test against `repo.NewMemory()` asserting the path is absent after
@@ -187,13 +185,10 @@ When you change code, update the corresponding reference doc:
 |---|---|
 | `internal/registry/postgres.go` | `docs/reference/registry.md` |
 | `internal/repo/` | `docs/reference/repo.md` |
-| `cmd/ingestion/main.go` | `docs/reference/entrypoints.md` |
-| `cmd/fleet-status-reporter/` | `docs/reference/entrypoints.md` |
+| `cmd/kubespin/main.go` | `docs/reference/entrypoints.md` |
 | `internal/core/` | `docs/reference/core.md` |
 | `internal/orchestrator/` | `docs/reference/orchestrator.md` |
 | `internal/provisioner/` | `docs/reference/provisioner-{aws,gcp,azure}.md` |
-| `internal/fleetinfra/` | `docs/reference/fleetinfra.md` |
 | `internal/kubeconfig/` | `docs/reference/kubeconfig.md` |
-| `internal/ingestion/` | `docs/reference/ingestion.md` |
 | cobra command tree | run `make docs`; commit result |
 | Architecture invariants | `CLAUDE.md`, `AGENTS.md` (this file) |

@@ -4,7 +4,7 @@
 actual run. It drives a single cluster through `pending → cluster-created →
 identity-bound → repo-pushed → argocd-installed → ready` for `apply`, and the
 reverse teardown `decommissioning → decommissioned` for `delete`, recording
-the phase in the Fleet Registry after each step so a failed run resumes at its
+the phase in the cluster registry after each step so a failed run resumes at its
 last completed phase instead of restarting from scratch.
 
 ## Quick reference
@@ -39,9 +39,8 @@ last completed phase instead of restarting from scratch.
 
 | Step | Registry phase (from) | Calls into |
 |---|---|---|
-| `createClusterStep` | `pending` | `internal/provisioner` — resolves the network (`cloud.Network.EnsureNetwork`, skipped if `cloud.Network` is nil), requests the cluster (`cloud.Cluster.Create`), waits for the control plane (`provisioner.WaitUntilActive`), reconciles node pools (`cloud.Cluster.Reconcile` — this is what actually attaches them on a first run), then opens egress to the ingestion endpoint (`openEgress` → `cloud.Network.AllowEgress`). |
-| `bindIdentityStep` | `cluster-created` | `internal/provisioner`, `internal/registry` — provisions the status reporter's workload identity (`cloud.Identity.ProvisionForComponent`), then describes the cluster (`cloud.Cluster.Describe`) to capture its OIDC issuer and records it via `reg.RecordOIDCIssuer` — the issuer the Central Ingestion API later verifies the reporter's signature against. |
-| `seedRepoStep` | `identity-bound` | `internal/catalog`, `internal/repo` — resolves the cluster's profile (`catalog.ResolveForCluster`: catalog resolve → provider template → argocd stand-in → override merge → ingress/access-mode templating) and creates/seeds the cluster's repository with its initial `cluster.yaml`, `addons.yaml`, `.state.yaml` (`repo.Seed`). |
+| `createClusterStep` | `pending` | `internal/provisioner` — resolves the network (`cloud.Network.EnsureNetwork`, skipped if `cloud.Network` is nil), requests the cluster (`cloud.Cluster.Create`), waits for the control plane (`provisioner.WaitUntilActive`), reconciles node pools (`cloud.Cluster.Reconcile` — this is what actually attaches them on a first run). |
+| `seedRepoStep` | `cluster-created` | `internal/catalog`, `internal/repo` — resolves the cluster's profile (`catalog.ResolveForCluster`: catalog resolve → provider template → argocd stand-in → override merge → ingress/access-mode templating) and creates/seeds the cluster's repository with its initial `cluster.yaml`, `addons.yaml`, `.state.yaml` (`repo.Seed`). |
 | `installArgoCDStep` | `repo-pushed` | `internal/argocd`, `internal/catalog`, `internal/repo`, `internal/provisioner` — builds a `*rest.Config` for the cluster via `provisioner.RESTConfigProvisioner`, resolves the profile (`catalog.ResolveForCluster`), looks up its `"argocd"` addon (`Profile.Addon`, always present) and installs it (`installer.Install`), applies a repo-credentials Secret and the self-referential root Application directly to the cluster (`applier.Apply` — never committed to the repo it manages), then commits the app-of-apps addon Applications (`repo.ReconcileAppOfApps`). |
 | (default no-op: `DefaultSteps()["argocd-installed"] = "verify addons healthy"`) | `argocd-installed` | — Placeholder; `ProvisioningSteps` does not override this phase. |
 
@@ -60,7 +59,6 @@ step might still need it:
 
 | Step | Registry phase | Calls into |
 |---|---|---|
-| Deprovision identity | `decommissioning` | `internal/provisioner` — `cloud.Identity.Deprovision` for the status reporter component. |
 | Drain load balancers | `decommissioning` | `drainLoadBalancers` (steps.go) — builds a `k8s.io/client-go/kubernetes` clientset from `restConfigFor` and deletes every `Service` of type `LoadBalancer` across all namespaces, waiting (bounded, `drainLoadBalancersTimeout`) for each to actually disappear before returning. A cluster that cannot be reached (already gone from an earlier interrupted teardown, or never became active) is a no-op, not a failure — there is nothing to drain. Exists because deleting the cluster does not clean up the cloud load balancer a `Service type=LoadBalancer` (e.g. Argo CD's own exposure) owns; without this it survives the cluster, billing indefinitely, and blocks the network-delete step below with a dependency violation. |
 | Delete cluster | `decommissioning` | `internal/provisioner` — `cloud.Cluster.Delete`, then blocks on `provisioner.WaitUntilGone` so the phase is only recorded once the cloud confirms the cluster is actually gone (node pools drain first; this can take several minutes). |
 | Delete network | `decommissioning` | `internal/provisioner` — `cloud.Network.DeleteNetwork`, reversing `EnsureNetwork`. Identifies what to delete by the same deterministic name `EnsureNetwork` used, not by `spec.Subnets`, so it is safe even when `delete` was not given the same `--subnets` an earlier `apply` was; an operator-supplied network (or one already gone) is a no-op. |
@@ -318,11 +316,9 @@ against `.state.yaml`) — so a no-change `apply` makes neither call.
 
 ```go
 type Cloud struct {
-	Cluster  provisioner.ClusterProvisioner
-	Identity provisioner.IdentityProvisioner
-	Network  provisioner.NetworkProvisioner
+	Cluster provisioner.ClusterProvisioner
+	Network provisioner.NetworkProvisioner
 
-	IngestionEndpoint provisioner.EgressDestination
 	Wait provisioner.WaitOptions
 }
 ```
@@ -331,9 +327,6 @@ type Cloud struct {
   construction lives in one place — adding GCP and Azure is a matter of
   building this struct differently rather than changing the
   orchestrator.
-- **`IngestionEndpoint`**: the Central Ingestion API the status reporter
-  pushes to, the only destination a cluster's egress must permit; if its
-  `Host` is empty, `openEgress` logs a warning and allows nothing.
 - **`Wait`**: tunes how cluster creation/deletion is polled.
 
 </details>
@@ -401,8 +394,8 @@ func Teardown(cloud Cloud, repoProv repo.Provisioner, logger *slog.Logger) Teard
   → argocd stand-in → override merge → ingress/access-mode templating —
   no longer lives here: `seedRepoStep`, `installArgoCDStep`, and
   `ReadyReconcile` all call `catalog.ResolveForCluster`
-  (`internal/catalog/resolve.go`), the same seam `internal/fleet.UpdateOne`
-  uses for `fleet update`, so the two commands can never resolve a given
+  (`internal/catalog/resolve.go`), the one seam every caller uses, so no two
+  code paths can ever resolve a given
   cluster's profile differently.
 
 </details>

@@ -20,8 +20,7 @@ is no central Argo CD hub, and nothing ever reaches inbound into a cluster.
 | [Low-cost dev clusters](low-cost-dev-clusters.md) | You're on a cloud free tier and want the cheapest cluster for learning Kubernetes |
 | [Autopilot clusters](autopilot-clusters.md) | You want fully-managed compute (GKE Autopilot or EKS Auto Mode) |
 | **Operations** | |
-| [Fleet bootstrap](fleet-bootstrap.md) | You are provisioning the shared fleet infrastructure (once, before any cluster), or something went wrong doing so |
-| [Runbook](runbook.md) | Something in the fleet is broken and you're on call |
+| [Runbook](runbook.md) | An `apply` or `delete` is stuck and you're on call |
 | [CI/CD with Azure OIDC](cicd-azure-oidc.md) | You're wiring up a GitHub Actions workflow to run kubespin against AWS/Azure |
 | **Reference** | |
 | [CLI reference](cli/kubespin.md) | You want the exact flags for a command |
@@ -41,12 +40,11 @@ page is cobra's usage synopsis, not a runnable command.
 
 ## Project status
 
-**Every command is implemented: `apply`, `delete`, and every `fleet`
-subcommand (`bootstrap`, `update`, `audit`, `status`, `dashboard`).** Nothing in
-the CLI is a stub.
+**Every command is implemented: `apply`, `delete`, `login`, `status`, and
+`logout`.** Nothing in the CLI is a stub.
 
 - **Unit and fake-based tests**: Core domain models, catalog resolution,
-  orchestrator phase state machines, repo provisioners, and cloud converge logic
+  orchestrator phase state machines, repo provisioners, and cloud provisioners
   are thoroughly unit-tested against fakes (an in-memory registry, an in-memory
   GitHub-shaped repo, and cloud SDK fakes).
 - **Argo CD bootstrap**: App-of-apps manifest rendering and ingress access-mode
@@ -59,13 +57,11 @@ the CLI is a stub.
 - **Addon sizing**: Builtin sizes (`small`, `medium`, `large`) resolve and
   validate through [internal/catalog](reference/catalog.md), supporting
   per-cluster overrides.
-- **Fleet scale and runbooks**: Fleet-wide load testing
-  ([internal/fleet/loadtest_test.go](https://github.com/GitOpsHub/kubespin/blob/main/internal/fleet/loadtest_test.go))
-  and operations documentation ([runbook.md](runbook.md)) are in place.
+- **Runbooks**: Operations documentation ([runbook.md](runbook.md)) is in
+  place.
 
 See [internal/core](reference/core.md) for the shared domain types,
-[internal/registry](reference/registry.md) for the Fleet Registry client and
-lease, [internal/orchestrator](reference/orchestrator.md) for the per-cluster
-phase state machine `apply` walks and the reverse teardown `delete` walks,
-and [internal/fleet](reference/fleet.md) for the fleet-wide operations
-(`audit`/`update`/`status`/`dashboard`) that fan out across it.
+[internal/registry](reference/registry.md) for the cluster registry client and
+lease, and [internal/orchestrator](reference/orchestrator.md) for the
+per-cluster phase state machine `apply` walks and the reverse teardown
+`delete` walks.

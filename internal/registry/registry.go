@@ -1,5 +1,5 @@
-// Package registry is the client for the Fleet Registry, the single source of
-// durable fleet state.
+// Package registry is the client for the cluster registry, the single source
+// of durable per-cluster state.
 //
 // Every component reads and writes cluster state through this package rather
 // than through raw SDK calls, so the invariants live in one place: phase
@@ -45,8 +45,7 @@ func (l Lease) Expired(now time.Time) bool { return !now.Before(l.ExpiresAt) }
 
 // Record is one cluster's row in the registry: the durable half of its state.
 // The other half — resolved addons, node pool detail — lives in the cluster's
-// own repository. This holds only what the fleet needs to reason about
-// centrally.
+// own repository. This holds only what apply and delete need to resume.
 type Record struct {
 	ClusterID core.ClusterID
 	Phase     core.Phase
@@ -56,33 +55,9 @@ type Record struct {
 	Access   core.Access
 	Size     core.ClusterSize
 
-	// OIDCIssuer is the cluster's own workload identity issuer URL, recorded
-	// once identity binding (M2) succeeds. The Central Ingestion API (M6)
-	// verifies fleet-status-reporter's signature against exactly this issuer,
-	// which is what makes a signature from one cluster unusable to spoof
-	// another: every cluster's issuer is unique, so a token that verifies
-	// against cluster A's issuer cannot also verify against cluster B's.
-	OIDCIssuer string
-
 	// Version is bumped on every data write and asserted as a condition, so a
 	// read-modify-write that raced another writer fails instead of overwriting.
 	Version int64
-
-	// LastReportedAt is when the cluster's fleet-status-reporter last pushed.
-	// Zero means it never has. Staleness is derived from this, never from an
-	// attempt to reach the cluster.
-	LastReportedAt time.Time
-
-	// Findings is the drift `fleet audit` last found between this cluster's
-	// live infra and its cluster.yaml, one string per finding. An empty,
-	// non-nil-implying slice with a non-zero FindingsAt means the cluster was
-	// audited and found clean; a zero FindingsAt means it has never been
-	// audited. Audit is the only writer — `apply`/`delete` never touch this,
-	// the same read-only boundary AuditOne itself enforces.
-	Findings []string
-
-	// FindingsAt is when Findings was last written. Zero means never audited.
-	FindingsAt time.Time
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -90,24 +65,6 @@ type Record struct {
 	// Lease is nil when unheld. An expired lease may still be present until the
 	// next acquisition overwrites it.
 	Lease *Lease
-}
-
-// Stale reports whether the cluster has missed its reporting window.
-//
-// A cluster is stale when it has not reported within threshold — including a
-// cluster that has never reported at all, judged from CreatedAt. Staleness is a
-// statement about missing reports, not about reachability: nothing here
-// connects to a cluster.
-func (r Record) Stale(now time.Time, threshold time.Duration) bool {
-	if r.Phase != core.PhaseReady {
-		return false // only a ready cluster is expected to be reporting
-	}
-
-	last := r.LastReportedAt
-	if last.IsZero() {
-		last = r.CreatedAt
-	}
-	return now.Sub(last) > threshold
 }
 
 // Held reports whether an unexpired lease exists at now.
@@ -153,8 +110,7 @@ func NewRecord(spec core.ClusterSpec, now time.Time) Record {
 
 // ArgoCDAccess is a cluster's Argo CD connection details, captured once the
 // cluster reaches PhaseReady and Argo CD's LoadBalancer endpoint resolves.
-// It is observational metadata like OIDCIssuer, not part of the phase state
-// machine.
+// It is observational metadata, not part of the phase state machine.
 type ArgoCDAccess struct {
 	Provider    core.Provider
 	Region      string
@@ -166,13 +122,13 @@ type ArgoCDAccess struct {
 
 // Filter narrows a List. A zero Filter matches every cluster.
 type Filter struct {
-	// Provider, when set, is served by the ProviderPhaseIndex GSI rather than a
+	// Provider, when set, is served by the provider/phase index rather than a
 	// table scan — which is why the index exists from the day the table does.
 	Provider core.Provider
 	Phase    core.Phase
 }
 
-// Registry is the durable store of fleet state.
+// Registry is the durable store of per-cluster state.
 //
 // Implementations must enforce three things, because callers depend on them
 // rather than re-checking: an illegal phase transition is rejected, a write
@@ -189,25 +145,6 @@ type Registry interface {
 	// ErrInvalidTransition if the move is illegal, or ErrVersionConflict if the
 	// stored record no longer matches rec's phase and version.
 	UpdatePhase(ctx context.Context, rec Record, to core.Phase) (Record, error)
-
-	// Touch records a status report. It deliberately carries no version check:
-	// heartbeats arrive every couple of minutes and must not contend with a
-	// phase transition in progress.
-	Touch(ctx context.Context, id core.ClusterID, at time.Time) error
-
-	// RecordOIDCIssuer sets the cluster's workload identity issuer, once,
-	// after M2's identity binding succeeds. Like Touch it carries no version
-	// check — it is metadata about the cluster, not a phase transition — but
-	// unlike Touch it is written once and read for the lifetime of the
-	// cluster, which is why it is its own method rather than an overload of
-	// Touch.
-	RecordOIDCIssuer(ctx context.Context, id core.ClusterID, issuer string) error
-
-	// RecordFindings persists the result of the most recent `fleet audit` run
-	// for a cluster, replacing whatever findings were recorded before. Like
-	// Touch it carries no version check: audit findings are observational
-	// metadata, not a phase transition, and must not contend with one.
-	RecordFindings(ctx context.Context, id core.ClusterID, findings []string, at time.Time) error
 
 	// List returns records matching filter.
 	List(ctx context.Context, filter Filter) ([]Record, error)
@@ -226,9 +163,9 @@ type Registry interface {
 	// else returns ErrLeaseLost.
 	ReleaseLease(ctx context.Context, id core.ClusterID, holder string) error
 
-	// RecordArgoCDAccess upserts a cluster's Argo CD connection details. Like
-	// RecordOIDCIssuer it carries no version check — observational metadata,
-	// not a phase transition — and re-recording replaces the previous values.
+	// RecordArgoCDAccess upserts a cluster's Argo CD connection details. It
+	// carries no version check — observational metadata, not a phase
+	// transition — and re-recording replaces the previous values.
 	// Returns ErrNotFound if the cluster has no record.
 	RecordArgoCDAccess(ctx context.Context, id core.ClusterID, access ArgoCDAccess) error
 

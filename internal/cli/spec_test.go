@@ -431,7 +431,7 @@ func TestApply_ProvidersRequireCloudCredentials(t *testing.T) {
 	// than a generic error.
 	for _, provider := range []string{"gcp", "azure"} {
 		t.Run(provider, func(t *testing.T) {
-			cmd := applyCmd(t, "--ingestion-endpoint", "example.com")
+			cmd := applyCmd(t)
 			spec := core.ClusterSpec{Provider: core.Provider(provider), Region: "r"}
 
 			_, err := buildCloud(t.Context(), cmd, spec)

@@ -51,8 +51,7 @@ func (r *BuiltinResolver) Resolve(_ context.Context, size core.ClusterSize) (cor
 
 // baseAddons is the addon set every size carries, regardless of cloud:
 // CNI, cert-manager, Gateway API, ESO, Kyverno baseline, an autoscaler,
-// kube-prometheus-stack, Fluent Bit, OpenCost, ExternalDNS, Argo CD, and
-// fleet-status-reporter.
+// kube-prometheus-stack, Fluent Bit, OpenCost, ExternalDNS, and Argo CD.
 //
 // Argo CD and the autoscaler are unconditional here rather than added by a
 // higher tier: every cluster gets Argo CD (catalog.ResolveForCluster also
@@ -182,13 +181,6 @@ var baseAddons = []core.AddonRef{
 		// ingress.exposure, matching the same default this profile's own
 		// ingress-nginx addon carries.
 		Values: map[string]any{"policies": map[string]any{"publicExposureDeny": true}},
-	},
-	{
-		Name:       "fleet-status-reporter",
-		Chart:      "fleet-status-reporter",
-		Repository: "https://charts.kubespin.dev",
-		Version:    "0.1.0",
-		Namespace:  "kubespin-system",
 	},
 	argocd.DefaultAddon,
 }

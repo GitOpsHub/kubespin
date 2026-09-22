@@ -2,7 +2,7 @@ name: Deploy AKS cluster
 
 # Manual, per-cluster deploys only — apply is not something that should fire on
 # every push. Azure OIDC federation is required against the subscription that
-# hosts the AKS cluster and its workload identity. The Fleet Registry is a
+# hosts the AKS cluster and its workload identity. The cluster registry is a
 # Postgres database (KUBESPIN_REGISTRY_DSN), not AWS-hosted, so reaching it
 # needs no cloud OIDC exchange of its own — just the connection string, held
 # as a stored secret like the GitHub repo token below.
@@ -86,7 +86,6 @@ jobs:
           ACCESS: ${{ inputs.access }}
           SIZE: ${{ inputs.size }}
           KUBERNETES_VERSION: ${{ inputs.kubernetes-version }}
-          INGESTION_ENDPOINT: ${{ vars.INGESTION_ENDPOINT }}
           DRY_RUN: ${{ inputs.dry-run }}
           AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           GITHUB_ORG: ${{ vars.CLUSTER_REPO_GITHUB_ORG }}
@@ -107,7 +106,6 @@ jobs:
             --access "$ACCESS"
             --size "$SIZE"
             --kubernetes-version "$KUBERNETES_VERSION"
-            --ingestion-endpoint "$INGESTION_ENDPOINT"
             --azure-subscription "$AZURE_SUBSCRIPTION_ID"
             --github-org "$GITHUB_ORG"
           )

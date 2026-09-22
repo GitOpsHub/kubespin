@@ -7,8 +7,8 @@ import TabItem from '@theme/TabItem';
 
 # Provisioners: AWS vs. GCP vs. Azure
 
-All three clouds implement the same `ClusterProvisioner` / `IdentityProvisioner`
-/ `NetworkProvisioner` interfaces from
+All three clouds implement the same `ClusterProvisioner` /
+`NetworkProvisioner` interfaces from
 [`internal/provisioner`](provisioner-aws.md#shared-interfaces-provisionergo-1) —
 this page compares how each cloud fills them in. For full method-level detail,
 follow the "Full reference" link at the bottom of each tab.
@@ -48,43 +48,6 @@ at creation. `Reconcile` merges `reconcileAccess` (only touches
 reconciliation.
 
 [Full reference →](provisioner-azure.md#clusterprovisioner)
-
-</TabItem>
-</Tabs>
-
-## Identity binding
-
-<Tabs>
-<TabItem value="aws" label="AWS (IRSA)">
-
-`ensureOIDCProvider` registers the cluster's OIDC issuer with IAM (or
-reuses an existing registration), then `ensureIRSARole` **unconditionally
-rewrites** the IAM role's trust policy on every call — trust policy drift
-is a privilege-escalation risk, not staleness, so it is never merely
-compared. The trust policy scopes the role to one namespace/service
-account pair via two `StringEquals` conditions (`sub` and `aud`).
-
-[Full reference →](provisioner-aws.md#identityprovisioner-1)
-
-</TabItem>
-<TabItem value="gcp" label="GCP (Workload Identity)">
-
-Binds a Kubernetes service account to a GCP IAM service account via the
-`iam.gke.io/gcp-service-account` annotation, scoped to
-`<project>.svc.id.goog`. The identity exists to be *proven* to Google's
-STS, not to grant permissions directly — same pattern as AWS/Azure.
-
-[Full reference →](provisioner-gcp.md#identityprovisioner)
-
-</TabItem>
-<TabItem value="azure" label="Azure (federated credential)">
-
-Binds via a federated identity credential + managed identity rather than
-a long-lived secret — "prove identity, not grant access" is the same
-pattern IRSA and Workload Identity use. Granting the identity actual
-Azure permissions is a separate, deliberate step outside provisioning.
-
-[Full reference →](provisioner-azure.md#identityprovisioner)
 
 </TabItem>
 </Tabs>

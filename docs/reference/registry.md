@@ -1,6 +1,6 @@
 # internal/registry
 
-`internal/registry` is the client for the Fleet Registry — the single source of durable fleet state, keyed by `ClusterID`. Every other component (`internal/orchestrator`, `internal/fleet`, `internal/cli`) reads and writes cluster state exclusively through this package's `Registry` interface rather than issuing raw SQL directly, so the invariants that keep the fleet consistent (illegal phase transitions rejected, stale-version writes rejected, leases exclusive) live in one place. The production implementation is `Postgres` (`postgres.go`), backed by a single `fleet_registry` table that it creates and migrates idempotently on connect — there is no separate migration step or provisioning command for it. The lease itself is a time-bounded claim (`Lease{Holder, ExpiresAt}`) stored on the same row: `AcquireLease` performs a conditional `UPDATE` that only succeeds when the lease is unset, already owned by the caller, or expired — this serializes concurrent `apply` runs against the same cluster while letting a crashed run self-heal once its TTL passes rather than wedging the cluster forever.
+`internal/registry` is the client for the cluster registry — the single source of durable per-cluster state, keyed by `ClusterID`. Every other component (`internal/orchestrator`, `internal/cli`) reads and writes cluster state exclusively through this package's `Registry` interface rather than issuing raw SQL directly, so the invariants that keep it consistent (illegal phase transitions rejected, stale-version writes rejected, leases exclusive) live in one place. The production implementation is `Postgres` (`postgres.go`), backed by a single `fleet_registry` table that it creates and migrates idempotently on connect — there is no separate migration step or provisioning command for it. The lease itself is a time-bounded claim (`Lease{Holder, ExpiresAt}`) stored on the same row: `AcquireLease` performs a conditional `UPDATE` that only succeeds when the lease is unset, already owned by the caller, or expired — this serializes concurrent `apply` runs against the same cluster while letting a crashed run self-heal once its TTL passes rather than wedging the cluster forever.
 
 ## Quick reference
 
@@ -9,16 +9,15 @@
 | [`Lease`](#lease) | struct | registry.go | Time-bounded claim on a cluster; prevents two concurrent `apply` runs on the same cluster. |
 | [`Record`](#record) | struct | registry.go | One cluster's row in the registry — the durable half of a cluster's state. |
 | [`Filter`](#filter) | struct | registry.go | Narrows a `List` call; a zero `Filter` matches every cluster. |
-| [`Registry`](#registry-interface) | interface | registry.go | The durable store of fleet state — the contract both `Postgres` and `Memory` implement identically. |
+| [`Registry`](#registry-interface) | interface | registry.go | The durable store of per-cluster state — the contract both `Postgres` and `Memory` implement identically. |
 | [`ArgoCDAccess`](#argocdaccess) | struct | registry.go | A cluster's Argo CD connection details — endpoint, admin username/password, kube context. |
 | [`NewRecord`](#record) | func | registry.go | Builds a `PhasePending` record from a validated `ClusterSpec`, `Version` seeded at 1. |
 | [Sentinel errors](#sentinel-errors) | vars | registry.go | `ErrNotFound`, `ErrAlreadyExists`, `ErrVersionConflict`, `ErrLeaseHeld`, `ErrLeaseLost`. |
 | [`Postgres`](#postgres) | struct | postgres.go | Production `Registry`, backed by a Postgres `fleet_registry` table it creates and migrates itself. |
 | [`Option`](#option-and-withlogger) | type (func) | postgres.go | Functional option for `NewPostgres`. |
 | [`WithLogger`](#option-and-withlogger) | func | postgres.go | `Option` that overrides the logger used by `Postgres`. |
-| [`WithoutMigration`](#withoutmigration) | func | postgres.go | `Option` that skips schema DDL on connect — for ephemeral/burst runtimes like the ingestion Lambda. |
 | [`WithConnectionPool`](#withconnectionpool) | func | postgres.go | `Option` that overrides the default connection-pool bounds (max open/idle conns and lifetime). |
-| [`NewPostgres`](#newpostgres) | func | postgres.go | Opens a connection pool against a DSN, sets pool defaults, pings it, and (unless `WithoutMigration`) idempotently ensures the schema exists. |
+| [`NewPostgres`](#newpostgres) | func | postgres.go | Opens a connection pool against a DSN, sets pool defaults, pings it, and idempotently ensures the schema exists. |
 | [`Memory`](#memory) | struct | memory.go | In-memory `Registry`, so components built on the registry are testable without credentials or a container. |
 | [`MemoryOption`](#memoryoption-and-withclock) | type (func) | memory.go | Functional option for `NewMemory`. |
 | [`WithClock`](#memoryoption-and-withclock) | func | memory.go | `MemoryOption` that replaces the time source, so lease expiry is testable without sleeping. |
@@ -60,14 +59,7 @@ type Record struct {
     Access   core.Access
     Size     core.ClusterSize
 
-    OIDCIssuer string
-
     Version int64
-
-    LastReportedAt time.Time
-
-    Findings   []string
-    FindingsAt time.Time
 
     CreatedAt time.Time
     UpdatedAt time.Time
@@ -75,7 +67,6 @@ type Record struct {
     Lease *Lease
 }
 
-func (r Record) Stale(now time.Time, threshold time.Duration) bool
 func (r Record) Held(now time.Time) bool
 func (r Record) Validate() error
 func NewRecord(spec core.ClusterSpec, now time.Time) Record
@@ -83,14 +74,11 @@ func NewRecord(spec core.ClusterSpec, now time.Time) Record
 
 </details>
 
-- **Purpose:** one cluster's row in the registry — the durable half of a cluster's state. The other half (resolved addons, node pool detail) lives in the cluster's own repository; `Record` holds only what the fleet needs to reason about centrally.
+- **Purpose:** one cluster's row in the registry — the durable half of a cluster's state. The other half (resolved addons, node pool detail) lives in the cluster's own repository; `Record` holds only what `apply` and `delete` need to resume.
 - **Fields:**
-    - `OIDCIssuer` — recorded once identity binding (M2) succeeds; the Central Ingestion API verifies `fleet-status-reporter`'s signature against exactly this issuer, which is what makes a signature from one cluster unusable to spoof another.
     - `Version` — bumped on every data write and asserted as a condition, so a racing read-modify-write fails instead of overwriting.
-    - `Findings` / `FindingsAt` — the drift `fleet audit` last found. An empty, non-nil slice with a non-zero `FindingsAt` means the cluster was audited and found clean; a zero `FindingsAt` means never audited. Audit is the only writer — `apply`/`delete` never touch this field.
     - `Lease` — nil when unheld; an expired lease may still be present until the next acquisition overwrites it.
 - **Behavior (methods):**
-    - `Stale(now, threshold)` — true only for a `PhaseReady` cluster that has missed its reporting window, judged from `LastReportedAt` (or `CreatedAt` if it has never reported). A statement about missing reports, never about reachability — nothing in this package connects to a cluster.
     - `Held(now)` — true when `Lease` is non-nil and unexpired at `now`.
     - `Validate()` — checks `ClusterID`, `Phase.Valid()`, `Provider.Valid()`, non-empty `Region`, and `Access.Valid()`, joining all failures with `errors.Join` and wrapping each in `core.ErrInvalidSpec`.
 - **Functions:**
@@ -114,9 +102,9 @@ type ArgoCDAccess struct {
 
 </details>
 
-- **Purpose:** a cluster's Argo CD connection details, captured by `kubespin apply` (`internal/cli/apply.go`'s `captureAndRecordArgoCDAccess`) once the cluster reaches `PhaseReady` and the `argocd-server` LoadBalancer Service has an assigned endpoint. It is observational metadata, like `Record.OIDCIssuer`, not part of the phase state machine — capture runs on every apply that reaches ready, including a no-op reconcile against an already-ready cluster, so a failed capture simply gets another chance on the next run.
+- **Purpose:** a cluster's Argo CD connection details, captured by `kubespin apply` (`internal/cli/apply.go`'s `captureAndRecordArgoCDAccess`) once the cluster reaches `PhaseReady` and the `argocd-server` LoadBalancer Service has an assigned endpoint. It is observational metadata, not part of the phase state machine — capture runs on every apply that reaches ready, including a no-op reconcile against an already-ready cluster, so a failed capture simply gets another chance on the next run.
 - **Invariant:** `Password` is stored in **plaintext**, matching the trust model already extended to `KUBESPIN_REGISTRY_DSN` (an operator-supplied, non-flag secret). There is no separate secrets-manager integration for it.
-- **Storage:** persisted in a Postgres child table, `cluster_argocd_details`, one row per cluster (upserted, not appended), foreign-keyed to `fleet_registry(cluster_id)` with `ON DELETE CASCADE` so a decommissioned cluster's row disappears with it. `provider`/`region` are denormalized from `fleet_registry` so ad hoc `psql` queries don't need a join.
+- **Storage:** persisted in a Postgres child table, `cluster_argocd_details`, one row per cluster (upserted, not appended), foreign-keyed to `fleet_registry(cluster_id)` with `ON DELETE CASCADE` so a decommissioned cluster's row disappears with it. `provider`/`region` are denormalized from the parent so ad hoc `psql` queries don't need a join.
 
 ### `Filter`
 
@@ -133,7 +121,7 @@ type Filter struct {
 </details>
 
 - **Purpose:** narrows a `List` call. A zero `Filter` matches every cluster.
-- **Invariant:** `Postgres.List` is always one query, `WHERE ($1 = '' OR provider = $1) AND ($2 = '' OR phase = $2)`, served by the `fleet_registry_provider_phase_idx` index (on `(provider, phase)`, created with the table) whenever `Provider` is set — unlike the eventually-consistent scan-vs-GSI-query choice a DynamoDB-backed registry would face, Postgres reads are always consistent, so there is no separate index-or-scan code path to choose between.
+- **Invariant:** `Postgres.List` is always one query, `WHERE ($1 = '' OR provider = $1) AND ($2 = '' OR phase = $2)`, served by the `fleet_registry_provider_phase_idx` index (on `(provider, phase)`, created with the table) whenever `Provider` is set. Postgres reads are always consistent, so there is no separate index-or-scan code path to choose between.
 
 ### `Registry` (interface)
 
@@ -145,9 +133,6 @@ type Registry interface {
     Get(ctx context.Context, id core.ClusterID) (Record, error)
     Create(ctx context.Context, rec Record) (Record, error)
     UpdatePhase(ctx context.Context, rec Record, to core.Phase) (Record, error)
-    Touch(ctx context.Context, id core.ClusterID, at time.Time) error
-    RecordOIDCIssuer(ctx context.Context, id core.ClusterID, issuer string) error
-    RecordFindings(ctx context.Context, id core.ClusterID, findings []string, at time.Time) error
     List(ctx context.Context, filter Filter) ([]Record, error)
     AcquireLease(ctx context.Context, id core.ClusterID, holder string, ttl time.Duration) (Lease, error)
     RenewLease(ctx context.Context, id core.ClusterID, holder string, ttl time.Duration) (Lease, error)
@@ -159,10 +144,10 @@ type Registry interface {
 
 </details>
 
-- **Purpose:** the durable store of fleet state — the contract both `Postgres` and `Memory` implement identically.
+- **Purpose:** the durable store of per-cluster state — the contract both `Postgres` and `Memory` implement identically.
 - **Invariants implementations must enforce** (callers rely on these rather than re-checking):
     - `UpdatePhase` rejects an illegal transition with `ErrInvalidTransition` (checked against `core.ValidateTransition`), and rejects a write against a stale `Phase`/`Version` pair with `ErrVersionConflict`.
-    - `Touch`, `RecordOIDCIssuer`, `RecordFindings`, and `RecordArgoCDAccess` carry **no** version check — heartbeats, identity-issuer recording, audit findings, and Argo CD access details are metadata writes that must not contend with an in-flight phase transition.
+    - `RecordArgoCDAccess` carries **no** version check — Argo CD access details are observational metadata, not a phase transition, and must not contend with one.
     - `RecordArgoCDAccess` upserts (repeat calls replace the previous values); `GetArgoCDAccess` returns `ErrNotFound` if nothing has been captured yet for the cluster.
     - `AcquireLease` fails with `ErrLeaseHeld` if another holder's lease is still valid; an expired lease is taken over without ceremony.
     - `RenewLease` fails with `ErrLeaseLost` if the caller's lease already expired — silently re-acquiring here would defeat the lock, since another holder may already own it.
@@ -203,11 +188,7 @@ CREATE TABLE IF NOT EXISTS fleet_registry (
     region            TEXT NOT NULL,
     access            TEXT NOT NULL,
     size              TEXT NOT NULL DEFAULT '',
-    oidc_issuer       TEXT NOT NULL DEFAULT '',
     version           BIGINT NOT NULL,
-    last_reported_at  TIMESTAMPTZ,
-    findings          JSONB,
-    findings_at       TIMESTAMPTZ,
     created_at        TIMESTAMPTZ NOT NULL,
     updated_at        TIMESTAMPTZ NOT NULL,
     lease_holder      TEXT,
@@ -217,11 +198,15 @@ CREATE INDEX IF NOT EXISTS fleet_registry_provider_phase_idx ON fleet_registry (
 ALTER TABLE fleet_registry ADD COLUMN IF NOT EXISTS size TEXT NOT NULL DEFAULT '';
 ALTER TABLE fleet_registry DROP COLUMN IF EXISTS profile_name;
 ALTER TABLE fleet_registry DROP COLUMN IF EXISTS profile_version;
+ALTER TABLE fleet_registry DROP COLUMN IF EXISTS oidc_issuer;
+ALTER TABLE fleet_registry DROP COLUMN IF EXISTS last_reported_at;
+ALTER TABLE fleet_registry DROP COLUMN IF EXISTS findings;
+ALTER TABLE fleet_registry DROP COLUMN IF EXISTS findings_at;
 `
 ```
 
-- **Behavior:** run by `NewPostgres` on every connect, via `CREATE TABLE IF NOT EXISTS`/`CREATE INDEX IF NOT EXISTS`, so a fresh database is ready without a separate migration step and a run against an already-provisioned one is a no-op. The `ALTER TABLE` statements are the one exception to "only ever adds": they're the one-time cutover from the old `profile_name`/`profile_version` columns to a single `size` column when `--profile` was replaced with `--size`, written idempotently (`IF NOT EXISTS`/`IF EXISTS`) so they're safe to run against both a pre- and post-cutover database.
-- **Invariant:** `cluster_id` alone is the primary key, deliberately — this is what makes `AcquireLease` (a conditional `UPDATE` on that same row) actually serialize a status report against a concurrent phase transition; a composite key would let them proceed independently and the lock would protect nothing.
+- **Behavior:** run by `NewPostgres` on every connect, via `CREATE TABLE IF NOT EXISTS`/`CREATE INDEX IF NOT EXISTS`, so a fresh database is ready without a separate migration step and a run against an already-provisioned one is a no-op. The `ALTER TABLE` statements are the one exception to "only ever adds": the cutover from the old `profile_name`/`profile_version` columns to a single `size` column when `--profile` was replaced with `--size`, and the drop of the four columns the removed fleet functionality owned (`oidc_issuer`, `last_reported_at`, `findings`, `findings_at`). All are written idempotently (`IF NOT EXISTS`/`IF EXISTS`) so they're safe to run against a database at any of those points.
+- **Invariant:** `cluster_id` alone is the primary key, deliberately — this is what makes `AcquireLease` (a conditional `UPDATE` on that same row) actually serialize concurrent writers; a composite key would let them proceed independently and the lock would protect nothing.
 - `selectColumns` is a single shared column list used by every read (`Get`, `List`, and `UpdatePhase`'s `RETURNING`), so a column can't drift between them.
 
 </details>
@@ -257,20 +242,18 @@ CREATE TABLE IF NOT EXISTS cluster_argocd_details (
 
 ```go
 type Postgres struct {
-    db            *sql.DB
-    now           func() time.Time
-    logger        *slog.Logger
-    skipMigration bool
+    db     *sql.DB
+    now    func() time.Time
+    logger *slog.Logger
 }
 ```
 
 </details>
 
-- **Purpose:** the production `Registry`, backed by the `fleet_registry` table it creates and migrates itself — there is no separate provisioning step for it (unlike the ingestion Lambda/API Gateway, which `fleet bootstrap` does provision).
+- **Purpose:** the production `Registry`, backed by the `fleet_registry` table it creates and migrates itself — there is no separate provisioning step for it.
 - **Behavior:**
     - Uses `database/sql` over the `pgx` driver (`github.com/jackc/pgx/v5/stdlib`, imported for its side-effecting driver registration), not a Postgres-specific client library — so the registry is testable against any `database/sql`-compatible backend.
     - Registry logging is Debug-level diagnostic detail except a lease conflict, logged at Warn — that is the exact race the lease exists to catch.
-    - `skipMigration` is set by `WithoutMigration` and prevents `NewPostgres` from running the schema DDL — see `WithoutMigration` below for when this is appropriate.
 
 ### `Option` and `WithLogger`
 
@@ -288,20 +271,6 @@ func WithLogger(logger *slog.Logger) Option
 - **Params:** `logger *slog.Logger` — the logger `Postgres` should use.
 - **Behavior:** `Option` is a functional option for `NewPostgres`; `WithLogger` overrides the default logger (ignoring a nil logger, so passing one is optional).
 
-### `WithoutMigration`
-
-<details>
-<summary>Signature</summary>
-
-```go
-func WithoutMigration() Option
-```
-
-</details>
-
-- **Behavior:** Sets `skipMigration = true`, preventing `NewPostgres` from executing `schemaDDL` and `argoCDDetailsDDL` on connect. Intended for ephemeral, burst-driven runtimes like the Central Ingestion API Lambda handler, where the schema is managed out-of-band (either by the long-lived CLI process at first connect, or by a dedicated migration step) and running DDL on cold start causes table lock contention during bursts of parallel Lambda invocations.
-- **Invariant:** The schema must already exist before any `Postgres` client using this option runs. The CLI's `NewPostgres` call (without this option) self-migrates on first connect and is the natural owner of that migration.
-
 ### `WithConnectionPool`
 
 <details>
@@ -314,7 +283,7 @@ func WithConnectionPool(maxOpen, maxIdle int, maxLifetime time.Duration) Option
 </details>
 
 - **Params:** `maxOpen int` — maximum number of open connections; `maxIdle int` — maximum number of idle connections kept; `maxLifetime time.Duration` — maximum lifetime of a connection before it is recycled.
-- **Behavior:** Overrides the connection-pool bounds set by `NewPostgres`'s defaults. Zero values for any parameter are ignored (the corresponding bound is left at its default). Options are applied after the pool defaults are written, so `WithConnectionPool` can tighten them further for low-throughput callers — for example the ingestion Lambda uses `(2, 1, 15*time.Minute)` to cap per-instance connections and prevent Postgres exhaustion under Lambda concurrency.
+- **Behavior:** Overrides the connection-pool bounds set by `NewPostgres`'s defaults. Zero values for any parameter are ignored (the corresponding bound is left at its default). Options are applied after the pool defaults are written, so `WithConnectionPool` can tighten them further for a low-throughput caller.
 
 ### `NewPostgres`
 
@@ -333,7 +302,7 @@ func NewPostgres(ctx context.Context, dsn string, opts ...Option) (*Postgres, er
     2. Sets **default connection pool bounds**: `SetMaxOpenConns(25)`, `SetMaxIdleConns(10)`, `SetConnMaxLifetime(15m)`, `SetConnMaxIdleTime(5m)` — conservative defaults that prevent a single CLI process from exhausting Postgres under concurrent apply/delete operations.
     3. `PingContext` to verify the pool can actually reach the database (rather than deferring the first error to whatever query happens to run first).
     4. Applies all `opts`, in order — including any `WithConnectionPool` call that tightens the bounds set in step 2.
-    5. Unless `skipMigration` is set (via `WithoutMigration`), executes `schemaDDL` then `argoCDDetailsDDL` to idempotently ensure the schema exists.
+    5. Executes `schemaDDL` then `argoCDDetailsDDL` to idempotently ensure the schema exists.
     - `now` defaults to `time.Now` and `logger` to `slog.Default()`, both overridable via `Option`.
 
 ### Method behavior (Postgres)
@@ -349,7 +318,7 @@ func NewPostgres(ctx context.Context, dsn string, opts ...Option) (*Postgres, er
 <details>
 <summary>`Create`</summary>
 
-- Validates the record, defaults `Version` to 1, encodes `Findings` (`findingsJSON` — `nil`/SQL `NULL` when `FindingsAt` is zero, so "never audited" stays distinct from an empty, encoded `[]`), then `INSERT ... ON CONFLICT (cluster_id) DO NOTHING`.
+- Validates the record, defaults `Version` to 1, then `INSERT ... ON CONFLICT (cluster_id) DO NOTHING`.
 - `RowsAffected() == 0` (the row already existed, so the `ON CONFLICT` clause suppressed the insert) maps to `ErrAlreadyExists`.
 
 </details>
@@ -360,29 +329,6 @@ func NewPostgres(ctx context.Context, dsn string, opts ...Option) (*Postgres, er
 - Rejects the transition client-side via `core.ValidateTransition` before any query.
 - Then `UPDATE fleet_registry SET phase = $1, version = version + 1, updated_at = $2 WHERE cluster_id = $3 AND phase = $4 AND version = $5 RETURNING <selectColumns>` — asserting **both** phase and version, so a racing writer that already advanced the record loses this write instead of silently overwriting it.
 - On `sql.ErrNoRows` (the `WHERE` matched nothing), a follow-up `Get` distinguishes not-found from a genuine version conflict — the same two-case split DynamoDB's `ReturnValuesOnConditionCheckFailure` gave for free on a condition failure; here it costs a second read instead.
-
-</details>
-
-<details>
-<summary>`Touch`</summary>
-
-- `UPDATE fleet_registry SET last_reported_at = $1 WHERE cluster_id = $2`.
-- **Invariant:** deliberately no version check, so frequent heartbeats never contend with a phase transition in progress.
-- **Implementation:** delegates to the shared `execNoVersionCheck` helper (`postgres.go`), which runs the `UPDATE` and maps `RowsAffected() == 0` to `ErrNotFound` once for all three no-version-check writes below.
-
-</details>
-
-<details>
-<summary>`RecordOIDCIssuer`</summary>
-
-- Same no-version-check pattern as `Touch` (via `execNoVersionCheck`), sets `oidc_issuer` once.
-
-</details>
-
-<details>
-<summary>`RecordFindings`</summary>
-
-- Same no-version-check pattern (via `execNoVersionCheck`), sets `findings` and `findings_at` together, replacing whatever was recorded before.
 
 </details>
 
@@ -459,21 +405,19 @@ type rowScanner interface {
 func scanRecord(s rowScanner) (Record, error)
 ```
 
-- **Behavior:** `rowScanner` is satisfied by both `*sql.Row` and `*sql.Rows`, so this one function serves `Get`/`UpdatePhase` (one row) and `List` (many) alike. Builds a `Record` from the scanned columns, using `sql.NullTime`/`sql.NullString` for the optional ones (`LastReportedAt`, `FindingsAt`, lease fields) so "never reported"/"never audited" stays distinguishable from the zero time rather than colliding with it. `Findings` is only unmarshalled when `findings_at` is valid — an absent `FindingsAt` (never audited) must stay distinguishable from an empty `Findings` list (audited and clean). Returns an error if a lease holder is set but its expiry is `NULL` — a state the schema allows but the application logic must never produce. Scan errors are wrapped with `"scanning record: %w"` to give callers a useful call site in stack traces.
+- **Behavior:** `rowScanner` is satisfied by both `*sql.Row` and `*sql.Rows`, so this one function serves `Get`/`UpdatePhase` (one row) and `List` (many) alike. Builds a `Record` from the scanned columns, using `sql.NullTime`/`sql.NullString` for the lease fields so "unheld" stays distinguishable from the zero time rather than colliding with it. Returns an error if a lease holder is set but its expiry is `NULL` — a state the schema allows but the application logic must never produce. Scan errors are wrapped with `"scanning record: %w"` to give callers a useful call site in stack traces.
 
 </details>
 
 <details>
-<summary>`findingsJSON` / `nullTime` / `leaseHolder` / `leaseExpiry`</summary>
+<summary>`leaseHolder` / `leaseExpiry`</summary>
 
 ```go
-func findingsJSON(rec Record) (any, error)
-func nullTime(t time.Time) any
 func leaseHolder(l *Lease) any
 func leaseExpiry(l *Lease) any
 ```
 
-- **Behavior:** small helpers shared by `Create`, converting Go zero values into SQL `NULL` (rather than an empty/zero value that would collapse "never reported"/"never audited"/"unheld" into a real value) and a `*Lease` into its two column values. `findingsJSON` wraps its marshal error with `"marshaling findings: %w"`.
+- **Behavior:** small helpers shared by `Create`, turning a `*Lease` into its two column values — `nil` (SQL `NULL`) when unheld, rather than a zero value that would collapse "unheld" into a real one.
 
 </details>
 
@@ -563,9 +507,9 @@ Mirrors `Postgres` exactly, implemented against the map instead of conditional `
 </details>
 
 <details>
-<summary>`Touch` / `RecordOIDCIssuer` / `RecordFindings` / `RecordArgoCDAccess` / `GetArgoCDAccess`</summary>
+<summary>`RecordArgoCDAccess` / `GetArgoCDAccess`</summary>
 
-- The four writes mutate directly with no version bump, matching the "not a phase transition" reasoning in `postgres.go`. `RecordArgoCDAccess` requires the cluster to exist in `records` first (`ErrNotFound` otherwise, mirroring `Postgres`'s foreign-key check) and stores into the separate `argocdAccess` map, upserting by key. `GetArgoCDAccess` returns `ErrNotFound` if that map has no entry for the cluster.
+- The write mutates directly with no version bump, matching the "not a phase transition" reasoning in `postgres.go`. `RecordArgoCDAccess` requires the cluster to exist in `records` first (`ErrNotFound` otherwise, mirroring `Postgres`'s foreign-key check) and stores into the separate `argocdAccess` map, upserting by key. `GetArgoCDAccess` returns `ErrNotFound` if that map has no entry for the cluster.
 
 </details>
 

@@ -11,7 +11,7 @@ const sidebars = {
     {
       type: 'category',
       label: 'Operations',
-      items: ['fleet-bootstrap', 'runbook', 'cicd-azure-oidc'],
+      items: ['runbook', 'cicd-azure-oidc'],
     },
     {
       type: 'category',
@@ -27,7 +27,6 @@ const sidebars = {
         'reference/core',
         'reference/auth',
         'reference/kubeconfig',
-        'reference/fleetinfra',
         'reference/provisioner-aws',
         'reference/provisioner-gcp',
         'reference/provisioner-azure',
@@ -37,9 +36,6 @@ const sidebars = {
         'reference/catalog',
         'reference/argocd',
         'reference/orchestrator',
-        'reference/fleet',
-        'reference/ingestion',
-        'reference/reporter',
         'reference/cli',
         'reference/entrypoints',
       ],

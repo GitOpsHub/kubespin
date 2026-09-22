@@ -10,7 +10,7 @@ tokens — no long-lived cloud secrets stored in GitHub for either:
   (`cloudAuthProviders` in [internal/cli/apply.go](https://github.com/GitOpsHub/kubespin/blob/main/internal/cli/apply.go))
   unconditionally requires an authenticated AWS session before it will run
   anything — even a dry run, and even for a cluster whose `--provider` is
-  `azure`. This is no longer about where the Fleet Registry lives: the
+  `azure`. This is not about where the registry lives: the
   registry is now a Postgres database reachable over the network from
   wherever it's hosted (not necessarily AWS at all — this deployment's
   instance isn't), reached purely via `KUBESPIN_REGISTRY_DSN`, with no
@@ -20,12 +20,11 @@ tokens — no long-lived cloud secrets stored in GitHub for either:
 - **Azure**, because that's where the AKS cluster and its workload identity
   get created.
 
-`internal/provisioner/azure` (`ClusterProvisioner`/`IdentityProvisioner`/
-`NetworkProvisioner`) is implemented, so a real (non-dry-run) run creates an
-actual AKS cluster.
+`internal/provisioner/azure` (`ClusterProvisioner`/`NetworkProvisioner`) is
+implemented, so a real (non-dry-run) run creates an actual AKS cluster.
 
 `apply` also always provisions the cluster's GitHub repo
-(`internal/repo`) regardless of cloud, and always reaches the Fleet Registry
+(`internal/repo`) regardless of cloud, and always reaches the cluster registry
 over `KUBESPIN_REGISTRY_DSN`, so this pipeline needs two credentials beyond
 the two OIDC exchanges: a GitHub token with repo-create scope in the target
 org, and the registry's Postgres connection string. GitHub Actions' OIDC
@@ -129,7 +128,6 @@ stay private):
 | `AZURE_CLIENT_ID` | The App Registration's application (client) ID |
 | `AZURE_TENANT_ID` | Your Azure AD tenant ID |
 | `AZURE_SUBSCRIPTION_ID` | Subscription that hosts the AKS cluster |
-| `INGESTION_ENDPOINT` | Central Ingestion API host, from `fleet bootstrap` output |
 | `CLUSTER_REPO_GITHUB_ORG` | Org cluster repositories are created in (`--github-org`) |
 | `GITHUB_ENTERPRISE_BASE_URL` | Only if on GitHub Enterprise Server; leave unset for github.com |
 | `GITHUB_ENTERPRISE_UPLOAD_URL` | Same, paired with the base URL |
@@ -141,7 +139,7 @@ exchange:
 | Secret | Value |
 |---|---|
 | `KUBESPIN_CLUSTER_REPO_TOKEN` | A PAT or GitHub App installation token with repo-create/push scope in `CLUSTER_REPO_GITHUB_ORG`. Not the ambient `GITHUB_TOKEN` — that's scoped only to the `kubespin` repo itself. |
-| `KUBESPIN_REGISTRY_DSN` | The Fleet Registry's Postgres connection string, injected as an environment variable in the workflow step so it never appears in a flag or in shell history. |
+| `KUBESPIN_REGISTRY_DSN` | The cluster registry's Postgres connection string, injected as an environment variable in the workflow step so it never appears in a flag or in shell history. |
 
 ## Running it
 
@@ -154,4 +152,4 @@ would resume from without touching either cloud, same as
 
 Uncheck `dry-run` once the plan looks right. The `deploy-aks-<cluster-id>`
 concurrency group serializes runs per cluster so two dispatches against the
-same cluster queue instead of racing the Fleet Registry's lease.
+same cluster queue instead of racing the registry's lease.

@@ -53,9 +53,9 @@ type ClusterState struct {
 	Status   Status
 	Endpoint string
 
-	// OIDCIssuer is the cluster's identity issuer URL. Workload identity cannot
-	// be bound until the cluster is active and this is populated, which is why
-	// identity binding is a separate phase rather than part of creation.
+	// OIDCIssuer is the cluster's identity issuer URL, the trust anchor any
+	// workload identity is federated against. It is only populated once the
+	// cluster is active.
 	OIDCIssuer string
 
 	Version   string
@@ -143,52 +143,13 @@ type ClusterProvisioner interface {
 	Delete(ctx context.Context, spec core.ClusterSpec) error
 }
 
-// Component is an in-cluster workload that needs a cloud identity.
+// Component is an in-cluster workload that needs a cloud identity. Each cloud
+// provisioner binds these itself, for the addons its own cluster creation
+// installs; there is no cross-cloud identity interface.
 type Component struct {
 	Name           string
 	Namespace      string
 	ServiceAccount string
-}
-
-// Binding is the cloud identity bound to a component, and how to attach it.
-type Binding struct {
-	// Identifier is the cloud-native handle: an IAM role ARN, a Google service
-	// account email, or an Azure client ID.
-	Identifier string
-
-	// Annotations go on the Kubernetes ServiceAccount to complete the binding.
-	// Each cloud uses a different key, so the caller applies them blind rather
-	// than knowing which cloud it is on.
-	Annotations map[string]string
-}
-
-// IdentityProvisioner binds a cloud-native workload identity to an in-cluster
-// service account.
-//
-// The identity exists to be *proven*, not to grant cloud access:
-// fleet-status-reporter uses it to sign its push to the Central Ingestion API,
-// which verifies the signature. That is why Component carries no permission
-// set — a component that needed cloud permissions would be a different
-// interface, and adding one should be a deliberate decision rather than a
-// convenient extension of this one.
-type IdentityProvisioner interface {
-	Provider() core.Provider
-
-	// ProvisionForComponent is idempotent, returning the existing binding when
-	// one is already in place.
-	ProvisionForComponent(ctx context.Context, spec core.ClusterSpec, comp Component) (Binding, error)
-
-	// Deprovision removes the identity. Used by teardown; removing an absent
-	// identity is a no-op.
-	Deprovision(ctx context.Context, spec core.ClusterSpec, comp Component) error
-}
-
-// EgressDestination is an outbound endpoint a cluster must be able to reach.
-type EgressDestination struct {
-	Host        string
-	Port        int32
-	CIDR        string
-	Description string
 }
 
 // NetworkResult is what EnsureNetwork resolves a spec's subnets to.
@@ -197,13 +158,9 @@ type NetworkResult struct {
 	Change    Change
 }
 
-// NetworkProvisioner opens the one outbound path the architecture depends on,
-// and resolves the network a cluster is created in.
-//
-// Nothing reaches into a cluster, so the status reporter's egress to the
-// Central Ingestion API is the only way fleet state escapes. Provisioning it
-// during cluster creation rather than later matters: every cluster built
-// without it needs a network change before it can report at all.
+// NetworkProvisioner owns the lifecycle of the network a cluster lives in:
+// resolve-or-create it at apply, and delete only what kubespin created at
+// delete. It never touches a network an operator supplied.
 type NetworkProvisioner interface {
 	Provider() core.Provider
 
@@ -216,8 +173,6 @@ type NetworkProvisioner interface {
 	// duplicating resources.
 	EnsureNetwork(ctx context.Context, spec core.ClusterSpec) (NetworkResult, error)
 
-	AllowEgress(ctx context.Context, spec core.ClusterSpec, dest EgressDestination) (Change, error)
-
 	// DeleteNetwork reverses EnsureNetwork: it tears down the network delete's
 	// cluster caused to be created, identified by the same deterministic
 	// name EnsureNetwork looked it up by — never by spec.Subnets, which the
@@ -226,15 +181,6 @@ type NetworkProvisioner interface {
 	// apply time, or it is already gone — this is a no-op, the same
 	// adopt-or-skip discipline EnsureNetwork applies in the other direction.
 	DeleteNetwork(ctx context.Context, spec core.ClusterSpec) error
-}
-
-// StatusReporter is the component whose identity and egress every cluster gets.
-func StatusReporter() Component {
-	return Component{
-		Name:           "fleet-status-reporter",
-		Namespace:      "kubespin-system",
-		ServiceAccount: "fleet-status-reporter",
-	}
 }
 
 // WaitOptions tunes WaitUntilActive and WaitUntilGone.
@@ -274,7 +220,7 @@ func DefaultWaitOptions() WaitOptions {
 }
 
 // withDefaults fills in the zero values, so a caller passing a bare
-// WaitOptions{} (as tests and the fleet commands do) still polls sanely.
+// WaitOptions{} (as the tests do) still polls sanely.
 func (o WaitOptions) withDefaults() WaitOptions {
 	defaults := DefaultWaitOptions()
 	if o.Interval <= 0 {

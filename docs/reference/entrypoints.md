@@ -1,17 +1,15 @@
 # Entrypoints and tooling
 
 This page covers the code under `cmd/` — the binaries kubespin actually
-ships — plus the two internal packages that support the build: the docs
-generator and the version banner. Each is deliberately thin; the real logic
-lives in `internal/`.
+ships — plus the internal packages that support the build: the docs and
+changelog generators and the version banner. Each is deliberately thin; the
+real logic lives in `internal/`.
 
 ## Quick reference
 
 | Component | Role | Summary |
 |---|---|---|
 | [`cmd/kubespin`](#cmdkubespin) | Operator-facing CLI binary | Wires up a cancellable context and delegates entirely to `internal/cli.NewRootCommand()`. |
-| [`cmd/ingestion`](#cmdingestion) | Central Ingestion API Lambda handler | The only inbound network surface in the system; verifies and writes cluster status pushes via `internal/ingestion`. |
-| [`cmd/fleet-status-reporter`](#cmdfleet-status-reporter) | In-cluster CronJob binary | Queries local Argo CD, builds a status summary, and pushes it signed to the Central Ingestion API. |
 | [`internal/tools/docsgen`](#internaltoolsdocsgen) | `make docs` generator | Regenerates `docs/cli/*.md` from the live cobra command tree so the CLI reference cannot drift. |
 | [`internal/tools/changeloggen`](#internaltoolschangeloggen) | `make changelog` generator | Derives next SemVer tag and `CHANGELOG.md` sections from Conventional Commits since the last tag. |
 | [`internal/version`](#internalversion) | Build metadata package | Carries `Version`/`Commit`/`BuildDate` stamped in via `-ldflags`, and renders the `--version` banner. |
@@ -37,151 +35,6 @@ func main()
 - **Behavior:** No parameters, no return. Builds the interrupt-cancellable
   context, calls `cli.NewRootCommand().ExecuteContext(ctx)`, and on error
   prints `"kubespin: %v\n"` to stderr and exits with status 1.
-
-</details>
-
-## cmd/ingestion
-
-The Central Ingestion API's Lambda handler — the only inbound network
-surface in the system, and the endpoint every cluster's
-`fleet-status-reporter` pushes signed status to. The handler in
-[cmd/ingestion/main.go](https://github.com/GitOpsHub/kubespin/blob/main/cmd/ingestion/main.go)
-is a thin adapter over `internal/ingestion.Handler`: it wires up a Postgres
-Fleet Registry client and a JWKS-backed token verifier, translates between
-API Gateway's HTTP v2 event shape and the handler's plain Go signature, and
-delegates the actual verification/write logic to `internal/ingestion`. The
-package comment notes that the important design point — binding a caller's
-OIDC token to the `{clusterId}` in the request path so one cluster's
-signature can't be replayed to spoof another — is implemented there, not
-in this file.
-
-<details>
-<summary>Signature: `func newHandler(ctx context.Context) (*ingestion.Handler, error)`</summary>
-
-```go
-func newHandler(ctx context.Context) (*ingestion.Handler, error)
-```
-
-- **Behavior:** Reads `REGISTRY_DSN` from the environment and builds a
-  `registry.NewPostgres` client with two options:
-    - `registry.WithoutMigration()` — skips schema DDL on cold start to
-      prevent table lock contention when many Lambda instances burst in
-      parallel. The CLI is the sole owner of schema migrations.
-    - `registry.WithConnectionPool(2, 1, 15*time.Minute)` — caps each
-      Lambda instance to 2 open connections to prevent Postgres
-      exhaustion across Lambda's high-concurrency invocation model.
-  Also builds an `ingestion.NewVerifier` wrapping
-  `ingestion.NewJWKSResolver(nil)`, and returns an
-  `ingestion.NewHandler`. Returns an error if the registry connection
-  fails.
-
-</details>
-
-<details>
-<summary>Signature: `func handleRequest(h *ingestion.Handler) func(...)`</summary>
-
-```go
-func handleRequest(h *ingestion.Handler) func(context.Context, events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error)
-```
-
-- **Behavior:** Returns the Lambda entry function. It pulls `clusterId`
-  from the request path parameters and the bearer token from the
-  request headers, calls
-  `h.HandleStatus(ctx, clusterID, token, []byte(req.Body))`, and
-  marshals the response as JSON. If marshalling that response fails
-  (which the comment notes "cannot realistically fail" since the
-  response is a plain struct of strings and a bool), it degrades to a
-  hardcoded `{"error":"internal_error"}` body with a 500 status rather
-  than surfacing a marshal error to the caller. Always returns `nil`
-  for the error value — failures are encoded in the HTTP status/body,
-  not the Go error.
-
-</details>
-
-<details>
-<summary>Signature: `func bearerToken(headers map[string]string) string`</summary>
-
-```go
-func bearerToken(headers map[string]string) string
-```
-
-- **Behavior:** Case-insensitively finds the `Authorization` header
-  (API Gateway may lower-case header keys) and strips a `"Bearer "`
-  prefix. Returns `""` if no matching header or prefix is found.
-
-</details>
-
-<details>
-<summary>Signature: `func main()`</summary>
-
-```go
-func main()
-```
-
-- **Behavior:** Sets up a JSON `slog` logger to stderr (structured
-  fields are queryable in CloudWatch Logs, unlike free text), builds
-  the handler via `newHandler`, exits 1 and logs an error if that
-  fails, logs a startup message (deliberately not including
-  `REGISTRY_DSN` itself, which carries the Postgres password), and
-  calls `lambda.Start(handleRequest(h))`.
-
-</details>
-
-## cmd/fleet-status-reporter
-
-The in-cluster CronJob binary. Per the package comment in
-[cmd/fleet-status-reporter/main.go](https://github.com/GitOpsHub/kubespin/blob/main/cmd/fleet-status-reporter/main.go),
-it queries the cluster's local Argo CD instance, builds a compact status
-summary, and pushes it to the Central Ingestion API, signed with the
-cluster's workload identity token. It is deliberately a single push per
-invocation rather than a long-running loop — the Kubernetes CronJob
-resource owns the schedule, so this binary's whole job is to run once,
-push once, and report success or failure through its exit code. All of
-the argo-cd-querying and push/signing logic lives in `internal/reporter`;
-this file only reads environment configuration and wires it together.
-
-Required environment variables (checked as a group; if any is empty, `run`
-returns `errRequiredEnv`):
-
-- `CLUSTER_ID`
-- `ARGOCD_SERVER`
-- `INGESTION_URL`
-
-Optional:
-
-- `ARGOCD_TOKEN`
-- `IDENTITY_TOKEN_PATH` (defaults to `/var/run/secrets/kubespin/token`)
-
-<details>
-<summary>Signature: `func main()`</summary>
-
-```go
-func main()
-```
-
-- **Behavior:** Builds a JSON `slog` logger to stderr (its stderr is
-  scraped into the cluster's log pipeline), calls `run(logger)`, and on
-  error logs it and exits 1.
-
-</details>
-
-<details>
-<summary>Signature: `func run(logger *slog.Logger) error`</summary>
-
-```go
-func run(logger *slog.Logger) error
-```
-
-- **Behavior:** Reads and validates the required env vars (returning
-  `errRequiredEnv` if any are missing), resolves the token path (env
-  var or `defaultTokenPath`), builds a `context.WithTimeout` of
-  `defaultPushDeadline` (30 seconds), constructs a
-  `reporter.NewHTTPArgoCDClient` and a `reporter.NewPusher` (using
-  `reporter.FileTokenSource{Path: tokenPath}` as the token source), and
-  calls `pusher.Push(ctx, argocd)`. Returns a wrapped error if the push
-  itself errors, `errRejected` if the Central Ingestion API did not
-  accept the push (`accepted == false`), and `nil` on success (also
-  logging an "accepted" message).
 
 </details>
 
