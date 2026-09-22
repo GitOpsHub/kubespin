@@ -2,10 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Repository state
-
-Past greenfield — `apply`/`delete`/`login`/`status`/`logout` are all implemented and wired into the CLI, on all three clouds.
-
 Build/test/lint commands (see [Makefile](Makefile) for the exact targets):
 
 ```bash
@@ -39,24 +35,6 @@ These constrain nearly every design decision — violating one usually means the
 - **Go only — no second toolchain.** Every cloud resource is provisioned by `internal/provisioner/{aws,gcp,azure}` through each cloud's Go SDK, not Terraform or CloudFormation, and Argo CD is installed through the Helm Go library rather than a `helm`/`kubectl` binary. There is no state file, so convergence is the contract: every step is create-or-update, a dry run is strictly read-only (that is what makes `--dry-run` honest), and a run against already-provisioned infrastructure must report no changes. Each cloud service is reached through a narrow interface declared in its package, so the provisioners are testable without credentials and the interfaces double as the operator's permission set.
 - **Delete is a reverse teardown, and repos are archived, not deleted:** mark decommissioning → drain `Service type=LoadBalancer` (a cloud load balancer the cluster's own deletion does not clean up on its own, orphaned and billing indefinitely otherwise) → cluster delete → network delete (only what `EnsureNetwork` created, found by deterministic name rather than trusting `--subnets` was re-supplied) → repo archive → registry `decommissioned`. Every provider's `Describe`/`Delete` must resolve a cluster by deterministic name, not by trusting the caller's spec to carry the same `--zone`/`--spot`-derived fields `apply` used — GCP's `ClusterProvisioner.locate` exists specifically because `delete` does not require re-supplying them, and a location-derived path that 404s must not be read as "already gone."
 
-## Package layout
-
-```
-cmd/kubespin/                 main() — delegates entirely to internal/cli.NewRootCommand
-internal/cli/                 cobra command tree: apply, delete, login, status, logout
-internal/core/                shared domain types: ClusterID, ClusterSpec, ClusterSize, Profile, AddonRef, Access, NodePool
-internal/auth/                operator-facing cloud auth: shells out to aws/gcloud/az, backs `login`/`status`/`logout` and the apply/delete preflight
-internal/provisioner/{aws,gcp,azure}   ClusterProvisioner + NetworkProvisioner impls (EKS/GKE/AKS)
-internal/repo/                RepoProvisioner over GitHub Enterprise (go-github): Exists/Create/Clone/Push/Archive
-internal/registry/            cluster registry client + lease/locking
-internal/catalog/             size resolution (small/medium/large, fully builtin) + per-cluster override patches
-internal/argocd/              app-of-apps manifest rendering, ingress/Gateway access-mode templating, Argo CD install
-internal/orchestrator/        per-cluster phase state machine (apply) and reverse teardown (delete)
-internal/tools/docsgen/       regenerates docs/cli/*.md from the cobra command tree (`make docs`)
-```
-
-Shared domain types (`ClusterID`, `ClusterSpec`, `ClusterSize`, `Profile`, `AddonRef`) live in `internal/core` and are consumed by all of the above.
-
 There is no external profiles repository — the `GitOpsHub/platform-profiles` repo this project depended on for a time is decommissioned and no longer consulted. `--size small|medium|large` (defaulting to `small`) is fully resolved from the builtin catalog (`internal/catalog`, `catalog.NewBuiltinResolver()`); changing what a size includes means shipping a new kubespin build, not editing an external repo or pinning a version. Every size carries Argo CD and a cloud-appropriate autoscaler — Karpenter on AWS (EKS-only technology, no GCP/Azure port exists), `cluster-autoscaler` on GCP/Azure — never both on the same cluster. `medium` adds Velero + Falco onto `small`'s set; `large` adds strict Kyverno policies + audit logging + OTel onto `medium`'s. A cluster needing an addon outside its size's set uses the per-cluster override patch (`core.AddonOverride` in its own `cluster.yaml`, `internal/catalog/merge.go`), not a separate repo.
 
 ## Cluster repo contract
@@ -74,32 +52,6 @@ The `apps/` directory in each cluster repo holds one Argo CD Application manifes
 ## CLI usage
 
 Cloud auth is CLI-session-based, not env vars — `kubespin` reuses whatever `aws sso login` / `gcloud auth application-default login` / `az login` already cached. `kubespin login` drives all three concurrently; `kubespin status` reports session validity without changing anything; every apply/delete preflights auth itself and fails fast with "run kubespin login" rather than a cryptic SDK error mid-provision. Full reference: [docs/cli/](docs/cli/).
-
-```bash
-# Auth
-kubespin login                                    # log in to every configured provider
-kubespin login --only aws,gcp                     # just these
-kubespin status                                   # session validity per provider, never fails the command
-kubespin logout --only azure
-
-# Apply — AWS, letting kubespin create the VPC/subnets, default size (small)
-kubespin apply --provider aws --cluster-id eks-demo-01 --region us-east-1 \
-  --access private --github-org GitOpsHub --dry-run
-
-# Apply — GCP, same idea (subnetwork auto-created if --subnets is omitted)
-kubespin apply --provider gcp --gcp-project kubernetes-dev-502710 --cluster-id gke-demo-01 \
-  --region us-central1 --access private --github-org GitOpsHub
-
-# Apply — Azure, with an operator-supplied subnet instead of an auto-created one, medium size
-kubespin apply --provider azure --azure-subscription 3df9adbd-ea55-4c92-964c-0252031979de \
-  --cluster-id aks-demo-01 --region eastus --access private --size medium \
-  --subnets /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet> \
-  --github-org GitOpsHub
-
-# Teardown — reverse of apply: decommission mark → IAM/OIDC cleanup → cluster delete → repo archive
-kubespin delete --cluster-id eks-demo-01 --dry-run
-kubespin delete --cluster-id eks-demo-01
-```
 
 `KUBESPIN_REGISTRY_DSN` has no default and is never a flag (a flag would leak the database password into shell history/process listings) — it must come from the environment, a `.env` file (auto-loaded), or the config file's `registry-dsn` key, since silently defaulting risks splitting a set of clusters across two registries with no error. See [.env.example](.env.example) for the env vars real (non-dry-run) `apply`/`delete` need (`GITHUB_TOKEN`, `GITHUB_ORG`, `KUBESPIN_REGISTRY_DSN`).
 
