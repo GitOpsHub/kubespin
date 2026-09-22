@@ -48,7 +48,7 @@ type RegistryConfig struct {
 // Defaults applied when nothing else supplies a value.
 const (
 	defaultLogLevel  = "info"
-	defaultLogFormat = "text"
+	defaultLogFormat = "console"
 )
 
 // registerGlobalFlags declares the flags available on every command. It takes a
@@ -57,7 +57,7 @@ const (
 func registerGlobalFlags(fs *pflag.FlagSet) {
 	fs.String("config", "", "path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)")
 	fs.String("log-level", defaultLogLevel, "log verbosity: debug, info, warn, error")
-	fs.String("log-format", defaultLogFormat, "log output format: text or json")
+	fs.String("log-format", defaultLogFormat, "log output format: console (aligned columns for a human watching a run, colourised on a terminal), text (slog key=value), or json")
 	fs.Bool("dry-run", false, "resolve and report intended changes without performing them")
 }
 
@@ -143,9 +143,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	switch c.LogFormat {
-	case "text", "json":
+	case "console", "text", "json":
 	default:
-		return fmt.Errorf("%w: log-format %q must be text or json", ErrConfig, c.LogFormat)
+		return fmt.Errorf("%w: log-format %q must be console, text, or json", ErrConfig, c.LogFormat)
 	}
 	return nil
 }
@@ -174,8 +174,14 @@ func (c *Config) Logger(w *os.File) *slog.Logger {
 	}
 
 	opts := &slog.HandlerOptions{Level: level}
-	if c.LogFormat == "json" {
+	switch c.LogFormat {
+	case "json":
 		return slog.New(slog.NewJSONHandler(w, opts))
+	case "text":
+		return slog.New(slog.NewTextHandler(w, opts))
+	default:
+		// console, and the default: what an operator watching a provision
+		// sees. See consoleHandler for why it is not slog's TextHandler.
+		return slog.New(newConsoleHandler(w, level))
 	}
-	return slog.New(slog.NewTextHandler(w, opts))
 }

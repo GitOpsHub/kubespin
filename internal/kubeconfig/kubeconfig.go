@@ -14,6 +14,7 @@
 package kubeconfig
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -27,17 +28,33 @@ import (
 // invoking real CLIs — mirrors internal/auth's execRunner/commandRunner.
 type commandRunner func(ctx context.Context, name string, env []string, args ...string) error
 
-// execRunner runs a real command with the operator's stdio attached; these
-// commands can print progress or prompt (e.g. az's overwrite confirmation).
+// execRunner runs a real command, capturing its output rather than letting it
+// through to the operator's terminal.
+//
+// These CLIs narrate ("Fetching cluster endpoint and auth data.", "kubeconfig
+// entry generated for ..."), which says nothing kubespin does not already log
+// itself one line later, and lands in the middle of a parallel multi-cloud
+// run with no indication of which cloud it came from. What the output is
+// genuinely needed for is explaining a failure, so it is kept and attached to
+// the error instead of printed on success.
+//
+// Stdin stays attached: az prompts to confirm overwriting a kubeconfig entry,
+// and a prompt nobody can answer would hang the run.
 func execRunner(ctx context.Context, name string, env []string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // name/args are fixed CLI invocations, not user input
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}
 	if err := cmd.Run(); err != nil {
+		if trimmed := strings.TrimSpace(output.String()); trimmed != "" {
+			return fmt.Errorf("running %s %s: %w: %s", name, strings.Join(args, " "), err, trimmed)
+		}
 		return fmt.Errorf("running %s %s: %w", name, strings.Join(args, " "), err)
 	}
 	return nil

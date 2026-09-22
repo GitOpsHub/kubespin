@@ -325,7 +325,12 @@ func (o *Orchestrator) release(ctx context.Context, id core.ClusterID) {
 	defer cancel()
 
 	if err := o.registry.ReleaseLease(ctx, id, o.holder); err != nil {
-		o.logger.Warn("could not release lease; it will expire on its own",
+		// Debug, not Warn: the lease expiring on its own is the designed
+		// fallback, not a degraded outcome, and this fires precisely when the
+		// registry is already unreachable — a moment the run is reporting a
+		// real failure of its own. Warning about the cleanup of a failure
+		// buries the failure.
+		o.logger.Debug("could not release lease; it will expire on its own",
 			"cluster", id, "holder", o.holder, "error", err)
 	}
 }

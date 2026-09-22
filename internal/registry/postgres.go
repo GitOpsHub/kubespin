@@ -387,10 +387,15 @@ func (p *Postgres) Delete(ctx context.Context, id core.ClusterID) error {
 // or page through: one query, filtered by whichever of Provider/Phase are set,
 // served by the (provider, phase) index when both are.
 func (p *Postgres) List(ctx context.Context, filter Filter) ([]Record, error) {
-	var rows *sql.Rows
+	var records []Record
+
+	// The whole cursor — query, iterate, close — lives inside one attempt.
+	// retry cancels an attempt's context as soon as its function returns, and
+	// a *sql.Rows read after that cancellation fails with "context canceled"
+	// on the first scan, so returning the rows to be drained outside would
+	// break every List against a perfectly healthy database.
 	_, err := p.retry(ctx, "list", func(ctx context.Context) error {
-		var err error
-		rows, err = p.db.QueryContext(ctx, `
+		rows, err := p.db.QueryContext(ctx, `
 		SELECT `+selectColumns+` FROM fleet_registry
 		WHERE ($1 = '' OR provider = $1) AND ($2 = '' OR phase = $2)
 		ORDER BY cluster_id`,
@@ -398,23 +403,25 @@ func (p *Postgres) List(ctx context.Context, filter Filter) ([]Record, error) {
 		if err != nil {
 			return fmt.Errorf("listing registry: %w", err)
 		}
+		defer func() { _ = rows.Close() }()
+
+		// Reset per attempt: a retry must not append to what a half-drained
+		// earlier attempt already collected.
+		records = nil
+		for rows.Next() {
+			rec, scanErr := scanRecord(rows)
+			if scanErr != nil {
+				return fmt.Errorf("listing registry: %w", scanErr)
+			}
+			records = append(records, rec)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("listing registry: %w", err)
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	var records []Record
-	for rows.Next() {
-		rec, err := scanRecord(rows)
-		if err != nil {
-			return nil, fmt.Errorf("listing registry: %w", err)
-		}
-		records = append(records, rec)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("listing registry: %w", err)
 	}
 	return records, nil
 }

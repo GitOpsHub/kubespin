@@ -40,7 +40,7 @@ kubespin status [flags]
 ```text
       --config string       path to config file (default: $XDG_CONFIG_HOME/kubespin/config.yaml)
       --dry-run             resolve and report intended changes without performing them
-      --log-format string   log output format: text or json (default "text")
+      --log-format string   log output format: console (aligned columns for a human watching a run, colourised on a terminal), text (slog key=value), or json (default "console")
       --log-level string    log verbosity: debug, info, warn, error (default "info")
 ```
 

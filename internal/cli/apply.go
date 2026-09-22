@@ -193,8 +193,6 @@ func runApply(cmd *cobra.Command, _ []string) error {
 		captureAndRecordArgoCDAccess(ctx, logger, reg, cloud, spec, kubeContext)
 	}
 
-	printAccessSummary(cmd, spec, kubeContext)
-
 	return nil
 }
 
@@ -341,44 +339,6 @@ func loadBalancerEndpoint(svc *corev1.Service) string {
 	return ""
 }
 
-// printAccessSummary prints how to reach the cluster and its local Argo CD
-// once apply succeeds: the kubectl context, and the LoadBalancer + admin
-// credential commands for Argo CD's UI (see internal/argocd.DefaultAddon /
-// ServerLoadBalancerValues) — a cloud LoadBalancer address takes a few
-// minutes to provision, so the external-IP lookup is printed alongside it
-// rather than resolved here.
-func printAccessSummary(cmd *cobra.Command, spec core.ClusterSpec, kubeContext string) {
-	out := cmd.OutOrStdout()
-
-	_, _ = fmt.Fprintln(out)
-	_, _ = fmt.Fprintln(out, "Connect to the cluster:")
-	if kubeContext != "" {
-		_, _ = fmt.Fprintf(out, "  kubectl config use-context %s\n", kubeContext)
-	}
-	_, _ = fmt.Fprintln(out, "  kubectl get nodes")
-
-	_, _ = fmt.Fprintln(out)
-	_, _ = fmt.Fprintln(out, "Argo CD (LoadBalancer; external IP may take a few minutes to provision):")
-	_, _ = fmt.Fprintf(out, "  kubectl -n %s get svc argocd-server -w\n", argocd.Namespace)
-	_, _ = fmt.Fprintln(out, "  open https://<EXTERNAL-IP>")
-	_, _ = fmt.Fprintln(out, "  username: admin")
-	_, _ = fmt.Fprintf(out,
-		"  password: kubectl -n %s get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo\n",
-		argocd.Namespace)
-
-	if org, _ := cmd.Flags().GetString("github-org"); org != "" {
-		repoName := "kubespin-" + spec.ID.String()
-		_, _ = fmt.Fprintln(out)
-		if baseURL, _ := cmd.Flags().GetString("github-base-url"); baseURL == "" {
-			_, _ = fmt.Fprintf(out, "Cluster repo: https://github.com/%s/%s\n", org, repoName)
-		} else {
-			// A GitHub Enterprise web UI's host is not reliably derivable from
-			// its API base URL, so this stays a slug rather than a guessed link.
-			_, _ = fmt.Fprintf(out, "Cluster repo: %s/%s\n", org, repoName)
-		}
-	}
-}
-
 // reportPlan describes what a run would do without touching any cloud.
 //
 // It reads the registry — which is not a mutation — and reports the phase a run
@@ -417,13 +377,17 @@ func reportPlan(
 }
 
 // cloudAuthProviders names the auth providers a real (non-dry-run) apply or
-// delete needs: the cluster's own cloud, plus AWS, which is always required
-// because the cluster registry is AWS-hosted regardless of spec.Provider.
+// delete needs: the cluster's own cloud, and nothing else.
+//
+// It used to demand AWS as well, whatever the cluster's provider, from when
+// the cluster registry was DynamoDB and every run therefore needed AWS
+// credentials to reach it. The registry is operator-supplied Postgres now,
+// reached over a DSN that authenticates itself, so that requirement outlived
+// its reason: a GCP or Azure run on a machine that has never touched AWS was
+// failing preflight with "not authenticated to aws; run: kubespin login
+// --only aws" — an error naming a cloud the operator was not using.
 func cloudAuthProviders(spec core.ClusterSpec) []string {
-	if spec.Provider == core.ProviderAWS {
-		return []string{"aws"}
-	}
-	return []string{"aws", string(spec.Provider)}
+	return []string{string(spec.Provider)}
 }
 
 // buildCloud assembles the provisioners for the spec's cloud.

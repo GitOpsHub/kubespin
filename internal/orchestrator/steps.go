@@ -78,6 +78,15 @@ func restConfigFor(ctx context.Context, cloud Cloud, spec core.ClusterSpec) (*re
 	if err != nil {
 		return nil, fmt.Errorf("building REST config for %s: %w", spec.ID, err)
 	}
+
+	// client-go prints every API-server warning header to stderr through
+	// klog, bypassing kubespin's own logger entirely: installing Argo CD on
+	// GKE Autopilot emits seven "Autopilot updated Deployment ... defaulted
+	// unspecified 'cpu' resource" lines mid-run, unprefixed and unleveled.
+	// They describe the cluster's own admission behaviour, not anything
+	// kubespin did or can act on, so they are dropped rather than reformatted.
+	restConfig.WarningHandler = rest.NoWarnings{}
+
 	return restConfig, nil
 }
 

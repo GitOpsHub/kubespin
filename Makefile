@@ -197,7 +197,8 @@ autopilot: build
 ## Tears down everything `make spot` and `make autopilot` create. Deletes are
 ## idempotent — a cluster that was never created, or is already decommissioned,
 ## is a no-op — so destroying both sets is safe even if you only spun one up.
-## Repositories are archived, not deleted; their history is retained.
+## Each cluster's GitHub repository is deleted along with it, so the cluster ID
+## is free to use again; that history is not recoverable.
 ##
 ## Prompts once for confirmation. YES=1 skips it (the per-cluster `kubespin
 ## delete` prompt is always skipped, since five interleaved prompts across
@@ -212,7 +213,7 @@ autopilot: build
 YES ?=
 
 confirm_destroy = test -n "$(YES)" || { \
-	printf '==> about to delete clusters: %s\n    their repositories are archived, not deleted\n    type yes to continue: ' '$(1)'; \
+	printf '==> about to delete clusters: %s\n    their GitHub repositories are deleted too, irreversibly\n    type yes to continue: ' '$(1)'; \
 	read ans; test "$$ans" = yes || { echo "aborted" >&2; exit 1; }; }
 
 .PHONY: destroy

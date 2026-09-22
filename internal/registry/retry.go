@@ -130,8 +130,7 @@ func isTransient(err error) bool {
 
 	// The network-level failures behind "operation timed out", "connection
 	// refused" and "connection reset by peer".
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
+	if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
 		return true
 	}
 	for _, errno := range []syscall.Errno{
@@ -146,8 +145,7 @@ func isTransient(err error) bool {
 	// Postgres said so itself. The 08 class is every connection exception;
 	// the rest are the server declining this particular moment, not this
 	// particular statement.
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 		switch pgErr.Code {
 		case "40001", // serialization_failure
 			"40P01", // deadlock_detected
@@ -168,6 +166,6 @@ func isTransient(err error) bool {
 	}
 
 	// A pgconn-level connect failure that carries no PgError of its own.
-	var connErr *pgconn.ConnectError
-	return errors.As(err, &connErr)
+	_, isConnectError := errors.AsType[*pgconn.ConnectError](err)
+	return isConnectError
 }
