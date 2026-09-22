@@ -124,25 +124,32 @@ GCP_REGION         ?= us-central1
 GCP_CLUSTER_ID     ?= gke-spot-dev
 AZURE_REGION       ?= eastus
 AZURE_CLUSTER_ID   ?= aks-spot-dev
-SPOT_PROFILE       ?= tier-small@1.0.0
+## Addon set for the spot clusters. `apply` takes --size (small|medium|large);
+## the profile flag this used to pass no longer exists on the command.
+SPOT_SIZE          ?= small
 
 .PHONY: spot
 spot: build
-	@test -n "$$GITHUB_ORG" || { echo "GITHUB_ORG must be set (GitHub org cluster repos are created in)" >&2; exit 1; }
-	@test -n "$$GCP_PROJECT" || { echo "GCP_PROJECT must be set (GCP project hosting the GKE cluster)" >&2; exit 1; }
-	@test -n "$$AZURE_SUBSCRIPTION_ID" || { echo "AZURE_SUBSCRIPTION_ID must be set (Azure subscription hosting the AKS cluster)" >&2; exit 1; }
-	@ip="$$(curl -s https://checkip.amazonaws.com)"; \
+	@org="$$GITHUB_ORG"; \
+	proj="$$GCP_PROJECT"; \
+	test -n "$$proj" || proj="$$(gcloud config get-value project 2>/dev/null | grep -v '^(unset)$$' || true)"; \
+	sub="$$AZURE_SUBSCRIPTION_ID"; \
+	test -n "$$sub" || sub="$$(az account show --query id -o tsv 2>/dev/null || true)"; \
+	test -n "$$org" || { echo "GITHUB_ORG must be set (GitHub org cluster repos are created in) — add it to .env or export it" >&2; exit 1; }; \
+	test -n "$$proj" || { echo "GCP_PROJECT must be set (GCP project hosting the GKE cluster) — add it to .env, export it, or set a default with 'gcloud config set project'" >&2; exit 1; }; \
+	test -n "$$sub" || { echo "AZURE_SUBSCRIPTION_ID must be set (Azure subscription hosting the AKS cluster) — add it to .env, export it, or run 'az login'" >&2; exit 1; }; \
+	ip="$$(curl -s https://checkip.amazonaws.com)"; \
 	test -n "$$ip" || { echo "could not determine this machine's public IP for --authorized-cidrs" >&2; exit 1; }; \
 	echo "==> spinning up spot clusters on aws, gcp, azure (authorized for $$ip/32)"; \
 	( kubespin apply --provider aws --region $(AWS_REGION) --cluster-id $(AWS_CLUSTER_ID) \
 	    --access public --authorized-cidrs "$$ip/32" --spot \
-	    --profile $(SPOT_PROFILE) --github-org "$$GITHUB_ORG" 2>&1 | sed 's/^/[aws]   /' ) & \
-	( kubespin apply --provider gcp --gcp-project "$$GCP_PROJECT" --region $(GCP_REGION) --cluster-id $(GCP_CLUSTER_ID) \
+	    --size $(SPOT_SIZE) --github-org "$$org" 2>&1 | sed 's/^/[aws]   /' ) & \
+	( kubespin apply --provider gcp --gcp-project "$$proj" --region $(GCP_REGION) --cluster-id $(GCP_CLUSTER_ID) \
 	    --access public --authorized-cidrs "$$ip/32" --spot \
-	    --profile $(SPOT_PROFILE) --github-org "$$GITHUB_ORG" 2>&1 | sed 's/^/[gcp]   /' ) & \
-	( kubespin apply --provider azure --azure-subscription "$$AZURE_SUBSCRIPTION_ID" --region $(AZURE_REGION) --cluster-id $(AZURE_CLUSTER_ID) \
+	    --size $(SPOT_SIZE) --github-org "$$org" 2>&1 | sed 's/^/[gcp]   /' ) & \
+	( kubespin apply --provider azure --azure-subscription "$$sub" --region $(AZURE_REGION) --cluster-id $(AZURE_CLUSTER_ID) \
 	    --access public --authorized-cidrs "$$ip/32" --spot \
-	    --profile $(SPOT_PROFILE) --github-org "$$GITHUB_ORG" 2>&1 | sed 's/^/[azure] /' ) & \
+	    --size $(SPOT_SIZE) --github-org "$$org" 2>&1 | sed 's/^/[azure] /' ) & \
 	wait
 
 ## Spins up a fully-managed "autopilot" cluster on each cloud that has one —
