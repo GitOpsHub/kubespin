@@ -12,6 +12,11 @@ Do not hand-edit past entries.
 
 ## [Unreleased]
 
+## [v1.4.0] - 2026-09-22
+### Added
+- Update log format options to include console and improve logging output
+
+
 ## [v1.3.0] - 2026-09-22
 ### Added
 - Implement repository deletion logic in memory and postgres provisioners
