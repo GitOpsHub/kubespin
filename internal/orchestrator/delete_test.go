@@ -157,8 +157,8 @@ func TestTeardown_CallsClusterThenNetworkThenRepo(t *testing.T) {
 	if deleteNetwork < 0 || deleteNetwork < del {
 		t.Errorf("calls = %v, want DeleteNetwork after Delete", f.calls)
 	}
-	if !repoProv.Archived(spec) {
-		t.Error("expected the repository to have been archived")
+	if !repoProv.Deleted(spec) {
+		t.Error("expected the repository to have been deleted")
 	}
 }
 
@@ -180,8 +180,8 @@ func TestTeardown_FailsWhenNetworkDeletionFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Teardown succeeded, want the DeleteNetwork error surfaced")
 	}
-	if repoProv.Archived(spec) {
-		t.Error("the repository was archived even though the network was never deleted")
+	if repoProv.Deleted(spec) {
+		t.Error("the repository was deleted even though the network was never deleted")
 	}
 }
 
@@ -232,7 +232,7 @@ func TestTeardown_FailsWhenTheClusterNeverGoesAway(t *testing.T) {
 	if err == nil {
 		t.Fatal("Teardown succeeded, want a timeout waiting for the cluster to be deleted")
 	}
-	if repoProv.Archived(spec) {
-		t.Error("the repository was archived even though the cluster was never deleted")
+	if repoProv.Deleted(spec) {
+		t.Error("the repository was deleted even though the cluster was never deleted")
 	}
 }

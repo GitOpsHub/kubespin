@@ -473,9 +473,13 @@ func runLeaseContract(t *testing.T, newRegistry factory) {
 		}
 	})
 
-	// Renewing an expired lease must fail: another holder may already own it,
-	// and silently re-acquiring would defeat the lock.
-	t.Run("renew fails once expired", func(t *testing.T) {
+	// An expired lease that nobody else has taken is still ours to renew.
+	// Losing contact with the registry for longer than the TTL is not the
+	// same as losing the lease: a takeover (AcquireLease) replaces the
+	// holder, so a lease still naming this run has not been taken. Requiring
+	// an unexpired lease here used to kill long provisions outright whenever
+	// the database was briefly unreachable.
+	t.Run("renew reclaims our own expired lease", func(t *testing.T) {
 		clock := newFakeClock()
 		r := newRegistry(t, clock)
 		rec := seed(t, r, clock, "team-alpha")
@@ -485,6 +489,32 @@ func runLeaseContract(t *testing.T, newRegistry factory) {
 		}
 
 		clock.Advance(ttl + time.Second)
+
+		renewed, err := r.RenewLease(context.Background(), rec.ClusterID, "runner-a", ttl)
+		if err != nil {
+			t.Fatalf("RenewLease over our own expired lease: %v", err)
+		}
+		if want := clock.Now().Add(ttl); !renewed.ExpiresAt.Equal(want) {
+			t.Errorf("ExpiresAt = %s, want %s", renewed.ExpiresAt, want)
+		}
+	})
+
+	// But once somebody else has actually taken it, it is gone — that is the
+	// race the lease exists to catch.
+	t.Run("renew fails once another holder has taken over", func(t *testing.T) {
+		clock := newFakeClock()
+		r := newRegistry(t, clock)
+		rec := seed(t, r, clock, "team-alpha")
+
+		if _, err := r.AcquireLease(context.Background(), rec.ClusterID, "runner-a", ttl); err != nil {
+			t.Fatalf("AcquireLease: %v", err)
+		}
+
+		clock.Advance(ttl + time.Second)
+
+		if _, err := r.AcquireLease(context.Background(), rec.ClusterID, "runner-b", ttl); err != nil {
+			t.Fatalf("AcquireLease by runner-b over an expired lease: %v", err)
+		}
 
 		if _, err := r.RenewLease(context.Background(), rec.ClusterID, "runner-a", ttl); !errors.Is(err, ErrLeaseLost) {
 			t.Fatalf("error = %v, want one wrapping ErrLeaseLost", err)

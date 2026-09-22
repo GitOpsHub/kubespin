@@ -69,9 +69,10 @@ const selectColumns = `
 
 // Postgres is the production Registry, backed by a Postgres database.
 type Postgres struct {
-	db     *sql.DB
-	now    func() time.Time
-	logger *slog.Logger
+	db          *sql.DB
+	now         func() time.Time
+	logger      *slog.Logger
+	retryPolicy RetryPolicy
 }
 
 // Option configures a Postgres registry client.
@@ -85,6 +86,15 @@ func WithLogger(logger *slog.Logger) Option {
 		if logger != nil {
 			p.logger = logger
 		}
+	}
+}
+
+// WithRetryPolicy replaces the retry policy every call is made under. The
+// default (DefaultRetryPolicy) rides out a brief outage; a caller with its
+// own deadline discipline can shorten or disable it.
+func WithRetryPolicy(policy RetryPolicy) Option {
+	return func(p *Postgres) {
+		p.retryPolicy = policy
 	}
 }
 
@@ -147,8 +157,13 @@ func (p *Postgres) log() *slog.Logger {
 
 // Get returns a cluster's record.
 func (p *Postgres) Get(ctx context.Context, id core.ClusterID) (Record, error) {
-	row := p.db.QueryRowContext(ctx, `SELECT `+selectColumns+` FROM fleet_registry WHERE cluster_id = $1`, id.String())
-	rec, err := scanRecord(row)
+	var rec Record
+	_, err := p.retry(ctx, "get", func(ctx context.Context) error {
+		row := p.db.QueryRowContext(ctx, `SELECT `+selectColumns+` FROM fleet_registry WHERE cluster_id = $1`, id.String())
+		var err error
+		rec, err = scanRecord(row)
+		return err
+	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Record{}, fmt.Errorf("%w: %s", ErrNotFound, id)
@@ -168,27 +183,55 @@ func (p *Postgres) Create(ctx context.Context, rec Record) (Record, error) {
 		rec.Version = 1
 	}
 
-	res, err := p.db.ExecContext(ctx, `
+	var inserted int64
+	attempts, err := p.retry(ctx, "create", func(ctx context.Context) error {
+		res, err := p.db.ExecContext(ctx, `
 		INSERT INTO fleet_registry (
 			cluster_id, phase, provider, region, access, size,
 			version, created_at, updated_at, lease_holder, lease_expires_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (cluster_id) DO NOTHING`,
-		rec.ClusterID.String(), rec.Phase.String(), rec.Provider.String(), rec.Region, rec.Access.String(),
-		rec.Size.String(), rec.Version,
-		rec.CreatedAt.UTC(), rec.UpdatedAt.UTC(), leaseHolder(rec.Lease), leaseExpiry(rec.Lease))
+			rec.ClusterID.String(), rec.Phase.String(), rec.Provider.String(), rec.Region, rec.Access.String(),
+			rec.Size.String(), rec.Version,
+			rec.CreatedAt.UTC(), rec.UpdatedAt.UTC(), leaseHolder(rec.Lease), leaseExpiry(rec.Lease))
+		if err != nil {
+			return fmt.Errorf("creating cluster %s: %w", rec.ClusterID, err)
+		}
+		if inserted, err = res.RowsAffected(); err != nil {
+			return fmt.Errorf("creating cluster %s: %w", rec.ClusterID, err)
+		}
+		return nil
+	})
 	if err != nil {
-		return Record{}, fmt.Errorf("creating cluster %s: %w", rec.ClusterID, err)
+		return Record{}, err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return Record{}, fmt.Errorf("creating cluster %s: %w", rec.ClusterID, err)
-	}
-	if n == 0 {
+	if inserted == 0 {
+		// A retried insert that finds the row already there may well have put
+		// it there itself, on an attempt whose reply was lost. Claiming
+		// ErrAlreadyExists then would fail an apply that in fact succeeded, so
+		// the row is read back: ours if it still carries exactly what this
+		// call wrote.
+		if attempts > 1 && p.matchesOurInsert(ctx, rec) {
+			p.log().Debug("create landed on an earlier attempt", "cluster", rec.ClusterID)
+			return rec, nil
+		}
 		return Record{}, fmt.Errorf("%w: %s", ErrAlreadyExists, rec.ClusterID)
 	}
 	p.log().Debug("created registry record", "cluster", rec.ClusterID, "phase", rec.Phase, "provider", rec.Provider)
 	return rec, nil
+}
+
+// matchesOurInsert reports whether the stored record is the one this Create
+// call wrote — same starting phase and version, no lease taken since. Used
+// only to disambiguate a retried insert from a genuine duplicate; a record
+// that has moved on belongs to somebody else's run.
+func (p *Postgres) matchesOurInsert(ctx context.Context, rec Record) bool {
+	stored, err := p.Get(ctx, rec.ClusterID)
+	if err != nil {
+		return false
+	}
+	return stored.Phase == rec.Phase && stored.Version == rec.Version &&
+		stored.Provider == rec.Provider && stored.Region == rec.Region
 }
 
 // UpdatePhase advances a cluster to its next phase.
@@ -199,16 +242,33 @@ func (p *Postgres) UpdatePhase(ctx context.Context, rec Record, to core.Phase) (
 		return Record{}, fmt.Errorf("advancing %s: %w", rec.ClusterID, err)
 	}
 
-	row := p.db.QueryRowContext(ctx, `
+	var updated Record
+	attempts, err := p.retry(ctx, "update phase", func(ctx context.Context) error {
+		row := p.db.QueryRowContext(ctx, `
 		UPDATE fleet_registry
 		SET phase = $1, version = version + 1, updated_at = $2
 		WHERE cluster_id = $3 AND phase = $4 AND version = $5
 		RETURNING `+selectColumns,
-		to.String(), p.now().UTC(), rec.ClusterID.String(), rec.Phase.String(), rec.Version)
-
-	updated, err := scanRecord(row)
+			to.String(), p.now().UTC(), rec.ClusterID.String(), rec.Phase.String(), rec.Version)
+		var err error
+		updated, err = scanRecord(row)
+		return err
+	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			// Same reasoning as Create: a conditional update that matched
+			// nothing, after an attempt whose reply was lost, may be this
+			// call's own earlier write. A record already sitting at exactly
+			// the phase and version this write would have produced is that
+			// write, not somebody else's.
+			if attempts > 1 {
+				if current, getErr := p.Get(ctx, rec.ClusterID); getErr == nil &&
+					current.Phase == to && current.Version == rec.Version+1 {
+					p.log().Debug("phase transition landed on an earlier attempt",
+						"cluster", rec.ClusterID, "to", to, "version", current.Version)
+					return current, nil
+				}
+			}
 			// Distinguishes not-found from a genuine version conflict, the same
 			// two-case split Dynamo's ReturnValuesOnConditionCheckFailure gave for
 			// free — here it costs a second read.
@@ -230,7 +290,10 @@ func (p *Postgres) UpdatePhase(ctx context.Context, rec Record, to core.Phase) (
 // written; updated_at bumps on every call.
 func (p *Postgres) RecordArgoCDAccess(ctx context.Context, id core.ClusterID, access ArgoCDAccess) error {
 	now := p.now().UTC()
-	res, err := p.db.ExecContext(ctx, `
+	var res sql.Result
+	_, err := p.retry(ctx, "record argocd access", func(ctx context.Context) error {
+		var err error
+		res, err = p.db.ExecContext(ctx, `
 		INSERT INTO cluster_argocd_details (
 			cluster_id, provider, region, kube_context, argocd_endpoint,
 			argocd_username, argocd_password, captured_at, updated_at
@@ -243,8 +306,13 @@ func (p *Postgres) RecordArgoCDAccess(ctx context.Context, id core.ClusterID, ac
 			argocd_username = EXCLUDED.argocd_username,
 			argocd_password = EXCLUDED.argocd_password,
 			updated_at = EXCLUDED.updated_at`,
-		id.String(), access.Provider.String(), access.Region, access.KubeContext,
-		access.Endpoint, access.Username, access.Password, now)
+			id.String(), access.Provider.String(), access.Region, access.KubeContext,
+			access.Endpoint, access.Username, access.Password, now)
+		if err != nil {
+			return fmt.Errorf("recording argocd access for %s: %w", id, err)
+		}
+		return nil
+	})
 	if err != nil {
 		if isForeignKeyViolation(err) {
 			return fmt.Errorf("%w: %s", ErrNotFound, id)
@@ -263,10 +331,12 @@ func (p *Postgres) GetArgoCDAccess(ctx context.Context, id core.ClusterID) (Argo
 	var (
 		provider, region, kubeContext, endpoint, username, password string
 	)
-	row := p.db.QueryRowContext(ctx, `
+	_, err := p.retry(ctx, "get argocd access", func(ctx context.Context) error {
+		row := p.db.QueryRowContext(ctx, `
 		SELECT provider, region, kube_context, argocd_endpoint, argocd_username, argocd_password
 		FROM cluster_argocd_details WHERE cluster_id = $1`, id.String())
-	err := row.Scan(&provider, &region, &kubeContext, &endpoint, &username, &password)
+		return row.Scan(&provider, &region, &kubeContext, &endpoint, &username, &password)
+	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ArgoCDAccess{}, fmt.Errorf("%w: %s", ErrNotFound, id)
@@ -299,8 +369,13 @@ func isForeignKeyViolation(err error) bool {
 // resumable, and the second run of a teardown whose first run got this far
 // must converge rather than fail.
 func (p *Postgres) Delete(ctx context.Context, id core.ClusterID) error {
-	if _, err := p.db.ExecContext(ctx, `DELETE FROM fleet_registry WHERE cluster_id = $1`, id.String()); err != nil {
-		return fmt.Errorf("deleting cluster %s: %w", id, err)
+	if _, err := p.retry(ctx, "delete", func(ctx context.Context) error {
+		if _, err := p.db.ExecContext(ctx, `DELETE FROM fleet_registry WHERE cluster_id = $1`, id.String()); err != nil {
+			return fmt.Errorf("deleting cluster %s: %w", id, err)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	p.log().Debug("deleted registry record", "cluster", id)
 	return nil
@@ -312,13 +387,21 @@ func (p *Postgres) Delete(ctx context.Context, id core.ClusterID) error {
 // or page through: one query, filtered by whichever of Provider/Phase are set,
 // served by the (provider, phase) index when both are.
 func (p *Postgres) List(ctx context.Context, filter Filter) ([]Record, error) {
-	rows, err := p.db.QueryContext(ctx, `
+	var rows *sql.Rows
+	_, err := p.retry(ctx, "list", func(ctx context.Context) error {
+		var err error
+		rows, err = p.db.QueryContext(ctx, `
 		SELECT `+selectColumns+` FROM fleet_registry
 		WHERE ($1 = '' OR provider = $1) AND ($2 = '' OR phase = $2)
 		ORDER BY cluster_id`,
-		filter.Provider.String(), filter.Phase.String())
+			filter.Provider.String(), filter.Phase.String())
+		if err != nil {
+			return fmt.Errorf("listing registry: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("listing registry: %w", err)
+		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -349,17 +432,22 @@ func (p *Postgres) AcquireLease(ctx context.Context, id core.ClusterID, holder s
 	// crashed run self-heal instead of wedging the cluster forever. <= matches
 	// Lease.Expired()'s !now.Before(expiresAt) exactly, so "expired" means the
 	// same instant here as it does everywhere else that reasons about a lease.
-	res, err := p.db.ExecContext(ctx, `
+	var n int64
+	if _, err := p.retry(ctx, "acquire lease", func(ctx context.Context) error {
+		res, err := p.db.ExecContext(ctx, `
 		UPDATE fleet_registry
 		SET lease_holder = $1, lease_expires_at = $2
 		WHERE cluster_id = $3 AND (lease_holder IS NULL OR lease_expires_at <= $4 OR lease_holder = $1)`,
-		holder, lease.ExpiresAt, id.String(), now)
-	if err != nil {
-		return Lease{}, fmt.Errorf("acquiring lease on %s: %w", id, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return Lease{}, fmt.Errorf("acquiring lease on %s: %w", id, err)
+			holder, lease.ExpiresAt, id.String(), now)
+		if err != nil {
+			return fmt.Errorf("acquiring lease on %s: %w", id, err)
+		}
+		if n, err = res.RowsAffected(); err != nil {
+			return fmt.Errorf("acquiring lease on %s: %w", id, err)
+		}
+		return nil
+	}); err != nil {
+		return Lease{}, err
 	}
 	if n == 0 {
 		conflict := p.leaseConflict(ctx, id, ErrLeaseHeld)
@@ -376,22 +464,33 @@ func (p *Postgres) AcquireLease(ctx context.Context, id core.ClusterID, holder s
 
 // RenewLease extends a lease the caller still holds.
 func (p *Postgres) RenewLease(ctx context.Context, id core.ClusterID, holder string, ttl time.Duration) (Lease, error) {
-	now := p.now().UTC()
-	lease := Lease{Holder: holder, ExpiresAt: now.Add(ttl)}
+	lease := Lease{Holder: holder, ExpiresAt: p.now().UTC().Add(ttl)}
 
-	// Strictly greater than now: an expired lease cannot be renewed, because
-	// another holder may already own it.
-	res, err := p.db.ExecContext(ctx, `
+	// Conditional on the holder alone, deliberately not on the lease still
+	// being unexpired. "Another holder may already own it" is exactly what
+	// lease_holder <> $3 says: taking over an expired lease (AcquireLease)
+	// overwrites the holder, so a row that still names us cannot be held by
+	// anybody else, whatever the clock says. Requiring an unexpired lease
+	// here instead meant a run that lost contact with Postgres for longer
+	// than the TTL killed itself over a lease nobody had taken — and the
+	// single statement below stays atomic, so a genuine concurrent takeover
+	// still wins the race and this call still reports the loss.
+	var n int64
+	if _, err := p.retry(ctx, "renew lease", func(ctx context.Context) error {
+		res, err := p.db.ExecContext(ctx, `
 		UPDATE fleet_registry
 		SET lease_expires_at = $1
-		WHERE cluster_id = $2 AND lease_holder = $3 AND lease_expires_at > $4`,
-		lease.ExpiresAt, id.String(), holder, now)
-	if err != nil {
-		return Lease{}, fmt.Errorf("renewing lease on %s: %w", id, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return Lease{}, fmt.Errorf("renewing lease on %s: %w", id, err)
+		WHERE cluster_id = $2 AND lease_holder = $3`,
+			lease.ExpiresAt, id.String(), holder)
+		if err != nil {
+			return fmt.Errorf("renewing lease on %s: %w", id, err)
+		}
+		if n, err = res.RowsAffected(); err != nil {
+			return fmt.Errorf("renewing lease on %s: %w", id, err)
+		}
+		return nil
+	}); err != nil {
+		return Lease{}, err
 	}
 	if n == 0 {
 		return Lease{}, p.leaseConflict(ctx, id, ErrLeaseLost)
@@ -402,17 +501,22 @@ func (p *Postgres) RenewLease(ctx context.Context, id core.ClusterID, holder str
 
 // ReleaseLease drops a lease the caller holds.
 func (p *Postgres) ReleaseLease(ctx context.Context, id core.ClusterID, holder string) error {
-	res, err := p.db.ExecContext(ctx, `
+	var n int64
+	if _, err := p.retry(ctx, "release lease", func(ctx context.Context) error {
+		res, err := p.db.ExecContext(ctx, `
 		UPDATE fleet_registry
 		SET lease_holder = NULL, lease_expires_at = NULL
 		WHERE cluster_id = $1 AND lease_holder = $2`,
-		id.String(), holder)
-	if err != nil {
-		return fmt.Errorf("releasing lease on %s: %w", id, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("releasing lease on %s: %w", id, err)
+			id.String(), holder)
+		if err != nil {
+			return fmt.Errorf("releasing lease on %s: %w", id, err)
+		}
+		if n, err = res.RowsAffected(); err != nil {
+			return fmt.Errorf("releasing lease on %s: %w", id, err)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	if n == 0 {
 		return p.leaseConflict(ctx, id, ErrLeaseLost)

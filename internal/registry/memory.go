@@ -186,9 +186,11 @@ func (m *Memory) RenewLease(_ context.Context, id core.ClusterID, holder string,
 	}
 
 	now := m.now()
-	// An expired lease cannot be renewed: another holder may already have taken
-	// it, and silently re-acquiring here would defeat the lock.
-	if stored.Lease == nil || stored.Lease.Holder != holder || stored.Lease.Expired(now) {
+	// Holder alone, not expiry: taking over an expired lease replaces the
+	// holder, so a lease that still names this caller has not been taken by
+	// anybody. See Postgres.RenewLease for why requiring an unexpired lease
+	// here killed runs that had merely lost contact with the registry.
+	if stored.Lease == nil || stored.Lease.Holder != holder {
 		return Lease{}, fmt.Errorf("%w: %s", ErrLeaseLost, id)
 	}
 

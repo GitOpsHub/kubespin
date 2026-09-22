@@ -49,7 +49,7 @@ all: lint test build
 build:
 	go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/$(BINARY)
 ifndef CI
-	@$(MAKE) --no-print-directory install
+	@$(MAKE) --no-print-directory install VERSION='$(VERSION)'
 endif
 
 ## Copies the built binary onto PATH. Kept separate from build so it can be

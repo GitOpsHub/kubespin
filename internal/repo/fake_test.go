@@ -123,6 +123,25 @@ func (f *fakeGitHub) Edit(
 	return r, ok200(), nil
 }
 
+func (f *fakeGitHub) Delete(_ context.Context, owner, repoName string) (*github.Response, error) {
+	f.record("Delete")
+	k := key(owner, repoName)
+	if _, ok := f.repos[k]; !ok {
+		return resp404(), fmt.Errorf("404")
+	}
+	delete(f.repos, k)
+	delete(f.protections, k)
+	// Refs go too: a deleted repository takes its branches with it, so a
+	// recreate under the same name starts empty rather than inheriting the
+	// old tree.
+	for ref := range f.refs {
+		if strings.HasPrefix(ref, k+"/") {
+			delete(f.refs, ref)
+		}
+	}
+	return ok200(), nil
+}
+
 func (f *fakeGitHub) GetContents(
 	_ context.Context, owner, repoName, path string, opts *github.RepositoryContentGetOptions,
 ) (*github.RepositoryContent, []*github.RepositoryContent, *github.Response, error) {

@@ -181,7 +181,7 @@ func TestProvisioner_Push_CommitsOnlyChangedFiles(t *testing.T) {
 	}
 }
 
-func TestProvisioner_Archive(t *testing.T) {
+func TestProvisioner_Delete(t *testing.T) {
 	f := newFakeGitHub()
 	p := NewProvisioner(f.clients())
 	spec := testSpec()
@@ -189,21 +189,22 @@ func TestProvisioner_Archive(t *testing.T) {
 	if err := p.Create(context.Background(), spec); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := p.Archive(context.Background(), spec); err != nil {
-		t.Fatalf("Archive: %v", err)
+	if err := p.Delete(context.Background(), spec); err != nil {
+		t.Fatalf("Delete: %v", err)
 	}
 
-	n := names{spec}
-	repository, _, err := f.Get(context.Background(), testOrg, n.repoName())
+	exists, err := p.Exists(context.Background(), spec)
 	if err != nil {
-		t.Fatalf("Get: %v", err)
+		t.Fatalf("Exists: %v", err)
 	}
-	if !repository.GetArchived() {
-		t.Error("expected the repository to be archived")
+	if exists {
+		t.Error("expected the repository to be gone after Delete")
 	}
 }
 
-func TestProvisioner_Archive_Idempotent(t *testing.T) {
+// A repeated teardown must converge rather than fail on the repository its
+// own first run already deleted.
+func TestProvisioner_Delete_Idempotent(t *testing.T) {
 	f := newFakeGitHub()
 	p := NewProvisioner(f.clients())
 	spec := testSpec()
@@ -211,26 +212,46 @@ func TestProvisioner_Archive_Idempotent(t *testing.T) {
 	if err := p.Create(context.Background(), spec); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := p.Archive(context.Background(), spec); err != nil {
-		t.Fatalf("first Archive: %v", err)
+	if err := p.Delete(context.Background(), spec); err != nil {
+		t.Fatalf("first Delete: %v", err)
 	}
-
-	editsBefore := countCalls(f, "Edit")
-
-	if err := p.Archive(context.Background(), spec); err != nil {
-		t.Fatalf("second Archive: %v", err)
-	}
-	if got := countCalls(f, "Edit"); got != editsBefore {
-		t.Errorf("Edit called again on an already-archived repo: %d -> %d", editsBefore, got)
+	if err := p.Delete(context.Background(), spec); err != nil {
+		t.Fatalf("second Delete: %v", err)
 	}
 }
 
-func TestProvisioner_Archive_AbsentRepoConverges(t *testing.T) {
+func TestProvisioner_Delete_AbsentRepoConverges(t *testing.T) {
 	f := newFakeGitHub()
 	p := NewProvisioner(f.clients())
 
-	if err := p.Archive(context.Background(), testSpec()); err != nil {
-		t.Fatalf("Archive on an absent repo should converge, not fail: %v", err)
+	if err := p.Delete(context.Background(), testSpec()); err != nil {
+		t.Fatalf("Delete on an absent repo should converge, not fail: %v", err)
+	}
+}
+
+// The name a deleted cluster leaves behind must be reusable: that is the
+// whole point of deleting the repository instead of archiving it.
+func TestProvisioner_CreateAfterDelete_ReusesTheName(t *testing.T) {
+	f := newFakeGitHub()
+	p := NewProvisioner(f.clients())
+	spec := testSpec()
+
+	if err := p.Create(context.Background(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := p.Delete(context.Background(), spec); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := p.Create(context.Background(), spec); err != nil {
+		t.Fatalf("Create after Delete: %v", err)
+	}
+
+	exists, err := p.Exists(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Exists: %v", err)
+	}
+	if !exists {
+		t.Error("expected the repository to exist again after a recreate")
 	}
 }
 

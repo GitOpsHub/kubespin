@@ -20,7 +20,7 @@ var ErrLeaseLost = errors.New("lost the cluster lease mid-run")
 // leaseRenewalDivisor sets the heartbeat interval as a fraction of the TTL.
 // Renewing three times per TTL leaves room for two consecutive failed
 // renewals — a throttled or briefly unreachable Postgres — before the lease
-// genuinely expires.
+// lapses and another run could take it over.
 const leaseRenewalDivisor = 3
 
 // minRenewalInterval only guards against a zero or negative TTL producing a
@@ -57,11 +57,6 @@ func (o *Orchestrator) keepLeaseAlive(ctx context.Context, id core.ClusterID) (c
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
-		// The last moment this run can prove it owns the lease. Renewal
-		// failures are tolerated until it passes, then the run must stop:
-		// past expiry another holder may legitimately have taken over.
-		expiry := o.now().Add(o.leaseTTL)
-
 		for {
 			select {
 			case <-runCtx.Done():
@@ -72,8 +67,7 @@ func (o *Orchestrator) keepLeaseAlive(ctx context.Context, id core.ClusterID) (c
 			lease, err := o.registry.RenewLease(runCtx, id, o.holder, o.leaseTTL)
 			switch {
 			case err == nil:
-				expiry = lease.ExpiresAt
-				o.logger.Debug("renewed lease", "cluster", id, "holder", o.holder, "expires_at", expiry)
+				o.logger.Debug("renewed lease", "cluster", id, "holder", o.holder, "expires_at", lease.ExpiresAt)
 
 			case runCtx.Err() != nil:
 				// The run finished or the operator interrupted it; the
@@ -87,16 +81,22 @@ func (o *Orchestrator) keepLeaseAlive(ctx context.Context, id core.ClusterID) (c
 				return
 
 			default:
-				// Transient — a throttle or a network blip. Keep trying while
-				// the lease we already hold is still valid.
-				if remaining := expiry.Sub(o.now()); remaining > 0 {
-					o.logger.Warn("could not renew lease; retrying while the current one is still valid",
-						"cluster", id, "holder", o.holder, "valid_for", remaining, "error", err)
-					continue
-				}
-				cancel(fmt.Errorf("%w: %s: renewal kept failing until the lease expired: %w",
-					ErrLeaseLost, id, err))
-				return
+				// Transient — a throttle, a failover, a network blip. Keep
+				// trying for as long as the run lasts.
+				//
+				// Deliberately not bounded by the lease's own expiry. The
+				// registry is the only authority on whether this run still
+				// holds the lease, and it says so unambiguously: a renewal
+				// only fails with ErrLeaseLost once another holder has
+				// actually taken over, which requires that same registry to
+				// be reachable by them. An unreachable registry therefore
+				// cannot have handed the cluster to anybody, so stopping a
+				// 30-minute provision because the local clock passed an
+				// expiry we could not refresh destroyed work to prevent a
+				// race that could not happen. See registry.RenewLease, which
+				// reclaims an expired lease that still names this holder.
+				o.logger.Warn("could not renew lease; will keep retrying",
+					"cluster", id, "holder", o.holder, "error", err)
 			}
 		}
 	}()
