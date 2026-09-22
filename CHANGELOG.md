@@ -12,6 +12,11 @@ Do not hand-edit past entries.
 
 ## [Unreleased]
 
+## [v1.1.0] - 2026-09-22
+### Added
+- Add dotenv support for environment variable loading and autopilot cluster management
+
+
 ## [v1.0.0] - 2026-09-22
 ### Changed
 - Remove fleet functionality
