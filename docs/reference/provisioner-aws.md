@@ -15,10 +15,9 @@ here is cloud-specific to that pair.
 |---|---|---|
 | [Sentinel errors and types](#sentinel-errors-and-types) | errors/types | `ErrNotFound`, `ErrUnsupported`, `ErrClusterFailed`, `Status` enum |
 | [`ClusterState`](#clusterstate) | struct | what the cloud currently reports for a cluster |
-| [`Change`](#change) | struct | outcome of a `Reconcile`/`EnsureNetwork`/`AllowEgress` call |
+| [`Change`](#change) | struct | outcome of a `Reconcile`/`EnsureNetwork` call |
 | [`ClusterProvisioner`](#clusterprovisioner) | interface | manages a cluster's lifecycle on one cloud |
-| [`IdentityProvisioner`](#identityprovisioner) | interface | binds a cloud-native workload identity to a service account |
-| [`NetworkProvisioner`](#networkprovisioner) | interface | opens outbound egress and resolves the cluster's network |
+| [`NetworkProvisioner`](#networkprovisioner) | interface | resolves, creates, and deletes the cluster's network |
 | [`RESTConfigProvisioner`](#restconfigprovisioner) | interface | builds a `*rest.Config` for a cloud-created cluster |
 | [Polling helpers](#polling-helpers) | functions | `WaitUntilActive`/`WaitUntilGone` over `Describe` |
 
@@ -34,9 +33,8 @@ here is cloud-specific to that pair.
 | [EKS-managed CSI addons](#eks-managed-csi-addons-ebsefs) | functions | cluster.go | `ensureCSIAddons`, `ensureAddon` — EBS/EFS CSI drivers via the EKS addon API |
 | [Role helpers](#role-helpers) | functions | cluster.go | `ensureRole`, `attachPolicies`, `eksServiceTrust` |
 | [Validation and misc](#validation-and-misc) | functions | cluster.go | `validateForEKS`, `findPool`, `record` |
-| [`IdentityProvisioner`](#identityprovisioner-1) | struct | identity.go | IRSA role + OIDC provider management |
 | [REST config / bearer token minting](#kubeauthgo--rest-config--bearer-token-minting) | functions | kubeauth.go | STS-presigned bearer token for `*rest.Config` |
-| [`NetworkProvisioner`](#networkprovisioner-1) | struct | network.go | VPC/subnet auto-creation and egress rules |
+| [`NetworkProvisioner`](#networkprovisioner-1) | struct | network.go | VPC/subnet auto-creation and teardown |
 
 ## Shared interfaces (`provisioner.go`)
 
@@ -92,7 +90,7 @@ type ClusterState struct {
 
 ### `Change`
 
-The outcome of a `Reconcile`/`EnsureNetwork`/`AllowEgress` call — reported as data rather than inferred by diffing before/after state, because `apply` must be able to prove it made zero cloud calls when nothing differs.
+The outcome of a `Reconcile`/`EnsureNetwork` call — reported as data rather than inferred by diffing before/after state, because `apply` must be able to prove it made zero cloud calls when nothing differs.
 
 <details>
 <summary>Signature</summary>
@@ -133,54 +131,14 @@ type ClusterProvisioner interface {
 
 </details>
 
-### `IdentityProvisioner`
-
-Binds a cloud-native workload identity to an in-cluster service account. The identity exists to be *proven*, not to grant cloud access — `Component` carries no permission set.
-
-<details>
-<summary>Signature</summary>
-
-```go
-type Component struct {
-    Name           string
-    Namespace      string
-    ServiceAccount string
-}
-
-type Binding struct {
-    Identifier  string            // IAM role ARN / GCP service account email / Azure client ID
-    Annotations map[string]string // applied to the Kubernetes ServiceAccount, key differs per cloud
-}
-
-type IdentityProvisioner interface {
-    Provider() core.Provider
-    ProvisionForComponent(ctx context.Context, spec core.ClusterSpec, comp Component) (Binding, error)
-    Deprovision(ctx context.Context, spec core.ClusterSpec, comp Component) error
-}
-```
-
-- **Contract:**
-    - `ProvisionForComponent` is idempotent, returning the existing binding when one is already in place.
-    - `Deprovision` removes the identity and is a no-op if it is already absent.
-    - `StatusReporter()` returns the one `Component` every cluster provisions: `fleet-status-reporter` in namespace `kubespin-system`, service account `fleet-status-reporter`.
-
-</details>
-
 ### `NetworkProvisioner`
 
-Opens the one outbound path the architecture depends on and resolves the network a cluster is created in.
+Resolves, creates, and deletes the network a cluster lives in.
 
 <details>
 <summary>Signature</summary>
 
 ```go
-type EgressDestination struct {
-    Host        string
-    Port        int32
-    CIDR        string
-    Description string
-}
-
 type NetworkResult struct {
     SubnetIDs []string
     Change    Change
@@ -189,7 +147,7 @@ type NetworkResult struct {
 type NetworkProvisioner interface {
     Provider() core.Provider
     EnsureNetwork(ctx context.Context, spec core.ClusterSpec) (NetworkResult, error)
-    AllowEgress(ctx context.Context, spec core.ClusterSpec, dest EgressDestination) (Change, error)
+    DeleteNetwork(ctx context.Context, spec core.ClusterSpec) error
 }
 ```
 
@@ -262,7 +220,7 @@ Narrow interfaces over the AWS SDK v2 clients.
 
 - **`eksAPI`:** `DescribeCluster`, `CreateCluster`, `UpdateClusterConfig`, `DeleteCluster`, `ListNodegroups`, `DescribeNodegroup`, `CreateNodegroup`, `UpdateNodegroupConfig`, `DeleteNodegroup`.
 - **`iamAPI`:** service-role and IRSA-role calls — `GetRole`, `CreateRole`, `DeleteRole`, `UpdateAssumeRolePolicy`, `AttachRolePolicy`, `ListAttachedRolePolicies`, `DetachRolePolicy`, `ListOpenIDConnectProviders`, `GetOpenIDConnectProvider`, `CreateOpenIDConnectProvider`.
-- **`ec2API`:** the status reporter's egress rule (`DescribeSecurityGroupRules`, `AuthorizeSecurityGroupEgress`) plus, when `spec.Subnets` is empty, VPC/subnet/IGW/route-table creation (`DescribeVpcs`, `CreateVpc`, `ModifyVpcAttribute`, `DescribeAvailabilityZones`, `DescribeSubnets`, `CreateSubnet`, `DescribeInternetGateways`, `CreateInternetGateway`, `AttachInternetGateway`, `DescribeRouteTables`, `CreateRouteTable`, `CreateRoute`, `AssociateRouteTable`).
+- **`ec2API`:** when `spec.Subnets` is empty, VPC/subnet/IGW/route-table creation (`DescribeVpcs`, `CreateVpc`, `ModifyVpcAttribute`, `DescribeAvailabilityZones`, `DescribeSubnets`, `CreateSubnet`, `DescribeInternetGateways`, `CreateInternetGateway`, `AttachInternetGateway`, `DescribeRouteTables`, `CreateRouteTable`, `CreateRoute`, `AssociateRouteTable`).
 
 </details>
 
@@ -288,7 +246,7 @@ func NewClients(ctx context.Context, region string, opts ...Option) (*Clients, e
 
 - **Behavior:**
     - `NewClients` loads the default AWS config for `region` (`config.LoadDefaultConfig`) and builds real `eks`, `iam`, `ec2` clients plus an STS presign client.
-    - Every provisioner type below (`ClusterProvisioner`, `IdentityProvisioner`, `NetworkProvisioner`) wraps a shared `*Clients`.
+    - Every provisioner type below (`ClusterProvisioner`, `NetworkProvisioner`) wraps a shared `*Clients`.
 
 </details>
 
@@ -481,7 +439,7 @@ func (p *ClusterProvisioner) ensureCSIAddons(
 ) error
 ```
 
-- **Behavior:** called from `Create` once the cluster is active, and from every `Reconcile`. Requires `state.OIDCIssuer` to be set (errors otherwise — the OIDC provider must exist before an IRSA role can trust it). Registers the cluster's OIDC provider (`IdentityProvisioner.ensureOIDCProvider`), then for each of `aws-ebs-csi-driver` and `aws-efs-csi-driver`: builds an IRSA trust policy scoped to `kube-system:ebs-csi-controller-sa`/`efs-csi-controller-sa`, calls `ensureRole` with the matching AWS-managed policy (`AmazonEBSCSIDriverPolicy`/`AmazonEFSCSIDriverPolicy`) attached, then `ensureAddon` to request/update the EKS addon with that role's ARN.
+- **Behavior:** called from `Create` once the cluster is active, and from every `Reconcile`. Requires `state.OIDCIssuer` to be set (errors otherwise — the OIDC provider must exist before an IRSA role can trust it). Registers the cluster's OIDC provider (`ensureOIDCProvider`, in `oidc.go`), then for each of `aws-ebs-csi-driver` and `aws-efs-csi-driver`: builds an IRSA trust policy scoped to `kube-system:ebs-csi-controller-sa`/`efs-csi-controller-sa`, calls `ensureRole` with the matching AWS-managed policy (`AmazonEBSCSIDriverPolicy`/`AmazonEFSCSIDriverPolicy`) attached, then `ensureAddon` to request/update the EKS addon with that role's ARN.
 - **Invariant:** IRSA roles are named `kubespin-<cluster>-ebs-csi`/`kubespin-<cluster>-efs-csi` (`names{spec}.ebsCSIRole()`/`.efsCSIRole()`), matching the naming convention every other IRSA role in this package follows.
 
 </details>
@@ -540,87 +498,6 @@ func record(change *provisioner.Change, detail string) // no-op if change is nil
 
 </details>
 
-## identity.go
-
-IRSA (IAM Roles for Service Accounts).
-
-### `IdentityProvisioner`
-
-<details>
-<summary>Signature</summary>
-
-```go
-type IdentityProvisioner struct {
-    c       *Clients
-    cluster *ClusterProvisioner
-}
-
-func NewIdentityProvisioner(c *Clients) *IdentityProvisioner
-func (p *IdentityProvisioner) Provider() core.Provider // core.ProviderAWS
-```
-
-</details>
-
-<details>
-<summary>`ProvisionForComponent(ctx, spec, comp) (provisioner.Binding, error)`</summary>
-
-- **Behavior:**
-    - `Describe`s the cluster via the embedded `ClusterProvisioner`; errors (wrapping `provisioner.ErrNotFound`) unless the cluster is `StatusActive` with a non-empty `OIDCIssuer` — the issuer only exists once the control plane is up, which is why identity binding is its own orchestrator phase rather than part of cluster creation.
-    - Calls `ensureOIDCProvider` and `ensureIRSARole`, returning:
-
-```go
-provisioner.Binding{
-    Identifier:  roleARN,
-    Annotations: map[string]string{"eks.amazonaws.com/role-arn": roleARN},
-}
-```
-
-</details>
-
-<details>
-<summary>`ensureOIDCProvider(ctx, issuer) (string, error)`</summary>
-
-- **Behavior:**
-    - Lists existing IAM OIDC providers (`ListOpenIDConnectProviders`), `GetOpenIDConnectProvider`s each to compare its `Url` against the issuer host, and reuses a match.
-    - If none, calls `CreateOpenIDConnectProvider` with `ClientIDList: [sts.amazonaws.com]` and the fixed thumbprint `eksOIDCThumbprint`.
-    - On `EntityAlreadyExistsException` (a concurrent run registered it between the list and this call), falls back to `findOIDCProvider` to look the ARN up again rather than failing.
-
-</details>
-
-<details>
-<summary>`ensureIRSARole(ctx, spec, comp, providerARN, issuer) (string, error)`</summary>
-
-- **Behavior:**
-    - Role name is `names{spec}.irsaRole(comp.Name)`.
-    - If the role exists, its trust policy is **unconditionally rewritten** (`UpdateAssumeRolePolicy`) rather than compared — the trust policy is the only thing standing between this role and any other service account in the cluster, so drift in it is a privilege-escalation risk, not merely staleness.
-    - If missing, `CreateRole` with the trust document.
-
-</details>
-
-<details>
-<summary>`irsaTrustPolicy(providerARN, issuer, comp) map[string]any`</summary>
-
-Scopes the role to exactly one service account in one namespace of one cluster via `sts:AssumeRoleWithWebIdentity` with two `StringEquals` conditions on the OIDC host:
-
-```
-"<host>:sub" == "system:serviceaccount:<namespace>:<serviceaccount>"
-"<host>:aud" == "sts.amazonaws.com"
-```
-
-- **Invariant:** both conditions matter — without `sub` any service account in the cluster could assume the role; without `aud` a token minted for another audience would be accepted.
-
-</details>
-
-<details>
-<summary>`Deprovision(ctx, spec, comp) error`</summary>
-
-- **Behavior:**
-    - Lists and detaches all policies on the component's IRSA role (IAM refuses to delete a role with attached policies), then `DeleteRole`.
-    - `NoSuchEntityException` at any step is treated as already-gone.
-- **Invariant:** the cluster's OIDC provider is deliberately left in place — it belongs to the cluster, not to one component, and other components may still depend on it; cluster teardown removes it as part of the cluster, not here.
-
-</details>
-
 ## kubeauth.go — REST config / bearer token minting
 
 <details>
@@ -671,7 +548,7 @@ func (p *ClusterProvisioner) RESTConfig(ctx context.Context, spec core.ClusterSp
 
 ## network.go
 
-VPC/subnet auto-creation and egress.
+VPC/subnet auto-creation and teardown.
 
 <details>
 <summary>Constants</summary>
@@ -693,8 +570,7 @@ const (
 
 ```go
 type NetworkProvisioner struct {
-    c       *Clients
-    cluster *ClusterProvisioner
+    c *Clients
 }
 
 func NewNetworkProvisioner(c *Clients) *NetworkProvisioner
@@ -734,25 +610,6 @@ func (p *NetworkProvisioner) Provider() core.Provider // core.ProviderAWS
 <summary>`tagNameFilter(name)` / `tagSpec(resourceType, name, spec)`</summary>
 
 - **Behavior:** build the EC2 `Name`-tag filter used for lookups, and the tag specification (`Name` + the common `tags(spec)` set) applied on creation, respectively.
-
-</details>
-
-<details>
-<summary>`AllowEgress(ctx, spec, dest) (provisioner.Change, error)`</summary>
-
-- **Behavior:**
-    - `Describe`s the cluster to get `state.NetworkID` (the cluster security group ID); errors (`provisioner.ErrNotFound`) if empty.
-    - Defaults `dest.CIDR` to `0.0.0.0/0` and `dest.Port` to `443` if unset.
-    - Checks `egressRuleExists`; if a matching rule is already present, returns a no-op `Change`.
-    - Otherwise calls `AuthorizeSecurityGroupEgress` for TCP on the resolved port/CIDR with a description (defaulting to `"kubespin fleet-status-reporter egress"`).
-
-</details>
-
-<details>
-<summary>`egressRuleExists(ctx, groupID, cidr, port) (bool, error)`</summary>
-
-- **Behavior:** lists the security group's rules (`DescribeSecurityGroupRules`) and looks for an existing egress rule matching the CIDR: an allow-all rule (`IpProtocol: "-1"`) always counts as covering the destination; otherwise a TCP rule whose port range contains `port` counts.
-- **Invariant:** this idempotency is what keeps a resumed or repeated `apply` from accumulating duplicate rules.
 
 </details>
 

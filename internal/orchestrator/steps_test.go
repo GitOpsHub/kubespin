@@ -34,8 +34,6 @@ type fakeCloud struct {
 	deleted       bool
 
 	createErr        error
-	identityErr      error
-	egressErr        error
 	networkErr       error
 	deleteNetworkErr error
 
@@ -86,28 +84,6 @@ func (f *fakeCloud) Delete(context.Context, core.ClusterSpec) error {
 	return nil
 }
 
-func (f *fakeCloud) ProvisionForComponent(
-	context.Context, core.ClusterSpec, provisioner.Component,
-) (provisioner.Binding, error) {
-	f.calls = append(f.calls, "ProvisionForComponent")
-	if f.identityErr != nil {
-		return provisioner.Binding{}, f.identityErr
-	}
-	return provisioner.Binding{Identifier: "arn:aws:iam::123456789012:role/reporter"}, nil
-}
-
-func (f *fakeCloud) Deprovision(context.Context, core.ClusterSpec, provisioner.Component) error {
-	f.calls = append(f.calls, "Deprovision")
-	return nil
-}
-
-func (f *fakeCloud) AllowEgress(
-	context.Context, core.ClusterSpec, provisioner.EgressDestination,
-) (provisioner.Change, error) {
-	f.calls = append(f.calls, "AllowEgress")
-	return provisioner.Change{Changed: true}, f.egressErr
-}
-
 func (f *fakeCloud) EnsureNetwork(
 	_ context.Context, spec core.ClusterSpec,
 ) (provisioner.NetworkResult, error) {
@@ -144,13 +120,9 @@ func (f *fakeCloud) RESTConfig(context.Context, core.ClusterSpec) (*rest.Config,
 
 func (f *fakeCloud) cloud() Cloud {
 	return Cloud{
-		Cluster:  f,
-		Identity: f,
-		Network:  f,
-		IngestionEndpoint: provisioner.EgressDestination{
-			Host: "abc.execute-api.us-east-1.amazonaws.com", Port: 443,
-		},
-		Wait: provisioner.WaitOptions{Interval: time.Millisecond, Timeout: time.Second},
+		Cluster: f,
+		Network: f,
+		Wait:    provisioner.WaitOptions{Interval: time.Millisecond, Timeout: time.Second},
 	}
 }
 
@@ -211,7 +183,7 @@ func TestProvisioningSteps_DriveTheProvisioners(t *testing.T) {
 		t.Errorf("Phase = %s, want ready", rec.Phase)
 	}
 
-	for _, want := range []string{"EnsureNetwork", "Create", "Describe", "Reconcile", "AllowEgress", "ProvisionForComponent"} {
+	for _, want := range []string{"EnsureNetwork", "Create", "Describe", "Reconcile"} {
 		if !slices.Contains(f.calls, want) {
 			t.Errorf("%s was never called; calls were %v", want, f.calls)
 		}
@@ -223,13 +195,6 @@ func TestProvisioningSteps_DriveTheProvisioners(t *testing.T) {
 	create := slices.Index(f.calls, "Create")
 	if network > create {
 		t.Errorf("calls were %v, want the network ensured before the cluster is created", f.calls)
-	}
-
-	// Identity binding needs the issuer, which only exists once the control
-	// plane is up — so it must follow the wait, not race it.
-	identity := slices.Index(f.calls, "ProvisionForComponent")
-	if create > identity {
-		t.Errorf("calls were %v, want the cluster created before identity is bound", f.calls)
 	}
 }
 
@@ -258,30 +223,6 @@ func TestProvisioningSteps_NetworkFailureStopsTheRun(t *testing.T) {
 	}
 	if slices.Contains(f.calls, "Create") {
 		t.Error("Create was called despite EnsureNetwork failing")
-	}
-}
-
-// The OIDC issuer has to land in the Fleet Registry: it is what the Central
-// Ingestion API (M6) verifies fleet-status-reporter's signature against.
-func TestProvisioningSteps_RecordsOIDCIssuer(t *testing.T) {
-	f := newFakeCloud()
-	reg := registry.NewMemory()
-	o := New(reg,
-		WithSteps(provisioningSteps(f.cloud(), repo.NewMemory(), catalog.NewBuiltinResolver(), reg, quietLogger())),
-		WithHolder("test-runner"),
-		WithLogger(quietLogger()),
-	)
-
-	if _, err := o.Apply(t.Context(), testSpec()); err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-
-	stored, err := reg.Get(t.Context(), testSpec().ID)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if stored.OIDCIssuer != "https://issuer" {
-		t.Errorf("OIDCIssuer = %q, want %q", stored.OIDCIssuer, "https://issuer")
 	}
 }
 
@@ -315,44 +256,8 @@ func TestProvisioningSteps_FailedClusterStopsTheRun(t *testing.T) {
 	if rec.Phase != core.PhasePending {
 		t.Errorf("Phase = %s, want pending after a failed creation", rec.Phase)
 	}
-	if slices.Contains(f.calls, "ProvisionForComponent") {
-		t.Error("identity was bound despite the cluster failing")
-	}
-}
-
-func TestProvisioningSteps_EgressFailureStopsTheRun(t *testing.T) {
-	// A cluster that cannot reach the ingestion API is invisible to the fleet,
-	// so this is a failure rather than a warning.
-	f := newFakeCloud()
-	f.egressErr = errors.New("insufficient permissions")
-
-	if _, err := runWithCloud(t, f); err == nil {
-		t.Fatal("expected the egress failure to surface")
-	}
-}
-
-// Without a configured endpoint there is nothing to allow, but the run should
-// say so rather than silently produce a cluster that cannot report.
-func TestProvisioningSteps_MissingIngestionEndpointIsNotFatal(t *testing.T) {
-	f := newFakeCloud()
-	cloud := f.cloud()
-	cloud.IngestionEndpoint = provisioner.EgressDestination{}
-
-	reg := registry.NewMemory()
-	o := New(reg,
-		WithSteps(provisioningSteps(cloud, repo.NewMemory(), catalog.NewBuiltinResolver(), reg, quietLogger())),
-		WithLogger(quietLogger()),
-	)
-
-	rec, err := o.Apply(t.Context(), testSpec())
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	if rec.Phase != core.PhaseReady {
-		t.Errorf("Phase = %s, want ready", rec.Phase)
-	}
-	if slices.Contains(f.calls, "AllowEgress") {
-		t.Error("egress was opened without a configured destination")
+	if slices.Contains(f.calls, "Reconcile") {
+		t.Error("node pools were reconciled despite the cluster failing")
 	}
 }
 
@@ -384,8 +289,8 @@ func TestProvisioningSteps_InstallsArgoCDAndAppliesAppOfApps(t *testing.T) {
 	spec := testSpec()
 	// installArgoCDStep resolves the repository's clone URL, so the repo has
 	// to exist first — exactly the order a real run reaches it in, via
-	// PhaseIdentityBound's own step.
-	if err := steps[core.PhaseIdentityBound].Run(t.Context(), spec, registry.Record{}); err != nil {
+	// PhaseClusterCreated's own step.
+	if err := steps[core.PhaseClusterCreated].Run(t.Context(), spec, registry.Record{}); err != nil {
 		t.Fatalf("seeding repository: %v", err)
 	}
 
@@ -432,7 +337,7 @@ func TestProvisioningSteps_NoRESTConfigCapabilityIsAnError(t *testing.T) {
 	)
 
 	spec := testSpec()
-	if err := steps[core.PhaseIdentityBound].Run(t.Context(), spec, registry.Record{}); err != nil {
+	if err := steps[core.PhaseClusterCreated].Run(t.Context(), spec, registry.Record{}); err != nil {
 		t.Fatalf("seeding repository: %v", err)
 	}
 	if err := steps[core.PhaseRepoPushed].Run(t.Context(), spec, registry.Record{}); err == nil {
@@ -446,15 +351,15 @@ type restConfiglessCluster struct {
 	provisioner.ClusterProvisioner
 }
 
-// PhaseIdentityBound now does real work: it must create and seed the
-// cluster's repository.
+// PhaseClusterCreated does real work: it must create and seed the cluster's
+// repository.
 func TestProvisioningSteps_SeedsRepository(t *testing.T) {
 	repoProv := repo.NewMemory()
 	steps := provisioningSteps(newFakeCloud().cloud(), repoProv, catalog.NewBuiltinResolver(), registry.NewMemory(), quietLogger())
 
-	step, ok := steps[core.PhaseIdentityBound]
+	step, ok := steps[core.PhaseClusterCreated]
 	if !ok {
-		t.Fatal("no step registered for PhaseIdentityBound")
+		t.Fatal("no step registered for PhaseClusterCreated")
 	}
 	if err := step.Run(t.Context(), testSpec(), registry.Record{}); err != nil {
 		t.Fatalf("seeding repository: %v", err)
@@ -479,9 +384,9 @@ func TestProvisioningSteps_SeedsRepository_AppliesOverrides(t *testing.T) {
 	spec := testSpec()
 	spec.Overrides = []core.AddonOverride{{Name: "cert-manager", Version: "1.16.0"}}
 
-	step, ok := steps[core.PhaseIdentityBound]
+	step, ok := steps[core.PhaseClusterCreated]
 	if !ok {
-		t.Fatal("no step registered for PhaseIdentityBound")
+		t.Fatal("no step registered for PhaseClusterCreated")
 	}
 	if err := step.Run(t.Context(), spec, registry.Record{}); err != nil {
 		t.Fatalf("seeding repository: %v", err)

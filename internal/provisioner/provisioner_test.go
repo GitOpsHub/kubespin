@@ -142,14 +142,6 @@ func TestChangeMerge(t *testing.T) {
 	}
 }
 
-func TestStatusReporterComponent(t *testing.T) {
-	comp := StatusReporter()
-
-	if comp.Name == "" || comp.Namespace == "" || comp.ServiceAccount == "" {
-		t.Errorf("component = %+v, want every field populated", comp)
-	}
-}
-
 func TestWaitUntilGone(t *testing.T) {
 	t.Run("polls until the cluster is absent", func(t *testing.T) {
 		p := &scriptedProvisioner{states: []ClusterState{

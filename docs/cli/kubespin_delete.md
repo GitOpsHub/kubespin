@@ -9,8 +9,8 @@ Decommission a cluster and its supporting resources
 ## Synopsis
 
 delete performs the teardown in reverse order: mark the cluster
-decommissioning in the Fleet Registry, clean up identity and OIDC resources,
-delete the cluster, archive its repository, and record it decommissioned.
+decommissioning in the cluster registry, delete the cluster, archive its
+repository, and record it decommissioned.
 
 Repositories are archived, never deleted: history is retained.
 

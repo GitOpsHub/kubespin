@@ -65,7 +65,7 @@ func (a Access) String() string { return string(a) }
 var clusterIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,38}[a-z0-9]$`)
 
 // ClusterID uniquely identifies a cluster across the whole fleet. It is the
-// Fleet Registry partition key and the suffix of the cluster's repository name,
+// cluster registry's primary key and the suffix of the cluster's repository name,
 // so it is immutable once a cluster reaches PhaseClusterCreated.
 type ClusterID string
 

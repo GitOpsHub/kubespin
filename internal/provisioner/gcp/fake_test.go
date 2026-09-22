@@ -87,7 +87,7 @@ func (f *fakeGCP) assertNoMutations(t *testing.T) {
 
 func (f *fakeGCP) clients() *Clients {
 	return &Clients{
-		project: testProject, cluster: f, svcAccts: f, firewalls: f,
+		project: testProject, cluster: f, firewalls: f,
 		networks: f, subnetworks: f, routers: f, tokens: f, logger: slog.Default(),
 	}
 }

@@ -11,7 +11,7 @@
 | [Providers](#providers) | func | cluster.go | Returns all three `Provider` values, in help-text order. |
 | [Access](#access) | const-block | cluster.go | API server exposure model: private or public. |
 | [CapacityType](#capacitytype) | type / const-block | cluster.go | Purchasing option for node pool instances (on-demand/spot). |
-| [ClusterID](#clusterid) | struct (string) | cluster.go | Unique fleet-wide cluster identifier. |
+| [ClusterID](#clusterid) | struct (string) | cluster.go | Unique cluster identifier. |
 | [NodePool](#nodepool) | struct | cluster.go | A homogeneous group of worker nodes. |
 | [ClusterSpec](#clusterspec) | struct | cluster.go | Desired state of one cluster (`cluster.yaml` contents). |
 | [ErrInvalidTransition](#errinvalidtransition) | var (sentinel) | phase.go | Sentinel returned when a phase transition is illegal. |
@@ -145,8 +145,8 @@ func (c CapacityType) String() string
 type ClusterID string
 ```
 
-- **Behavior:** uniquely identifies a cluster across the whole fleet.
-- **Invariants:** it is the Fleet Registry partition key and the suffix of the cluster's repository name, so it is immutable once a cluster reaches `PhaseClusterCreated`.
+- **Behavior:** uniquely identifies a cluster across every cluster kubespin manages.
+- **Invariants:** it is the cluster registry's primary key and the suffix of the cluster's repository name, so it is immutable once a cluster reaches `PhaseClusterCreated`.
 
 </details>
 
@@ -262,7 +262,7 @@ var ErrInvalidTransition = errors.New("invalid phase transition")
 ```
 
 - **Behavior:** returned by `ValidateTransition` when a phase change is not legal.
-- **Invariants:** the Fleet Registry checks this on every write, so an illegal state machine move fails at the storage boundary instead of being silently persisted.
+- **Invariants:** the cluster registry checks this on every write, so an illegal state machine move fails at the storage boundary instead of being silently persisted.
 
 </details>
 

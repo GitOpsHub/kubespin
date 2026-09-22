@@ -67,7 +67,7 @@ func (f *fakeAzure) assertNoMutations(t *testing.T) {
 
 func (f *fakeAzure) clients() *Clients {
 	return &Clients{
-		subscription: testSubscription, cluster: f, identity: f, network: f, resourceGroups: f,
+		subscription: testSubscription, cluster: f, network: f, resourceGroups: f,
 		logger: slog.Default(),
 	}
 }

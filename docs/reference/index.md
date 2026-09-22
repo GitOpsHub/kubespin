@@ -22,17 +22,15 @@ method-level reference.
 
 | Package | Covers |
 |---|---|
-| [internal/provisioner (shared) + internal/provisioner/aws](provisioner-aws.md) | `ClusterProvisioner`/`IdentityProvisioner`/`NetworkProvisioner` interfaces; EKS, IRSA, VPC auto-creation |
+| [internal/provisioner (shared) + internal/provisioner/aws](provisioner-aws.md) | `ClusterProvisioner`/`NetworkProvisioner` interfaces; EKS, IRSA, VPC auto-creation |
 | [internal/provisioner/gcp](provisioner-gcp.md) | GKE, Workload Identity, VPC/subnetwork, Cloud Router + NAT |
 | [internal/provisioner/azure](provisioner-azure.md) | AKS, federated credential + managed identity, resource group/VNet/subnet |
 
-## Fleet infrastructure and state
+## Durable state
 
 | Package | Covers |
 |---|---|
-| [internal/fleetinfra](fleetinfra.md) | SDK converge engine behind `fleet bootstrap` (ingestion Lambda, IAM role, API Gateway — the registry itself is a separately operated Postgres database) |
-| [internal/registry](registry.md) | Fleet Registry client, Postgres/in-memory implementations, conditional-write lease, Argo CD access details |
-| [internal/fleet](fleet.md) | Fleet-wide `audit`/`update`/`status`/`dashboard` operations |
+| [internal/registry](registry.md) | Cluster registry client, Postgres/in-memory implementations, conditional-write lease, Argo CD access details |
 
 ## Cluster repo and addons
 
@@ -51,15 +49,8 @@ method-level reference.
 | [internal/kubeconfig](kubeconfig.md) | Operator kubeconfig update after apply (shells out to `aws`/`gcloud`/`az`) |
 | [internal/cli](cli.md) | The cobra command tree wiring every package above to a command |
 
-## Central Ingestion API and in-cluster reporter
-
-| Package | Covers |
-|---|---|
-| [internal/ingestion](ingestion.md) | JWT/JWKS verification, per-cluster issuer binding, registry write path |
-| [internal/reporter](reporter.md) | fleet-status-reporter's Argo CD summary + signed push logic |
-
 ## Entrypoints and tooling
 
 | Package | Covers |
 |---|---|
-| [Entrypoints and tooling](entrypoints.md) | `cmd/kubespin`, `cmd/ingestion`, `cmd/fleet-status-reporter`, `internal/tools/docsgen`, `internal/tools/changeloggen`, `internal/version` |
+| [Entrypoints and tooling](entrypoints.md) | `cmd/kubespin`, `internal/tools/docsgen`, `internal/tools/changeloggen`, `internal/version` |

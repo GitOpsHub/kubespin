@@ -38,52 +38,6 @@ func TestMemoryDoesNotAliasStoredState(t *testing.T) {
 	}
 }
 
-func TestRecordStale(t *testing.T) {
-	now := time.Date(2026, time.August, 9, 12, 0, 0, 0, time.UTC)
-	const threshold = 10 * time.Minute
-
-	tests := map[string]struct {
-		rec  Record
-		want bool
-	}{
-		"ready and reporting": {
-			Record{Phase: core.PhaseReady, LastReportedAt: now.Add(-time.Minute)},
-			false,
-		},
-		"ready but silent": {
-			Record{Phase: core.PhaseReady, LastReportedAt: now.Add(-time.Hour)},
-			true,
-		},
-		"ready and never reported since creation": {
-			// Judged from CreatedAt, so a cluster whose reporter never started
-			// is caught rather than looking permanently fresh.
-			Record{Phase: core.PhaseReady, CreatedAt: now.Add(-time.Hour)},
-			true,
-		},
-		"ready, just created, not yet reported": {
-			Record{Phase: core.PhaseReady, CreatedAt: now.Add(-time.Minute)},
-			false,
-		},
-		"still provisioning": {
-			// Not expected to report yet, so silence is not staleness.
-			Record{Phase: core.PhaseRepoPushed, CreatedAt: now.Add(-time.Hour)},
-			false,
-		},
-		"decommissioned": {
-			Record{Phase: core.PhaseDecommissioned, CreatedAt: now.Add(-time.Hour)},
-			false,
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			if got := tc.rec.Stale(now, threshold); got != tc.want {
-				t.Errorf("Stale() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestLeaseExpired(t *testing.T) {
 	now := time.Date(2026, time.August, 9, 12, 0, 0, 0, time.UTC)
 

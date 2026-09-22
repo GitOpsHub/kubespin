@@ -24,7 +24,6 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v6"
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/msi/armmsi"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork/v6"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
 
@@ -49,27 +48,9 @@ type clusterAPI interface {
 	ListClusterUserCredentials(ctx context.Context, resourceGroup, name string) ([]byte, error)
 }
 
-// identityAPI covers the user-assigned managed identity Workload Identity
-// binds to, and the federated credential that scopes the binding.
-type identityAPI interface {
-	GetIdentity(ctx context.Context, resourceGroup, name string) (*armmsi.Identity, error)
-	CreateOrUpdateIdentity(ctx context.Context, resourceGroup, name string, id armmsi.Identity) (*armmsi.Identity, error)
-	DeleteIdentity(ctx context.Context, resourceGroup, name string) error
-
-	GetFederatedCredential(ctx context.Context, resourceGroup, identityName, name string) (*armmsi.FederatedIdentityCredential, error)
-	CreateOrUpdateFederatedCredential(
-		ctx context.Context, resourceGroup, identityName, name string, cred armmsi.FederatedIdentityCredential,
-	) error
-	DeleteFederatedCredential(ctx context.Context, resourceGroup, identityName, name string) error
-}
-
-// networkAPI covers the status reporter's egress rule and, for EnsureNetwork,
-// the VNet/subnet kubespin creates when none is supplied.
+// networkAPI covers the VNet/subnet kubespin creates for EnsureNetwork when
+// none is supplied.
 type networkAPI interface {
-	ListSecurityGroups(ctx context.Context, resourceGroup string) ([]*armnetwork.SecurityGroup, error)
-	GetSecurityRule(ctx context.Context, resourceGroup, nsg, name string) (*armnetwork.SecurityRule, error)
-	CreateOrUpdateSecurityRule(ctx context.Context, resourceGroup, nsg, name string, rule armnetwork.SecurityRule) error
-
 	GetVirtualNetwork(ctx context.Context, resourceGroup, name string) (*armnetwork.VirtualNetwork, error)
 	CreateOrUpdateVirtualNetwork(ctx context.Context, resourceGroup, name string, vnet armnetwork.VirtualNetwork) error
 	GetSubnet(ctx context.Context, resourceGroup, vnet, name string) (*armnetwork.Subnet, error)
@@ -92,7 +73,6 @@ type resourceGroupAPI interface {
 type Clients struct {
 	subscription   string
 	cluster        clusterAPI
-	identity       identityAPI
 	network        networkAPI
 	resourceGroups resourceGroupAPI
 
@@ -129,22 +109,6 @@ func NewClients(subscription string, opts ...Option) (*Clients, error) {
 	if err != nil {
 		return nil, fmt.Errorf("building AKS agent pools client: %w", err)
 	}
-	identities, err := armmsi.NewUserAssignedIdentitiesClient(subscription, cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("building managed identities client: %w", err)
-	}
-	federated, err := armmsi.NewFederatedIdentityCredentialsClient(subscription, cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("building federated credentials client: %w", err)
-	}
-	securityGroups, err := armnetwork.NewSecurityGroupsClient(subscription, cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("building NSG client: %w", err)
-	}
-	securityRules, err := armnetwork.NewSecurityRulesClient(subscription, cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("building NSG rules client: %w", err)
-	}
 	vnets, err := armnetwork.NewVirtualNetworksClient(subscription, cred, nil)
 	if err != nil {
 		return nil, fmt.Errorf("building virtual networks client: %w", err)
@@ -159,12 +123,9 @@ func NewClients(subscription string, opts ...Option) (*Clients, error) {
 	}
 
 	c := &Clients{
-		subscription: subscription,
-		cluster:      realCluster{clusters: clusters, agentPools: agentPools},
-		identity:     realIdentity{identities: identities, federated: federated},
-		network: realNetwork{
-			groups: securityGroups, rules: securityRules, vnets: vnets, subnets: subnets,
-		},
+		subscription:   subscription,
+		cluster:        realCluster{clusters: clusters, agentPools: agentPools},
+		network:        realNetwork{vnets: vnets, subnets: subnets},
 		resourceGroups: realResourceGroups{groups: resourceGroups},
 		logger:         slog.Default(),
 	}
@@ -245,98 +206,10 @@ func (r realCluster) ListClusterUserCredentials(ctx context.Context, rg, name st
 	return nil, fmt.Errorf("aks: no kubeconfig returned for %s/%s", rg, name)
 }
 
-// realIdentity adapts the synchronous MSI clients to identityAPI. Unlike AKS,
-// UserAssignedIdentitiesClient and FederatedIdentityCredentialsClient are not
-// long-running: creating a managed identity or a federated credential
-// completes within the request.
-type realIdentity struct {
-	identities *armmsi.UserAssignedIdentitiesClient
-	federated  *armmsi.FederatedIdentityCredentialsClient
-}
-
-func (r realIdentity) GetIdentity(ctx context.Context, rg, name string) (*armmsi.Identity, error) {
-	resp, err := r.identities.Get(ctx, rg, name, nil)
-	if err != nil {
-		return nil, fmt.Errorf("msi: get identity %s/%s: %w", rg, name, err)
-	}
-	return &resp.Identity, nil
-}
-
-func (r realIdentity) CreateOrUpdateIdentity(ctx context.Context, rg, name string, id armmsi.Identity) (*armmsi.Identity, error) {
-	resp, err := r.identities.CreateOrUpdate(ctx, rg, name, id, nil)
-	if err != nil {
-		return nil, fmt.Errorf("msi: create or update identity %s/%s: %w", rg, name, err)
-	}
-	return &resp.Identity, nil
-}
-
-func (r realIdentity) DeleteIdentity(ctx context.Context, rg, name string) error {
-	if _, err := r.identities.Delete(ctx, rg, name, nil); err != nil {
-		return fmt.Errorf("msi: delete identity %s/%s: %w", rg, name, err)
-	}
-	return nil
-}
-
-func (r realIdentity) GetFederatedCredential(
-	ctx context.Context, rg, identityName, name string,
-) (*armmsi.FederatedIdentityCredential, error) {
-	resp, err := r.federated.Get(ctx, rg, identityName, name, nil)
-	if err != nil {
-		return nil, fmt.Errorf("msi: get federated credential %s/%s/%s: %w", rg, identityName, name, err)
-	}
-	return &resp.FederatedIdentityCredential, nil
-}
-
-func (r realIdentity) CreateOrUpdateFederatedCredential(
-	ctx context.Context, rg, identityName, name string, cred armmsi.FederatedIdentityCredential,
-) error {
-	if _, err := r.federated.CreateOrUpdate(ctx, rg, identityName, name, cred, nil); err != nil {
-		return fmt.Errorf("msi: create or update federated credential %s/%s/%s: %w", rg, identityName, name, err)
-	}
-	return nil
-}
-
-func (r realIdentity) DeleteFederatedCredential(ctx context.Context, rg, identityName, name string) error {
-	if _, err := r.federated.Delete(ctx, rg, identityName, name, nil); err != nil {
-		return fmt.Errorf("msi: delete federated credential %s/%s/%s: %w", rg, identityName, name, err)
-	}
-	return nil
-}
-
-// realNetwork adapts the NSG, VNet, and subnet clients to networkAPI.
+// realNetwork adapts the VNet and subnet clients to networkAPI.
 type realNetwork struct {
-	groups  *armnetwork.SecurityGroupsClient
-	rules   *armnetwork.SecurityRulesClient
 	vnets   *armnetwork.VirtualNetworksClient
 	subnets *armnetwork.SubnetsClient
-}
-
-func (r realNetwork) ListSecurityGroups(ctx context.Context, rg string) ([]*armnetwork.SecurityGroup, error) {
-	pager := r.groups.NewListPager(rg, nil)
-	var out []*armnetwork.SecurityGroup
-	for pager.More() {
-		page, err := pager.NextPage(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("network: list security groups in %s: %w", rg, err)
-		}
-		out = append(out, page.Value...)
-	}
-	return out, nil
-}
-
-func (r realNetwork) GetSecurityRule(ctx context.Context, rg, nsg, name string) (*armnetwork.SecurityRule, error) {
-	resp, err := r.rules.Get(ctx, rg, nsg, name, nil)
-	if err != nil {
-		return nil, fmt.Errorf("network: get security rule %s/%s/%s: %w", rg, nsg, name, err)
-	}
-	return &resp.SecurityRule, nil
-}
-
-func (r realNetwork) CreateOrUpdateSecurityRule(ctx context.Context, rg, nsg, name string, rule armnetwork.SecurityRule) error {
-	if _, err := r.rules.BeginCreateOrUpdate(ctx, rg, nsg, name, rule, nil); err != nil {
-		return fmt.Errorf("network: create or update security rule %s/%s/%s: %w", rg, nsg, name, err)
-	}
-	return nil
 }
 
 func (r realNetwork) GetVirtualNetwork(ctx context.Context, rg, name string) (*armnetwork.VirtualNetwork, error) {
@@ -430,13 +303,8 @@ type names struct {
 
 func (n names) resourceGroup() string { return "kubespin-" + n.spec.ID.String() }
 func (n names) cluster() string       { return n.spec.ID.String() }
-func (n names) identity(comp string) string {
-	return "kubespin-" + n.spec.ID.String() + "-" + comp
-}
-func (n names) federatedCredential(comp string) string { return comp }
-func (n names) securityRule() string                   { return "kubespin-" + n.spec.ID.String() + "-egress" }
-func (n names) vnet() string                           { return "kubespin-" + n.spec.ID.String() + "-vnet" }
-func (n names) subnet() string                         { return "kubespin-" + n.spec.ID.String() + "-subnet" }
+func (n names) vnet() string          { return "kubespin-" + n.spec.ID.String() + "-vnet" }
+func (n names) subnet() string        { return "kubespin-" + n.spec.ID.String() + "-subnet" }
 
 func tags(spec core.ClusterSpec) map[string]*string {
 	managedBy, cluster, size := "kubespin", spec.ID.String(), spec.Size.String()

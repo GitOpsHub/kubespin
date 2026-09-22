@@ -28,7 +28,7 @@ type Config struct {
 	LogFormat string
 	DryRun    bool
 
-	// Registry addresses the Fleet Registry. Consumed from M1 onward.
+	// Registry addresses the cluster registry.
 	Registry RegistryConfig
 
 	// SourceFile records which config file was loaded, if any. Empty when the
@@ -36,7 +36,7 @@ type Config struct {
 	SourceFile string
 }
 
-// RegistryConfig locates the Postgres-backed Fleet Registry.
+// RegistryConfig locates the Postgres-backed cluster registry.
 type RegistryConfig struct {
 	// DSN is read only from KUBESPIN_REGISTRY_DSN (or a .env file providing
 	// it) — there is deliberately no --registry-dsn flag, so a connection

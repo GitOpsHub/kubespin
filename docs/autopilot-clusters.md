@@ -126,7 +126,7 @@ kubespin delete --provider aws --region us-east-1 --cluster-id eks-auto-01
 
 ## Reusing a `--cluster-id` after delete
 
-`kubespin delete` marks a cluster's Fleet Registry record `decommissioned`
+`kubespin delete` marks a cluster's registry record `decommissioned`
 rather than removing it, and `apply` refuses to reuse a cluster ID that is
 `decommissioning` or `decommissioned` ("reviving one is not a phase
 transition; it is a new cluster"). This is not specific to Autopilot/Auto
@@ -137,8 +137,7 @@ with the same `--cluster-id`:
 kubespin: applying gke-autopilot-01: cluster is decommissioning or decommissioned: gke-autopilot-01 is at phase decommissioned
 ```
 
-There is currently no CLI command to purge a decommissioned record (no
-`fleet forget`/registry-delete primitive exists yet). Options:
+There is currently no CLI command to purge a decommissioned record. Options:
 
 - **Pick a different `--cluster-id`** (e.g. append `-02`) — the simplest fix
   for repeated test runs.

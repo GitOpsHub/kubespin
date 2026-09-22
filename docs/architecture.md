@@ -13,75 +13,61 @@ failure: it needs network reachability and admin credentials for every cluster
 it manages.
 
 Instead, each cluster runs **its own** Argo CD, syncing from **its own**
-repository. Nothing outside a cluster ever connects into it. State travels the
-other way: an in-cluster reporter pushes signed status outward.
+repository. There is no always-on kubespin service and nothing kubespin-owned
+runs inside a cluster: the CLI connects directly, from the operator's machine,
+only while a command is running.
 
 ```mermaid
 flowchart LR
     subgraph cluster["Cluster (EKS / GKE / AKS)"]
         argo["Local Argo CD"]
-        reporter["fleet-status-reporter<br/>CronJob"]
-        argo -.->|reads sync status| reporter
     end
 
     repo[("Cluster repository<br/>cluster.yaml · addons.yaml · .state.yaml")]
-    ingest["Central Ingestion API<br/>API Gateway + Lambda"]
-    registry[("Fleet Registry<br/>Postgres")]
+    registry[("Cluster registry<br/>Postgres")]
     cli["kubespin CLI"]
 
     repo -->|Argo CD pulls| argo
-    reporter -->|"pushes signed status (outbound only)"| ingest
-    ingest -->|conditional write| registry
     cli -->|"provisions, seeds, reconciles"| repo
     cli -->|reads and writes| registry
-    cli -.->|"never connects to a cluster"| cluster
-
-    linkStyle 5 stroke-dasharray: 4 4
+    cli -->|"installs Argo CD (Helm SDK, while apply runs)"| cluster
 ```
 
 The consequences are worth stating explicitly, because they constrain nearly
 every later decision:
 
-- **A cluster on a private network needs no ingress path for management.** The
-  reporter only needs egress to one host.
-- **`fleet status` cannot hang on an unreachable cluster.** It reads the
-  registry. A cluster that stops reporting is flagged *stale* — a real signal —
-  rather than making the command time out.
+- **Nothing runs between commands.** No agent, no controller, no scheduled
+  push. Anything kubespin knows about a cluster it learned while a command was
+  running, and wrote to the registry.
 - **An unreachable cluster does not degrade the others.** There is no shared
   control plane to be blocked on.
-- **Authentication is per-cluster and cloud-native.** The reporter signs with
-  IRSA, GCP Workload Identity, or an Azure federated credential. No static
-  credentials live in a cluster. The ingestion handler must bind the token's
-  subject to the `{clusterId}` in the request path — otherwise a signature
-  issued to cluster A could be replayed to report status as cluster B.
+- **A private cluster needs the operator's machine to be able to reach it.**
+  `apply` installs Argo CD over the Kubernetes API, so `--access private`
+  assumes a VPN, peering, or bastion is already in place.
 
-## The Fleet Registry
+## The cluster registry
 
 Postgres, one row per cluster in a `fleet_registry` table keyed by
-`cluster_id`. It is the single source of durable fleet state, and every
+`cluster_id`. It is the single source of durable per-cluster state, and every
 component reaches it through `internal/registry` rather than raw SQL. The
 client (`registry.Postgres`, in `internal/registry/postgres.go`) self-migrates
 this schema idempotently on connect, so there is no separate migration step
 and no state to provision ahead of time.
 
 The primary key is `cluster_id` **alone**, deliberately. One row per cluster
-means a status report and a phase transition contend on the same row, so the
-lease actually serialises them (`AcquireLease` is a conditional `UPDATE` on
-that row). A composite key would let them proceed independently and the lock
+means every write about a cluster contends on the same row, so the lease
+actually serialises them (`AcquireLease` is a conditional `UPDATE` on that
+row). A composite key would let writers proceed independently and the lock
 would protect nothing.
 
 A `(provider, phase)` index exists from the first day the table does, because
-`fleet audit` and `fleet update` enumerate by provider and phase, and adding
-an index to a populated table is a slow online operation. Every `List` call is
-one query filtered by whichever of provider/phase are set — Postgres reads are
-always consistent, so unlike the eventually-consistent scan-or-index choice a
-DynamoDB-backed registry would face, there is no separate path to pick between
-or paginate through.
+adding an index to a populated table is a slow online operation. Every `List`
+call is one query filtered by whichever of provider/phase are set.
 
-The database itself can be hosted anywhere reachable over the network — kubespin
-does not require it to be AWS-hosted. `fleet bootstrap` provisions the AWS-side
-Central Ingestion API only; the operator provisions Postgres separately and
-supplies its connection string via `KUBESPIN_REGISTRY_DSN`.
+The database itself can be hosted anywhere reachable over the network — the
+operator provisions Postgres and supplies its connection string via
+`KUBESPIN_REGISTRY_DSN`. There is no separate provisioning step: the client
+migrates the schema itself on first connect.
 
 A second table, `cluster_argocd_details`, holds one upserted row per cluster
 of its Argo CD connection details (LoadBalancer endpoint, admin username,
@@ -101,8 +87,7 @@ instead of being silently persisted.
 stateDiagram-v2
     [*] --> pending
     pending --> cluster_created: cluster-created
-    cluster_created --> identity_bound: identity-bound
-    identity_bound --> repo_pushed: repo-pushed
+    cluster_created --> repo_pushed: repo-pushed
     repo_pushed --> argocd_installed: argocd-installed
     argocd_installed --> ready
     ready --> decommissioning
@@ -110,7 +95,6 @@ stateDiagram-v2
     decommissioned --> [*]
 
     cluster_created --> decommissioning
-    identity_bound --> decommissioning
     repo_pushed --> decommissioning
     pending --> decommissioning
 ```
@@ -217,9 +201,9 @@ to restrict, and silently accepting the field would imply otherwise.
 ## Provisioning is interface-first
 
 `ClusterProvisioner` (`Create`/`Describe`/`Reconcile`/`Delete`) and
-`IdentityProvisioner` (`ProvisionForComponent`) are shared interfaces with one
-implementation per cloud under `internal/provisioner/{aws,gcp,azure}`. No cloud
-conditionals leak into command or catalog code.
+`NetworkProvisioner` (`EnsureNetwork`/`DeleteNetwork`) are shared interfaces
+with one implementation per cloud under `internal/provisioner/{aws,gcp,azure}`.
+No cloud conditionals leak into command or catalog code.
 
 Three shape decisions matter more than they look:
 
@@ -231,55 +215,46 @@ Three shape decisions matter more than they look:
 - **`Reconcile` reports "already correct" as data**, not by the caller diffing
   before-and-after state. The no-op guarantee above depends on being able to
   prove nothing happened.
-- **Workload identity is its own phase**, not part of creation. The cluster's
-  OIDC issuer does not exist until the control plane is up, so nothing can be
-  bound to it before then.
+- **Workload identity is bound after the control plane is up.** A cluster's
+  OIDC issuer does not exist until then, so AWS's EBS/EFS CSI IRSA roles are
+  provisioned during the cluster reconcile rather than alongside the create
+  request.
 
 `Reconcile` never deletes a node pool. Removing one evicts running workloads,
 which is a decision for a human rather than something a loop does because a file
 changed.
 
-The identity a component gets exists to be **proven**, not to grant cloud
-access: the status reporter signs its push with it and the ingestion API
-verifies the signature. That is why `Component` carries no permission set. On
-AWS the IRSA trust policy is scoped by both `sub` and `aud` — without `sub` any
-service account in the cluster could assume the role, and without `aud` a token
-minted for another audience would be accepted.
+On AWS the IRSA trust policy is scoped by both `sub` and `aud` — without `sub`
+any service account in the cluster could assume the role, and without `aud` a
+token minted for another audience would be accepted.
 
 ## Convergence without a state file
 
-Fleet infrastructure — the ingestion API (the Fleet Registry is a separately
-operated Postgres database, not part of this) — is provisioned by
-[internal/fleetinfra](https://github.com/GitOpsHub/kubespin/tree/main/internal/fleetinfra) through `aws-sdk-go-v2`, not
-Terraform or CloudFormation. One language, one toolchain, and the stack is
-unit-testable with `go test` like everything else.
+Every cloud resource kubespin creates is provisioned through each cloud's own
+Go SDK, not Terraform or CloudFormation. One language, one toolchain, and the
+whole thing is unit-testable with `go test` like everything else.
 
 What a state file was providing has to be replaced by properties that are
 actually asserted:
 
-- **`Plan` is strictly read-only.** `--dry-run` is the same code path with the
-  `Apply` calls skipped — not a parallel branch that rots. The test fakes fail if
-  a dry run makes any mutating call.
-- **No step ever deletes.** There is no destroy path. Tearing down fleet
-  infrastructure is a deliberate manual act; any deletion protection on the
-  Postgres instance itself is the operator's responsibility, outside
-  `fleet bootstrap`'s scope.
-- **A second run must report nothing.** Every step is create-or-update, and
-  `TestConverge_SecondRunIsNoOp` asserts that converging already-provisioned
-  infrastructure produces no actions *and* no mutating calls. Drift tests go
-  further: after repairing drift, a third run must be clean again.
-- **The account guard replaces `allowed_account_ids`.** `sts:GetCallerIdentity`
-  must match the configured fleet account before any step runs.
+- **A dry run is strictly read-only.** `--dry-run` is the same code path with
+  the mutating calls skipped — not a parallel branch that rots. The test fakes
+  fail if a dry run makes any mutating call.
+- **Nothing is deleted except by `delete`.** `apply` is create-or-update
+  throughout: `Reconcile` never removes a node pool, and `EnsureNetwork` adopts
+  what its deterministic naming already finds rather than replacing it.
+- **A second run must report nothing.** Every step is create-or-update, and a
+  no-change `apply` makes no cloud calls and produces no commits.
 
-Each AWS service is reached through a narrow interface declared in
-[internal/fleetinfra/clients.go](https://github.com/GitOpsHub/kubespin/blob/main/internal/fleetinfra/clients.go) listing only
-the calls this package makes. That is what makes the engine testable without
-credentials, and it doubles as the exact permission set an operator needs — see
-the [bootstrap runbook](fleet-bootstrap.md#permissions-the-operator-needs).
+Each cloud service is reached through a narrow interface declared in the
+provisioner package (`internal/provisioner/{aws,gcp,azure}`) listing only the
+calls kubespin makes. That is what makes the provisioners testable without
+credentials, and it doubles as the exact permission set an operator needs.
 
 ## Rate limits are designed in, not bolted on
 
-Fleet-wide operations eventually touch every cluster's repository. The
+Every `apply` and `delete` touches a cluster's repository, and an operator
+running them back to back across many clusters hits GitHub's API limits. The
 rate-limited GitHub client belongs in `internal/repo` from the first call, not
-retrofitted once a fleet has grown — by then every call site has to be found and
-changed.
+retrofitted once that starts happening — by then every call site has to be
+found and changed.

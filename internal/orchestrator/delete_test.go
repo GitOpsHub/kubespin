@@ -135,7 +135,7 @@ func TestDelete_UnknownClusterErrors(t *testing.T) {
 
 // Teardown builds a real TeardownFunc; this proves the ordering and that
 // every sub-step gets called with real (fake) provisioners.
-func TestTeardown_CallsIdentityThenClusterThenRepo(t *testing.T) {
+func TestTeardown_CallsClusterThenNetworkThenRepo(t *testing.T) {
 	f := newFakeCloud()
 	repoProv := repo.NewMemory()
 	spec := testSpec()
@@ -149,11 +149,10 @@ func TestTeardown_CallsIdentityThenClusterThenRepo(t *testing.T) {
 		t.Fatalf("Teardown: %v", err)
 	}
 
-	deprovision := slices.Index(f.calls, "Deprovision")
 	del := slices.Index(f.calls, "Delete")
 	deleteNetwork := slices.Index(f.calls, "DeleteNetwork")
-	if deprovision < 0 || del < 0 || deprovision > del {
-		t.Errorf("calls = %v, want Deprovision before Delete", f.calls)
+	if del < 0 {
+		t.Errorf("calls = %v, want the cluster deleted", f.calls)
 	}
 	if deleteNetwork < 0 || deleteNetwork < del {
 		t.Errorf("calls = %v, want DeleteNetwork after Delete", f.calls)

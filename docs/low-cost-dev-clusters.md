@@ -167,7 +167,7 @@ make spot AWS_REGION=us-west-2 AWS_CLUSTER_ID=my-aws-dev
 ## Manual multi-cloud smoke test
 
 `make spot` is the one-shot version. Running the same idea by hand — one
-`apply` per cloud, polling `fleet status`, then tearing both down — is useful
+`apply` per cloud, then tearing both down — is useful
 when you want to watch each step, or only need two of the three clouds. See
 [Examples: smoke test](examples.md#smoke-test-create-and-destroy-a-throwaway-cluster)
 for the full walkthrough (it already uses `--spot`); the only difference here

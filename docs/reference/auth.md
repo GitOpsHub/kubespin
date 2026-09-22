@@ -253,8 +253,8 @@ type AWSProvider struct {
 
 - **Fields/Params:**
     - `profile` — the named profile in `~/.aws/config` this provider is scoped to.
-    - `sts` — narrowed to `stsAPI`'s single method (`GetCallerIdentity`), the same narrowing pattern `internal/fleetinfra`'s client interfaces use, so `IsAuthenticated` is testable without real AWS credentials.
-- **Behavior:** authenticates via AWS IAM Identity Center (SSO) — the same flow documented in `docs/fleet-bootstrap.md` for the Fleet Registry account.
+    - `sts` — narrowed to `stsAPI`'s single method (`GetCallerIdentity`), the same narrowing pattern every cloud provisioner's client interfaces use, so `IsAuthenticated` is testable without real AWS credentials.
+- **Behavior:** authenticates via AWS IAM Identity Center (SSO).
 - **Invariants:** constructing an `AWSProvider` succeeds even before the operator has ever logged in or run `aws configure` — a missing `"default"` profile section falls back to the SDK's unscoped default resolution, but a named profile that doesn't exist still errors since the operator explicitly asked for it.
 
 </details>

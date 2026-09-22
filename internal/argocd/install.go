@@ -181,7 +181,7 @@ func (h *HelmInstaller) Install(ctx context.Context, restConfig *rest.Config, ad
 	// Not Atomic. A rollback would uninstall a part-working release, and the
 	// phase is not recorded on failure anyway, so the retry re-enters here
 	// and converges via the upgrade path above — the same create-or-update,
-	// never-delete discipline internal/fleetinfra follows. Rolling back would
+	// never-delete discipline every provisioner follows. Rolling back would
 	// only make each attempt slower and destroy the evidence of why it hung.
 	inst.Wait = true
 	inst.Timeout = h.waitTimeout()

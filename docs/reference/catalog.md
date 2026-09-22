@@ -10,9 +10,8 @@ duplicating entries, so the resolved profile never diverges structurally
 from the catalog it came from. `ResolveForCluster` (`resolve.go`) drives
 this whole sequence — `Resolve` → `ForProvider` → defensive argocd-stand-in
 → `Merge` → `argocd.ApplyProfileIngressDefaults` for access-mode templating
-— and is the single seam both `internal/orchestrator` (apply) and
-`internal/fleet` (`fleet update`) call, so the two can never resolve the
-same cluster's size differently.
+— and is the single seam every caller goes through, so a given cluster's
+size always resolves the same way.
 
 There is no external profiles repository. Every size is fully defined in
 this package's Go source — `BuiltinResolver` is the only `Resolver`
@@ -47,7 +46,7 @@ func ResolveForCluster(ctx context.Context, resolver Resolver, spec core.Cluster
 
 - **Behavior:** `resolver.Resolve(ctx, spec.Size)`, then `Profile.ForProvider(spec.Provider)` to drop unsupported addons, then `withArgoCDAddon` (unexported: injects `argocd.DefaultAddon` as a defensive stand-in `"argocd"` catalog entry on the rare chance a size's catalog entry doesn't carry one — every builtin size does, via `baseAddons`), then `Merge(profile, spec.Overrides)`, then `argocd.ApplyProfileIngressDefaults(spec.Access, merged)`.
 - **Invariant:** because `withArgoCDAddon` runs before `Merge`, every resolved profile always has an `"argocd"` entry, so a `cluster.yaml` override naming `"argocd"` is always legal.
-- **Behavior:** the single seam both `internal/orchestrator` (`installArgoCDStep`, `seedRepoStep`, `ReadyReconcile`) and `internal/fleet.UpdateOne` call, so `apply` and `fleet update` resolve the same cluster's size identically.
+- **Behavior:** the single seam `internal/orchestrator` goes through (`installArgoCDStep`, `seedRepoStep`, `ReadyReconcile`), so every step of an `apply` resolves the same cluster's size identically.
 
 </details>
 
@@ -96,7 +95,7 @@ func (r *BuiltinResolver) Resolve(_ context.Context, size core.ClusterSize) (cor
 var baseAddons = []core.AddonRef{ /* cilium, cert-manager, gateway-api,
 	external-secrets, cluster-autoscaler, karpenter, kube-prometheus-stack,
 	fluent-bit, opencost, external-dns, ingress-nginx, kyverno,
-	kyverno-policies, fleet-status-reporter, argocd.DefaultAddon */ }
+	kyverno-policies, argocd.DefaultAddon */ }
 ```
 
 - **Behavior:** the addon set every size carries, unconditionally — this is what "Argo CD and an autoscaler ship at every size" means in practice. `sizeSmall` is exactly this list; `sizeMedium`/`sizeLarge` layer on top of it via `withAddons`/`replaceAddon`.

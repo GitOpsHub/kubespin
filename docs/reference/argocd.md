@@ -176,8 +176,8 @@ func (h *HelmInstaller) Install(ctx context.Context, restConfig *rest.Config, ad
   the CRDs this release creates); not `Atomic` because a rollback would
   uninstall a part-working release, and since the phase isn't recorded
   on failure anyway, a retry re-enters and converges via the upgrade
-  branch — the same create-or-update, never-delete discipline as
-  `internal/fleetinfra`.
+  branch — the same create-or-update, never-delete discipline every
+  provisioner follows.
 - `InstallTimeout = 10 * time.Minute` is the default wait bound
   (`timeout` field overrides it per instance, e.g. for
   slow/quota-constrained clusters).

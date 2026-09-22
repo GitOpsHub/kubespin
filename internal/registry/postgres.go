@@ -3,7 +3,6 @@ package registry
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,7 +14,7 @@ import (
 	"github.com/GitOpsHub/kubespin/internal/core"
 )
 
-// schemaDDL creates the Fleet Registry table and its provider/phase index,
+// schemaDDL creates the cluster registry table and its provider/phase index,
 // idempotently, so a fresh database is ready on first connect without a
 // separate migration step. It only ever adds — a run against an
 // already-provisioned database is a no-op.
@@ -27,11 +26,7 @@ CREATE TABLE IF NOT EXISTS fleet_registry (
 	region            TEXT NOT NULL,
 	access            TEXT NOT NULL,
 	size              TEXT NOT NULL DEFAULT '',
-	oidc_issuer       TEXT NOT NULL DEFAULT '',
 	version           BIGINT NOT NULL,
-	last_reported_at  TIMESTAMPTZ,
-	findings          JSONB,
-	findings_at       TIMESTAMPTZ,
 	created_at        TIMESTAMPTZ NOT NULL,
 	updated_at        TIMESTAMPTZ NOT NULL,
 	lease_holder      TEXT,
@@ -41,12 +36,16 @@ CREATE INDEX IF NOT EXISTS fleet_registry_provider_phase_idx ON fleet_registry (
 ALTER TABLE fleet_registry ADD COLUMN IF NOT EXISTS size TEXT NOT NULL DEFAULT '';
 ALTER TABLE fleet_registry DROP COLUMN IF EXISTS profile_name;
 ALTER TABLE fleet_registry DROP COLUMN IF EXISTS profile_version;
+ALTER TABLE fleet_registry DROP COLUMN IF EXISTS oidc_issuer;
+ALTER TABLE fleet_registry DROP COLUMN IF EXISTS last_reported_at;
+ALTER TABLE fleet_registry DROP COLUMN IF EXISTS findings;
+ALTER TABLE fleet_registry DROP COLUMN IF EXISTS findings_at;
 `
 
 // argoCDDetailsDDL creates the cluster_argocd_details table, a child of
 // fleet_registry holding one row per cluster's Argo CD connection details.
-// provider/region are denormalized from fleet_registry so ad hoc queries
-// don't need a join.
+// provider/region are denormalized from the parent so ad hoc queries don't
+// need a join.
 const argoCDDetailsDDL = `
 CREATE TABLE IF NOT EXISTS cluster_argocd_details (
 	cluster_id       TEXT PRIMARY KEY REFERENCES fleet_registry(cluster_id) ON DELETE CASCADE,
@@ -65,16 +64,14 @@ CREATE TABLE IF NOT EXISTS cluster_argocd_details (
 // RETURNING) so a column can't drift between them.
 const selectColumns = `
 	cluster_id, phase, provider, region, access, size,
-	oidc_issuer, version, last_reported_at, findings, findings_at, created_at,
-	updated_at, lease_holder, lease_expires_at
+	version, created_at, updated_at, lease_holder, lease_expires_at
 `
 
 // Postgres is the production Registry, backed by a Postgres database.
 type Postgres struct {
-	db            *sql.DB
-	now           func() time.Time
-	logger        *slog.Logger
-	skipMigration bool
+	db     *sql.DB
+	now    func() time.Time
+	logger *slog.Logger
 }
 
 // Option configures a Postgres registry client.
@@ -88,15 +85,6 @@ func WithLogger(logger *slog.Logger) Option {
 		if logger != nil {
 			p.logger = logger
 		}
-	}
-}
-
-// WithoutMigration skips running schema DDL on connect. Meant for ephemeral
-// runtimes like the Central Ingestion API Lambda handler, where the schema is
-// managed out-of-band and running DDL on cold start causes table lock contention.
-func WithoutMigration() Option {
-	return func(p *Postgres) {
-		p.skipMigration = true
 	}
 }
 
@@ -116,7 +104,7 @@ func WithConnectionPool(maxOpen, maxIdle int, maxLifetime time.Duration) Option 
 }
 
 // NewPostgres opens a connection pool against dsn, verifies it, and
-// idempotently ensures the fleet_registry table and its index exist.
+// idempotently ensures the cluster registry table and its index exist.
 func NewPostgres(ctx context.Context, dsn string, opts ...Option) (*Postgres, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -138,13 +126,11 @@ func NewPostgres(ctx context.Context, dsn string, opts ...Option) (*Postgres, er
 		opt(p)
 	}
 
-	if !p.skipMigration {
-		if _, err := db.ExecContext(ctx, schemaDDL); err != nil {
-			return nil, fmt.Errorf("migrating fleet registry schema: %w", err)
-		}
-		if _, err := db.ExecContext(ctx, argoCDDetailsDDL); err != nil {
-			return nil, fmt.Errorf("migrating cluster_argocd_details schema: %w", err)
-		}
+	if _, err := db.ExecContext(ctx, schemaDDL); err != nil {
+		return nil, fmt.Errorf("migrating cluster registry schema: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, argoCDDetailsDDL); err != nil {
+		return nil, fmt.Errorf("migrating cluster_argocd_details schema: %w", err)
 	}
 
 	return p, nil
@@ -182,21 +168,14 @@ func (p *Postgres) Create(ctx context.Context, rec Record) (Record, error) {
 		rec.Version = 1
 	}
 
-	findings, err := findingsJSON(rec)
-	if err != nil {
-		return Record{}, fmt.Errorf("encoding findings for %s: %w", rec.ClusterID, err)
-	}
-
 	res, err := p.db.ExecContext(ctx, `
 		INSERT INTO fleet_registry (
 			cluster_id, phase, provider, region, access, size,
-			oidc_issuer, version, last_reported_at, findings, findings_at, created_at,
-			updated_at, lease_holder, lease_expires_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			version, created_at, updated_at, lease_holder, lease_expires_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (cluster_id) DO NOTHING`,
 		rec.ClusterID.String(), rec.Phase.String(), rec.Provider.String(), rec.Region, rec.Access.String(),
-		rec.Size.String(), rec.OIDCIssuer, rec.Version,
-		nullTime(rec.LastReportedAt), findings, nullTime(rec.FindingsAt),
+		rec.Size.String(), rec.Version,
 		rec.CreatedAt.UTC(), rec.UpdatedAt.UTC(), leaseHolder(rec.Lease), leaseExpiry(rec.Lease))
 	if err != nil {
 		return Record{}, fmt.Errorf("creating cluster %s: %w", rec.ClusterID, err)
@@ -244,47 +223,6 @@ func (p *Postgres) UpdatePhase(ctx context.Context, rec Record, to core.Phase) (
 	p.log().Debug("recorded phase transition",
 		"cluster", rec.ClusterID, "from", rec.Phase, "to", to, "version", updated.Version)
 	return updated, nil
-}
-
-// Touch records a status report.
-func (p *Postgres) Touch(ctx context.Context, id core.ClusterID, at time.Time) error {
-	err := p.execNoVersionCheck(ctx, id,
-		`UPDATE fleet_registry SET last_reported_at = $1 WHERE cluster_id = $2`,
-		at.UTC(), id.String())
-	if err != nil {
-		return err
-	}
-	p.log().Debug("recorded status report", "cluster", id, "at", at)
-	return nil
-}
-
-// RecordOIDCIssuer sets the cluster's workload identity issuer.
-func (p *Postgres) RecordOIDCIssuer(ctx context.Context, id core.ClusterID, issuer string) error {
-	err := p.execNoVersionCheck(ctx, id,
-		`UPDATE fleet_registry SET oidc_issuer = $1 WHERE cluster_id = $2`,
-		issuer, id.String())
-	if err != nil {
-		return err
-	}
-	p.log().Debug("recorded OIDC issuer", "cluster", id, "issuer", issuer)
-	return nil
-}
-
-// RecordFindings sets the cluster's most recent audit findings.
-func (p *Postgres) RecordFindings(ctx context.Context, id core.ClusterID, findings []string, at time.Time) error {
-	encoded, err := json.Marshal(findings)
-	if err != nil {
-		return fmt.Errorf("encoding findings for %s: %w", id, err)
-	}
-
-	err = p.execNoVersionCheck(ctx, id,
-		`UPDATE fleet_registry SET findings = $1, findings_at = $2 WHERE cluster_id = $3`,
-		encoded, at.UTC(), id.String())
-	if err != nil {
-		return err
-	}
-	p.log().Debug("recorded audit findings", "cluster", id, "findings", len(findings), "at", at)
-	return nil
 }
 
 // RecordArgoCDAccess upserts a cluster's Argo CD connection details.
@@ -351,26 +289,6 @@ func (p *Postgres) GetArgoCDAccess(ctx context.Context, id core.ClusterID) (Argo
 func isForeignKeyViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
-}
-
-// execNoVersionCheck runs an update conditioned only on the row existing —
-// not on Version, the way UpdatePhase is. Touch, RecordOIDCIssuer, and
-// RecordFindings all write observational metadata that arrives independently
-// of phase transitions and must not contend with them, so none of them
-// assert a version.
-func (p *Postgres) execNoVersionCheck(ctx context.Context, id core.ClusterID, query string, args ...any) error {
-	res, err := p.db.ExecContext(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("updating %s: %w", id, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("updating %s: %w", id, err)
-	}
-	if n == 0 {
-		return fmt.Errorf("%w: %s", ErrNotFound, id)
-	}
-	return nil
 }
 
 // List returns records matching filter. Postgres reads are always
@@ -513,51 +431,31 @@ type rowScanner interface {
 
 func scanRecord(s rowScanner) (Record, error) {
 	var (
-		clusterID, phase, provider, region, access, size, oidcIssuer string
-		version                                                      int64
-		lastReportedAt, findingsAt, leaseExpiresAt                   sql.NullTime
-		findingsRaw                                                  []byte
-		createdAt, updatedAt                                         time.Time
-		leaseHolder                                                  sql.NullString
+		clusterID, phase, provider, region, access, size string
+		version                                          int64
+		leaseExpiresAt                                   sql.NullTime
+		createdAt, updatedAt                             time.Time
+		leaseHolder                                      sql.NullString
 	)
 
 	err := s.Scan(
 		&clusterID, &phase, &provider, &region, &access, &size,
-		&oidcIssuer, &version, &lastReportedAt, &findingsRaw, &findingsAt, &createdAt,
-		&updatedAt, &leaseHolder, &leaseExpiresAt,
+		&version, &createdAt, &updatedAt, &leaseHolder, &leaseExpiresAt,
 	)
 	if err != nil {
 		return Record{}, fmt.Errorf("scanning record: %w", err)
 	}
 
 	rec := Record{
-		ClusterID:  core.ClusterID(clusterID),
-		Phase:      core.Phase(phase),
-		Provider:   core.Provider(provider),
-		Region:     region,
-		Access:     core.Access(access),
-		Size:       core.ClusterSize(size),
-		OIDCIssuer: oidcIssuer,
-		Version:    version,
-		CreatedAt:  createdAt.UTC(),
-		UpdatedAt:  updatedAt.UTC(),
-	}
-
-	if lastReportedAt.Valid {
-		rec.LastReportedAt = lastReportedAt.Time.UTC()
-	}
-
-	// findings_at absent means never audited — distinct from an empty Findings
-	// list, which means a clean audit ran.
-	if findingsAt.Valid {
-		rec.FindingsAt = findingsAt.Time.UTC()
-		var findings []string
-		if len(findingsRaw) > 0 {
-			if err := json.Unmarshal(findingsRaw, &findings); err != nil {
-				return Record{}, fmt.Errorf("parsing findings for %s: %w", clusterID, err)
-			}
-		}
-		rec.Findings = findings
+		ClusterID: core.ClusterID(clusterID),
+		Phase:     core.Phase(phase),
+		Provider:  core.Provider(provider),
+		Region:    region,
+		Access:    core.Access(access),
+		Size:      core.ClusterSize(size),
+		Version:   version,
+		CreatedAt: createdAt.UTC(),
+		UpdatedAt: updatedAt.UTC(),
 	}
 
 	if leaseHolder.Valid && leaseHolder.String != "" {
@@ -568,29 +466,6 @@ func scanRecord(s rowScanner) (Record, error) {
 	}
 
 	return rec, nil
-}
-
-// findingsJSON encodes rec's findings for storage, or nil (SQL NULL) when the
-// cluster has never been audited — kept distinct from an empty, encoded `[]`,
-// which means a clean audit ran.
-func findingsJSON(rec Record) (any, error) {
-	if rec.FindingsAt.IsZero() {
-		return nil, nil
-	}
-	b, err := json.Marshal(rec.Findings)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling findings: %w", err)
-	}
-	return b, nil
-}
-
-// nullTime returns nil (SQL NULL) for a zero time, so "never reported"/"never
-// audited" is stored as absent rather than as the zero time itself.
-func nullTime(t time.Time) any {
-	if t.IsZero() {
-		return nil
-	}
-	return t.UTC()
 }
 
 func leaseHolder(l *Lease) any {

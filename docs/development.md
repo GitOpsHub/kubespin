@@ -17,9 +17,8 @@ make
 
 | Target | What it does |
 |---|---|
-| `make build` | Builds `bin/kubespin` (plus `bin/ingestion/bootstrap`), then installs it onto `PATH` |
+| `make build` | Builds `bin/kubespin`, then installs it onto `PATH` |
 | `make install` | Copies an already-built `bin/kubespin` to `INSTALL_DIR` |
-| `make lambda` | Builds only the ingestion handler: Linux arm64, static |
 | `make test` | Unit tests with `-race -cover` |
 | `make integration` | Adds `-tags=integration`; needs a reachable Postgres (`KUBESPIN_POSTGRES_TEST_DSN`) |
 | `make lint` | `golangci-lint run` |
@@ -37,22 +36,16 @@ is set, so a build on a runner never writes outside the repository.
 
 ```
 cmd/kubespin/              binary entrypoint; wires signals and exit codes
-cmd/ingestion/             Central Ingestion API handler, deployed to Lambda
-cmd/fleet-status-reporter/ in-cluster CronJob; pushes signed status outward
 internal/cli/              cobra command tree and configuration resolution
 internal/core/             shared domain types
 internal/auth/             operator cloud auth behind login/status/logout
-internal/registry/         Fleet Registry client (Postgres), lease primitive, in-memory implementation
+internal/registry/         cluster registry client (Postgres), lease primitive, in-memory implementation
 internal/orchestrator/     sequences one cluster's provisioning through the phases
 internal/provisioner/      cloud-facing interfaces; one subpackage per cloud
 internal/repo/             cluster repositories over GitHub
 internal/catalog/          size resolution: small/medium/large, fully builtin
 internal/argocd/           app-of-apps rendering, access-mode templating, install
-internal/fleet/            fleet-wide audit, update, status, and dashboard
-internal/fleetinfra/       SDK converge engine behind `fleet bootstrap`
 internal/kubeconfig/       operator kubeconfig update after apply (shells out to aws/gcloud/az)
-internal/ingestion/        token verification and write path for the ingestion API
-internal/reporter/         the status reporter's Argo CD summary and push logic
 internal/tools/            build-time tools (docs generation, changelog generation)
 internal/version/          build metadata stamped in via -ldflags
 docs/cli/                  generated — never edit by hand
@@ -68,8 +61,7 @@ elsewhere.
 
 Sentinel errors, wrapped, matched with `errors.Is`/`errors.As` — never by string
 comparison. Each package exposes its own: `core.ErrInvalidSpec`,
-`core.ErrInvalidTransition`, `cli.ErrConfig`, `fleetinfra.ErrSpec`,
-`fleetinfra.ErrAccountMismatch`, `registry.ErrNotFound`,
+`core.ErrInvalidTransition`, `cli.ErrConfig`, `registry.ErrNotFound`,
 `registry.ErrAlreadyExists`, `orchestrator.ErrBusy`.
 
 `wrapcheck` is enabled, so any error crossing a package boundary must be
@@ -123,60 +115,10 @@ too, because that is the only place the conditional `UPDATE` expression itself
 is under test. A sequential simulation of this would pass against a broken
 lock.
 
-### Testing against AWS
-
-[internal/fleetinfra/fake_test.go](https://github.com/GitOpsHub/kubespin/blob/main/internal/fleetinfra/fake_test.go) holds
-`fakeAWS`, an in-memory stand-in implementing all six service interfaces. It
-records every call by name, which lets tests assert *which calls were made*, not
-just the resulting state. Two helpers matter:
-
-- `assertNoMutations(t)` fails if any state-changing call was made. This is what
-  keeps `--dry-run` honest — the guarantee is enforced by a test, not by careful
-  reading.
-- `provisioned(t)` returns a fake that has already been fully converged, and is
-  the starting point for every drift test.
-
-The load-bearing test is `TestConverge_SecondRunIsNoOp`. Without a state file,
-convergence is only trustworthy if a run against provisioned infrastructure
-reports nothing *and* calls nothing. Every drift case additionally converges a
-third time to prove the repair itself settles.
-
 The phase transition test asserts the **full cartesian product** of phases
 against a hand-written table rather than a rule shared with the implementation.
 That is what caught the original `Phase.Valid()` bug, where validity was derived
 from having a successor and `ready` therefore reported itself invalid.
-
-## Adding a converge step
-
-Steps live in `internal/fleetinfra/step_*.go` and satisfy:
-
-```go
-type step interface {
-    Name() string
-    Plan(ctx context.Context) (Action, error)
-    Apply(ctx context.Context, a Action) error
-}
-```
-
-1. **Add only the calls you need** to the relevant narrow interface in
-   [clients.go](https://github.com/GitOpsHub/kubespin/blob/main/internal/fleetinfra/clients.go). These interfaces double as
-   the documented permission set for operators, so an unused method there is a
-   permission someone will grant for no reason.
-2. **Keep `Plan` strictly read-only.** It is what `--dry-run` executes. Store
-   what you discovered on the step struct for `Apply` to consume.
-3. **Set `action.Resource` to `s.Name()`**, not the AWS resource name — the role,
-   function, and API all resolve to the same AWS name, and identically labelled
-   report lines are ambiguous to both readers and tests.
-4. **Populate `action.Details`** with what specifically differs. It is printed on
-   dry and real runs alike and is the first thing someone debugging drift reads.
-5. **Never delete.** Create-or-update only.
-6. **Register it** in `Converge` in dependency order.
-7. **Add a drift case** to `TestConverge_DetectsDrift`: a mutation, the step name,
-   and the repairing call. The shared harness then checks that a dry run detects
-   it without repairing, a real run repairs it, and a third run is clean.
-
-Also add the new mutating call names to `mutatingCalls` in `fake_test.go`, or
-`assertNoMutations` will silently stop covering them.
 
 ## Changing the CLI
 
@@ -196,11 +138,9 @@ A command's `Example` block is the *only* place the reference gets examples
 from, so it has to be runnable as written: every flag the command actually
 requires, spelled out. `apply` and `delete` validate a whole `ClusterSpec`,
 which means an example missing `--cluster-id` fails before doing anything; every
-registry-touching command needs the Fleet Registry DSN, which has no default
-and — deliberately — no flag, so it must come from `KUBESPIN_REGISTRY_DSN` (or
-a `.env` file); `fleet bootstrap` is the one exception, needing its own
-`--region` (the AWS region hosting the ingestion Lambda/IAM/API Gateway); and
-every repository-touching command needs `--github-org`. Examples are written
+registry-touching command needs the registry DSN, which has no default and —
+deliberately — no flag, so it must come from `KUBESPIN_REGISTRY_DSN` (or a
+`.env` file); and every repository-touching command needs `--github-org`. Examples are written
 as plain `kubespin`, which `make build` puts on your `PATH`, so they can be
 pasted straight into a terminal from any directory.
 
