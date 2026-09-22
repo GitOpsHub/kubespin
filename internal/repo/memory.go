@@ -16,14 +16,14 @@ import (
 // GitHub-backed provisioner does: Push is a no-op, reporting no change, when
 // every given file already matches what Clone read.
 type Memory struct {
-	mu       sync.Mutex
-	repos    map[string]map[string][]byte // repo name -> path -> content
-	archived map[string]bool
+	mu      sync.Mutex
+	repos   map[string]map[string][]byte // repo name -> path -> content
+	deleted map[string]bool
 }
 
 // NewMemory builds an in-memory Provisioner.
 func NewMemory() *Memory {
-	return &Memory{repos: map[string]map[string][]byte{}, archived: map[string]bool{}}
+	return &Memory{repos: map[string]map[string][]byte{}, deleted: map[string]bool{}}
 }
 
 // Exists reports whether the cluster's repository has been created.
@@ -125,25 +125,23 @@ func (m *Memory) Credentials() (username, password string) {
 	return "x-access-token", "fake-token"
 }
 
-// Archive marks the repository archived, or converges silently if it is
-// already archived or was never created.
-func (m *Memory) Archive(_ context.Context, spec core.ClusterSpec) error {
+// Delete removes the repository, or converges silently if it was never
+// created.
+func (m *Memory) Delete(_ context.Context, spec core.ClusterSpec) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	name := names{spec}.repoName()
-	if _, ok := m.repos[name]; !ok {
-		return nil
-	}
-	m.archived[name] = true
+	delete(m.repos, name)
+	m.deleted[name] = true
 	return nil
 }
 
-// Archived reports whether spec's repository has been archived. Test-only
-// visibility into state Archive itself does not expose, the way Memory's
+// Deleted reports whether spec's repository has been deleted. Test-only
+// visibility into state Delete itself does not expose, the way Memory's
 // sibling packages' fakes expose their calls for assertions.
-func (m *Memory) Archived(spec core.ClusterSpec) bool {
+func (m *Memory) Deleted(spec core.ClusterSpec) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.archived[names{spec}.repoName()]
+	return m.deleted[names{spec}.repoName()]
 }

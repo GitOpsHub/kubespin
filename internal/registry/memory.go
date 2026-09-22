@@ -116,6 +116,18 @@ func (m *Memory) UpdatePhase(_ context.Context, rec Record, to core.Phase) (Reco
 	return clone(stored), nil
 }
 
+// Delete removes a cluster's record and its Argo CD access details, mirroring
+// the ON DELETE CASCADE the Postgres schema gives the same pair. Deleting a
+// record that is not there is a no-op.
+func (m *Memory) Delete(_ context.Context, id core.ClusterID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.records, id)
+	delete(m.argocdAccess, id)
+	return nil
+}
+
 // List returns records matching filter, ordered by cluster ID.
 func (m *Memory) List(_ context.Context, filter Filter) ([]Record, error) {
 	m.mu.Lock()

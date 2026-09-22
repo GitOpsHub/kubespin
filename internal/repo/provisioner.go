@@ -57,11 +57,15 @@ type Provisioner interface {
 	// zero commits.
 	Push(ctx context.Context, checkout *Checkout, files map[string][]byte, message string) (bool, error)
 
-	// Archive archives the repository. Used by teardown: a decommissioned
-	// cluster's repo is archived, never deleted, so its history survives. It
-	// is idempotent — archiving an already-archived or absent repository is a
-	// no-op — so a retried teardown converges rather than failing.
-	Archive(ctx context.Context, spec core.ClusterSpec) error
+	// Delete deletes the repository. Used by teardown: a decommissioned
+	// cluster leaves nothing behind, so its cluster ID — and the repository
+	// name derived from it — can be used again. This destroys the
+	// repository's history irrecoverably; GitHub offers no undo beyond its
+	// own short restore window.
+	//
+	// It is idempotent — deleting an absent repository is a no-op — so a
+	// retried teardown converges rather than failing.
+	Delete(ctx context.Context, spec core.ClusterSpec) error
 
 	// RepoURL returns the repository's clone URL — what the app-of-apps root
 	// Application (internal/argocd.RenderRootApplication) points Argo CD's own
@@ -447,30 +451,27 @@ func (p *githubProvisioner) Push(
 	return true, nil
 }
 
-// Archive archives the repository, or converges silently if it is already
-// archived or was never created — the same "already there" tolerance every
-// other Create/Delete-shaped method in this codebase gives a retried run.
-func (p *githubProvisioner) Archive(ctx context.Context, spec core.ClusterSpec) error {
+// Delete deletes the repository, or converges silently if it was never
+// created — the same "already gone" tolerance every other Create/Delete-shaped
+// method in this codebase gives a retried run.
+//
+// Deliberately destructive: teardown removes the cluster's repository outright
+// so that nothing is left holding the name, and the cluster ID can be applied
+// again. The token this runs with therefore needs delete_repo scope; without
+// it GitHub answers 403 and this reports that rather than pretending to have
+// converged.
+func (p *githubProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) error {
 	n := names{spec}
 
-	repository, resp, err := p.c.repo.Get(ctx, p.c.org, n.repoName())
+	resp, err := p.c.repo.Delete(ctx, p.c.org, n.repoName())
 	if err != nil {
 		if notFound(resp) {
 			return nil
 		}
-		return fmt.Errorf("reading repository %s: %w", n.repoName(), err)
-	}
-	if repository.GetArchived() {
-		return nil
+		return fmt.Errorf("deleting repository %s: %w", n.repoName(), err)
 	}
 
-	if _, _, err := p.c.repo.Edit(ctx, p.c.org, n.repoName(), &github.Repository{
-		Archived: github.Ptr(true),
-	}); err != nil {
-		return fmt.Errorf("archiving repository %s: %w", n.repoName(), err)
-	}
-
-	p.logger.Info("archived cluster repository", "cluster", spec.ID, "repo", n.repoName())
+	p.logger.Info("deleted cluster repository", "cluster", spec.ID, "repo", n.repoName())
 	return nil
 }
 

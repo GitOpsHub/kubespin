@@ -291,6 +291,21 @@ func isForeignKeyViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
+// Delete removes a cluster's record. The cluster_argocd_details row goes with
+// it through that table's ON DELETE CASCADE, so there is one statement here
+// rather than two that could half-fail.
+//
+// A record that is already gone is a success, not ErrNotFound: delete is
+// resumable, and the second run of a teardown whose first run got this far
+// must converge rather than fail.
+func (p *Postgres) Delete(ctx context.Context, id core.ClusterID) error {
+	if _, err := p.db.ExecContext(ctx, `DELETE FROM fleet_registry WHERE cluster_id = $1`, id.String()); err != nil {
+		return fmt.Errorf("deleting cluster %s: %w", id, err)
+	}
+	p.log().Debug("deleted registry record", "cluster", id)
+	return nil
+}
+
 // List returns records matching filter. Postgres reads are always
 // consistent, so — unlike the eventually-consistent DynamoDB scan/GSI query
 // this replaced — there is no separate index-vs-scan path to choose between

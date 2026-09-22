@@ -37,6 +37,7 @@ type repositoriesAPI interface {
 		ctx context.Context, owner, repo, branch string, preq *github.ProtectionRequest,
 	) (*github.Protection, *github.Response, error)
 	Edit(ctx context.Context, owner, repo string, repository *github.Repository) (*github.Repository, *github.Response, error)
+	Delete(ctx context.Context, owner, repo string) (*github.Response, error)
 }
 
 // gitAPI is the go-github Git Data surface this package uses to build one

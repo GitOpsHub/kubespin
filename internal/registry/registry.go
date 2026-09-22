@@ -149,6 +149,16 @@ type Registry interface {
 	// List returns records matching filter.
 	List(ctx context.Context, filter Filter) ([]Record, error)
 
+	// Delete removes a cluster's record entirely, along with any child rows
+	// hanging off it. It is the last act of a completed teardown: the record
+	// is a resume log for apply/delete, so once there is nothing left to
+	// resume there is nothing left to record, and the cluster ID becomes
+	// reusable again.
+	//
+	// It is idempotent — deleting a record that is already gone is a no-op,
+	// not ErrNotFound — so a retried delete converges.
+	Delete(ctx context.Context, id core.ClusterID) error
+
 	// AcquireLease claims the cluster for holder until now+ttl. It returns
 	// ErrLeaseHeld if another holder's lease is still valid. An expired lease is
 	// taken over without ceremony.

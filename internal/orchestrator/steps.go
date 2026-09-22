@@ -242,14 +242,15 @@ func ReadyReconcile(
 }
 
 // Teardown builds the TeardownFunc that performs the reverse teardown: drain
-// load balancers, delete the cluster, delete the network, archive the repo —
+// load balancers, delete the cluster, delete the network, delete the repo —
 // deliberately in that order, opposite of Apply, so nothing is deleted while
 // another step might still need it.
 //
-// Every step here is idempotent (Delete/Archive on something already gone
-// converge rather than error), which is what lets Delete retry this whole
-// function after a partial failure instead of needing to track which sub-step
-// it reached.
+// Every step here is idempotent (a Delete on something already gone converges
+// rather than errors), which is what lets Delete retry this whole function
+// after a partial failure instead of needing to track which sub-step it
+// reached — and what lets orchestrator.Delete re-run it over an
+// already-decommissioned cluster to clean up whatever a previous run left.
 func Teardown(cloud Cloud, repoProv repo.Provisioner, logger *slog.Logger) TeardownFunc {
 	if logger == nil {
 		logger = slog.Default()
@@ -292,10 +293,15 @@ func Teardown(cloud Cloud, repoProv repo.Provisioner, logger *slog.Logger) Teard
 			logger.Info("deleted network", "cluster", spec.ID)
 		}
 
-		if err := repoProv.Archive(ctx, spec); err != nil {
-			return fmt.Errorf("archiving repository for %s: %w", spec.ID, err)
+		// Last, and deliberately after every cloud resource is gone: the
+		// repository is the only record of what this cluster was, so it
+		// outlives the infrastructure right up until there is nothing left to
+		// describe. Deleting it — rather than archiving it — is what frees
+		// the name for a future apply of the same cluster ID.
+		if err := repoProv.Delete(ctx, spec); err != nil {
+			return fmt.Errorf("deleting repository for %s: %w", spec.ID, err)
 		}
-		logger.Info("archived cluster repository", "cluster", spec.ID)
+		logger.Info("deleted cluster repository", "cluster", spec.ID)
 
 		return nil
 	}
