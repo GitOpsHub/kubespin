@@ -12,6 +12,15 @@ Do not hand-edit past entries.
 
 ## [Unreleased]
 
+## [v1.3.0] - 2026-09-22
+### Added
+- Implement repository deletion logic in memory and postgres provisioners
+- Update spot cluster provisioning to use size parameter and improve error messages
+
+### Changed
+- Refactor lease management and introduce retry policy for Postgres registry
+
+
 ## [v1.2.0] - 2026-09-22
 ### Added
 - Enhance Helm installation logic to prevent unnecessary upgrades and improve state checks
