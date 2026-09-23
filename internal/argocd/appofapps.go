@@ -64,8 +64,22 @@ func RenderAddonApplication(addon core.AddonRef) ([]byte, error) {
 			},
 			Destination: ApplicationDestination{Server: inClusterServer, Namespace: addon.Namespace},
 			SyncPolicy: &ApplicationSyncPolicy{
-				Automated:   &ApplicationSyncPolicyAutomated{Prune: true, SelfHeal: true},
-				SyncOptions: []string{"CreateNamespace=true"},
+				Automated: &ApplicationSyncPolicyAutomated{Prune: true, SelfHeal: true},
+				// Retry: Argo CD never re-attempts an automated sync that
+				// failed on the same revision, and addons depend on each
+				// other's CRDs (kyverno-policies on kyverno's), so one that
+				// syncs before its dependency would otherwise stay failed
+				// until someone intervenes.
+				Retry: &ApplicationSyncRetry{
+					Limit:   10,
+					Backoff: &ApplicationSyncRetryBackoff{Duration: "15s", Factor: 2, MaxDuration: "5m"},
+				},
+				// ServerSideApply: client-side apply keeps a full copy of each
+				// object in a last-applied-configuration annotation, capped at
+				// 256 KiB, and the CRDs of kyverno and kube-prometheus-stack are
+				// larger than that — they fail to apply ("metadata.annotations:
+				// Too long") and their controllers crash-loop without them.
+				SyncOptions: []string{"CreateNamespace=true", "ServerSideApply=true"},
 			},
 		},
 	}

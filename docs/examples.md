@@ -79,7 +79,8 @@ cluster's addon footprint from the builtin catalog — `small`, `medium`, or
 `large` — and defaults to `small` when omitted, so no flag is required for
 the common case. Argo CD and `cluster-autoscaler` (configured for each
 cloud) ship at every size; `medium` adds
-Velero + Falco, `large` adds strict Kyverno policies + audit logging + OTel.
+Velero + Falco, `large` raises the Pod Security policies from baseline to
+restricted (audit mode) and adds an OTel collector.
 
 ### GitHub, on everything that touches a cluster repository
 

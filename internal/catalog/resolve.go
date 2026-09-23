@@ -29,7 +29,7 @@ func ResolveForCluster(ctx context.Context, resolver Resolver, spec core.Cluster
 		return core.Profile{}, fmt.Errorf("applying overrides for %s: %w", spec.ID, err)
 	}
 
-	return argocd.ApplyProfileIngressDefaults(spec.Access, merged), nil
+	return argocd.ApplyProfileIngressDefaults(spec.Access, merged, argocd.WithAuthorizedCIDRs(spec.AuthorizedCIDRs)), nil
 }
 
 // withArgoCDAddon ensures profile always carries an "argocd" catalog entry,

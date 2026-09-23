@@ -65,6 +65,14 @@ install:
 test:
 	go test -race -cover ./...
 
+## Checks every chart version the catalog pins against its live repository
+## (needs the network, and helm for OCI charts). Run before shipping a
+## catalog change: a pin that does not resolve otherwise fails only once
+## Argo CD tries it on a real cluster.
+.PHONY: check-charts
+check-charts:
+	KUBESPIN_CHECK_CHARTS=1 go test -count=1 -run TestCatalogCharts_Exist -v ./internal/catalog/
+
 ## Integration tests need real cloud credentials and a reachable Postgres
 ## (KUBESPIN_POSTGRES_TEST_DSN); opt-in only.
 .PHONY: integration

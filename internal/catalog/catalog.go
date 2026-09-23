@@ -78,17 +78,19 @@ var baseAddons = []core.AddonRef{
 		Providers:  []core.Provider{core.ProviderGCP, core.ProviderAzure},
 	},
 	{
-		// Gateway API's CRDs are cloud-agnostic, but the controller that
-		// implements them is not (e.g. GKE Gateway controller vs. an
-		// ingress controller's own Gateway API support). This carries no
-		// per-provider gate yet —
-		// core.AddonRef has no provider constraint — so picking the
-		// per-cloud implementation this addon stands in for is still open.
+		// The standard-channel Gateway API CRDs, from Envoy Gateway's CRD
+		// chart with only the Gateway API half enabled (it is the one
+		// published chart that ships them alone). The CRDs are
+		// cloud-agnostic; which controller implements them is still open.
 		Name:       "gateway-api",
-		Chart:      "gateway-api-crds",
-		Repository: "https://charts.kubespin.dev",
-		Version:    "0.1.0",
+		Chart:      "gateway-crds-helm",
+		Repository: "oci://docker.io/envoyproxy/gateway-crds-helm",
+		Version:    "1.9.1",
 		Namespace:  "gateway-system",
+		Values: map[string]any{"crds": map[string]any{
+			"gatewayAPI":   map[string]any{"enabled": true, "channel": "standard"},
+			"envoyGateway": map[string]any{"enabled": false},
+		}},
 	},
 	{
 		Name:       "external-secrets",
@@ -98,6 +100,10 @@ var baseAddons = []core.AddonRef{
 		Namespace:  "external-secrets",
 	},
 	{
+		// 9.59.x runs cluster-autoscaler 1.35, the release closest to the
+		// Kubernetes versions kubespin creates; the autoscaler is meant to
+		// track the cluster's minor version.
+		//
 		// GCP/Azure: the same chart as the AWS entry below. The two share a
 		// name, and their Providers gates never overlap, so
 		// core.Profile.ForProvider leaves exactly one per cluster and an
@@ -105,7 +111,7 @@ var baseAddons = []core.AddonRef{
 		Name:       "cluster-autoscaler",
 		Chart:      "cluster-autoscaler",
 		Repository: "https://kubernetes.github.io/autoscaler",
-		Version:    "9.43.0",
+		Version:    "9.59.0",
 		Namespace:  core.ClusterAutoscalerNamespace,
 		Providers:  []core.Provider{core.ProviderGCP, core.ProviderAzure},
 	},
@@ -123,7 +129,7 @@ var baseAddons = []core.AddonRef{
 		Name:       "cluster-autoscaler",
 		Chart:      "cluster-autoscaler",
 		Repository: "https://kubernetes.github.io/autoscaler",
-		Version:    "9.43.0",
+		Version:    "9.59.0",
 		Namespace:  core.ClusterAutoscalerNamespace,
 		Providers:  []core.Provider{core.ProviderAWS},
 		Values: map[string]any{
@@ -163,11 +169,36 @@ var baseAddons = []core.AddonRef{
 		Providers:  []core.Provider{core.ProviderGCP, core.ProviderAzure},
 	},
 	{
+		// The cost UI is served from a LoadBalancer Service. It asks for
+		// external exposure, which access-mode templating
+		// (internal/argocd.ApplyIngressDefaults) grants only on a public
+		// cluster, and then only to the cluster's authorizedCIDRs; a
+		// private cluster gets an internal load balancer instead. OpenCost
+		// has no authentication of its own, which is why the source ranges
+		// matter, and why its MCP server is off rather than exposed with it.
+		//
+		// It reads cluster metrics from kube-prometheus-stack's Prometheus
+		// (release kube-prometheus-stack in monitoring), not the chart's
+		// default prometheus-server in prometheus-system, which kubespin
+		// never installs.
 		Name:       "opencost",
 		Chart:      "opencost",
 		Repository: "https://opencost.github.io/opencost-helm-chart",
-		Version:    "1.44.0",
+		Version:    "2.5.32",
 		Namespace:  "opencost",
+		Values: map[string]any{
+			"ingress": map[string]any{"exposure": "external"},
+			"service": map[string]any{"type": "LoadBalancer"},
+			"opencost": map[string]any{
+				"mcp": map[string]any{"enabled": false},
+				"prometheus": map[string]any{"internal": map[string]any{
+					"enabled":       true,
+					"serviceName":   "kube-prometheus-stack-prometheus",
+					"namespaceName": "monitoring",
+					"port":          9090,
+				}},
+			},
+		},
 	},
 	{
 		// GCP/Azure only: on AWS the EKS add-on of the same name replaces
@@ -193,25 +224,29 @@ var baseAddons = []core.AddonRef{
 		Values: map[string]any{"ingress": map[string]any{"exposure": "internal"}},
 	},
 	{
+		// 3.9.x: charts before 3.3 ran their report-cleanup CronJobs on
+		// bitnami/kubectl tags that Bitnami has since pulled from Docker Hub,
+		// so those jobs sat in ImagePullBackOff.
 		Name:       "kyverno",
 		Chart:      "kyverno",
 		Repository: "https://kyverno.github.io/kyverno",
-		Version:    "3.2.6",
+		Version:    "3.9.1",
 		Namespace:  "kyverno",
 	},
 	{
+		// Kyverno's own Pod Security Standards policies, at the baseline
+		// level, in Audit mode: violations are reported (PolicyReports), not
+		// blocked, so no addon in any size can be refused admission by
+		// them. sizeLarge swaps in the restricted level.
 		Name:       "kyverno-policies",
-		Chart:      "kyverno-policies-baseline",
-		Repository: "https://charts.kubespin.dev",
-		Version:    "0.1.0",
+		Chart:      "kyverno-policies",
+		Repository: "https://kyverno.github.io/kyverno",
+		Version:    "3.9.1",
 		Namespace:  "kyverno",
-		// publicExposureDeny enforces the admission-time rule the project's
-		// CLAUDE.md requires regardless of access mode: a Service or
-		// Ingress that would expose the cluster publicly is rejected
-		// unless Access is public and the addon requesting it opted in via
-		// ingress.exposure, matching the same default this profile's own
-		// ingress-nginx addon carries.
-		Values: map[string]any{"policies": map[string]any{"publicExposureDeny": true}},
+		Values: map[string]any{
+			"podSecurityStandard":     "baseline",
+			"validationFailureAction": "Audit",
+		},
 	},
 	argocd.DefaultAddon,
 }

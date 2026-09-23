@@ -81,3 +81,34 @@ func TestResolveForCluster_FillsClusterValuesIntoTheAWSAutoscaler(t *testing.T) 
 		}
 	}
 }
+
+// OpenCost is served from a LoadBalancer that follows the cluster's access
+// mode, and reads kube-prometheus-stack's Prometheus.
+func TestResolveForCluster_OpenCostLoadBalancerFollowsAccessMode(t *testing.T) {
+	spec := testClusterSpec(core.ProviderAWS)
+	spec.Access = core.AccessPublic
+	spec.AuthorizedCIDRs = []string{"198.51.100.7/32"}
+
+	profile, err := ResolveForCluster(context.Background(), NewBuiltinResolver(), spec)
+	if err != nil {
+		t.Fatalf("ResolveForCluster: %v", err)
+	}
+	opencost, ok := profile.Addon("opencost")
+	if !ok {
+		t.Fatal("expected opencost in the profile")
+	}
+	service, _ := opencost.Values["service"].(map[string]any)
+	if service["type"] != "LoadBalancer" {
+		t.Errorf("service.type = %v, want LoadBalancer", service["type"])
+	}
+	if ranges, _ := service["loadBalancerSourceRanges"].([]any); len(ranges) != 1 || ranges[0] != "198.51.100.7/32" {
+		t.Errorf("loadBalancerSourceRanges = %v, want the cluster's authorized CIDRs", service["loadBalancerSourceRanges"])
+	}
+
+	cfg, _ := opencost.Values["opencost"].(map[string]any)
+	prom, _ := cfg["prometheus"].(map[string]any)
+	internal, _ := prom["internal"].(map[string]any)
+	if internal["serviceName"] != "kube-prometheus-stack-prometheus" || internal["namespaceName"] != "monitoring" {
+		t.Errorf("prometheus.internal = %v, want kube-prometheus-stack's Prometheus", internal)
+	}
+}

@@ -400,7 +400,17 @@ Spread across `manifest.go`, `appofapps.go`, `install.go`, `repocreds.go`:
 - Renders one addon's independent `Application` (`Source.Chart`/
   `Repository`/`Version` from `addon`, values passed through
   `ApplicationSourceHelm.ValuesObject`, `SyncOptions:
-  []string{"CreateNamespace=true"}`).
+  []string{"CreateNamespace=true", "ServerSideApply=true"}`).
+- `ServerSideApply=true` is required, not a preference. Client-side apply
+  keeps a full copy of each object in a last-applied annotation capped at
+  256 KiB, and the CRDs of kyverno and kube-prometheus-stack are larger. They
+  fail with `metadata.annotations: Too long`, and the controllers that need
+  them crash-loop.
+- Every addon Application also carries `syncPolicy.retry` (limit 10, backoff
+  15s ×2 up to 5m). Argo CD never retries a failed automated sync on the same
+  revision by itself, and addons depend on each other's CRDs
+  (`kyverno-policies` on `kyverno`'s). Without retry, an addon that synced
+  before its dependency would stay failed until someone stepped in.
 - Each addon syncs and fails on its own, which is the entire point of
   app-of-apps over one monolithic `Application` for the whole profile.
 
@@ -495,7 +505,7 @@ func ResolveExposure(access core.Access, requested Exposure) Exposure {
 #### `ApplyIngressDefaults`
 
 <details>
-<summary>`ApplyIngressDefaults(access core.Access, addon core.AddonRef) core.AddonRef`</summary>
+<summary>`ApplyIngressDefaults(access core.Access, addon core.AddonRef, opts ...Option) core.AddonRef`</summary>
 
 - Overlays the resolved exposure onto an ingress/Gateway addon's
   values, returning a new `AddonRef` (addon's own `Values` map is never
@@ -505,6 +515,9 @@ func ResolveExposure(access core.Access, requested Exposure) Exposure {
   `ingress.internal` bool (`exposure == ExposureInternal`) that chart
   authors can key an annotation off — proving the access-mode default
   was applied rather than trusting the profile got it right.
+- If the addon's values declare a top-level `service` with `type: LoadBalancer`, the Service is shaped to match the exposure:
+    - **Internal:** adds every cloud's internal-load-balancer annotation (`internalLoadBalancerAnnotations`: AWS's `aws-load-balancer-internal`/`aws-load-balancer-scheme`, GKE's `load-balancer-type: Internal`, and Azure's `azure-load-balancer-internal`), keeping any annotations already set. Each cloud ignores the others' keys, so no per-provider branching is needed.
+    - **External:** sets `loadBalancerSourceRanges` to the CIDRs passed with `WithAuthorizedCIDRs`, which `catalog.ResolveForCluster` sets to the cluster's `authorizedCIDRs`. The load balancer is then reachable from the same addresses as the API server. With no CIDRs, it's left open, matching the API endpoint.
 
 </details>
 

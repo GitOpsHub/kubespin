@@ -15,7 +15,8 @@ import "log/slog"
 // today is a pure function over a Profile — there is no installer object to
 // hang a logger off yet.
 type options struct {
-	logger *slog.Logger
+	logger          *slog.Logger
+	authorizedCIDRs []string
 }
 
 // Option configures a rendering call.
@@ -28,6 +29,14 @@ func WithLogger(logger *slog.Logger) Option {
 			o.logger = logger
 		}
 	}
+}
+
+// WithAuthorizedCIDRs sets the CIDRs an externally exposed LoadBalancer
+// Service admits (see ApplyIngressDefaults): the cluster's own
+// authorizedCIDRs, so the addon is reachable from exactly where its API
+// server is.
+func WithAuthorizedCIDRs(cidrs []string) Option {
+	return func(o *options) { o.authorizedCIDRs = cidrs }
 }
 
 // resolve applies opts over the defaults.
@@ -108,6 +117,21 @@ type ApplicationDestination struct {
 type ApplicationSyncPolicy struct {
 	Automated   *ApplicationSyncPolicyAutomated `yaml:"automated,omitempty"`
 	SyncOptions []string                        `yaml:"syncOptions,omitempty"`
+	Retry       *ApplicationSyncRetry           `yaml:"retry,omitempty"`
+}
+
+// ApplicationSyncRetry retries a failed sync operation with backoff.
+type ApplicationSyncRetry struct {
+	Limit   int64                        `yaml:"limit"`
+	Backoff *ApplicationSyncRetryBackoff `yaml:"backoff,omitempty"`
+}
+
+// ApplicationSyncRetryBackoff is the delay between sync retries: Duration,
+// multiplied by Factor after each attempt, capped at MaxDuration.
+type ApplicationSyncRetryBackoff struct {
+	Duration    string `yaml:"duration"`
+	Factor      int64  `yaml:"factor"`
+	MaxDuration string `yaml:"maxDuration"`
 }
 
 // ApplicationSyncPolicyAutomated configures automated sync.

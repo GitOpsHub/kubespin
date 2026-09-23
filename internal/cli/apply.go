@@ -91,7 +91,7 @@ addons that silently never sync.`,
 	fs.String("provider", "", "cloud provider: aws, gcp, or azure")
 	fs.String("region", "", "cloud region")
 	fs.String("access", string(core.AccessPrivate), "API server exposure: private or public")
-	fs.String("size", "small", "cluster size: small, medium, or large — determines the default addon set. Argo CD and cluster-autoscaler ship at every size; medium adds Velero+Falco, large adds strict Kyverno policies + audit logging + OTel")
+	fs.String("size", "small", "cluster size: small, medium, or large — determines the default addon set. Argo CD and cluster-autoscaler ship at every size; medium adds Velero+Falco, large raises Pod Security policies to restricted (audit mode) and adds an OTel collector")
 	fs.String("kubernetes-version", "", "Kubernetes minor version, e.g. 1.34")
 	fs.StringSlice("subnets", nil, "existing subnets to place the cluster in")
 	fs.StringSlice("authorized-cidrs", nil, "CIDR blocks allowed to reach the API server when --access public (GCP: required to reach the endpoint at all, since GKE enables master-authorized-networks with an empty allowlist by default; AWS/Azure: public endpoints are open to 0.0.0.0/0 unless this is set)")

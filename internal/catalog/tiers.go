@@ -18,10 +18,12 @@ var sizeMedium = core.Profile{
 	Name: "medium",
 	Addons: withAddons(baseAddons,
 		core.AddonRef{
+			// 12.x: earlier charts ran their CRD-upgrade job on
+			// bitnami/kubectl, which Bitnami has pulled from Docker Hub.
 			Name:       "velero",
 			Chart:      "velero",
 			Repository: "https://vmware-tanzu.github.io/helm-charts",
-			Version:    "8.1.0",
+			Version:    "12.2.0",
 			Namespace:  "velero",
 		},
 		core.AddonRef{
@@ -34,43 +36,40 @@ var sizeMedium = core.Profile{
 	),
 }
 
-// sizeLarge is sizeMedium's set, with the baseline Kyverno policy addon
-// replaced by a strict compliance-oriented set, plus audit logging and OTel
-// tracing.
+// sizeLarge is sizeMedium's set, with the Pod Security policies raised from
+// baseline to restricted, plus an OpenTelemetry collector.
 //
 // It replaces kyverno-policies rather than adding a second Kyverno addon:
-// two Argo CD Applications installing overlapping ClusterPolicy resources
-// into the same cluster would fight over ownership, so the strict set
-// supersedes the baseline one instead of layering on top of it.
+// two Argo CD Applications installing overlapping policies into the same
+// cluster would fight over ownership, so the restricted set supersedes the
+// baseline one instead of layering on top of it. The restricted set stays in
+// Audit mode: node-exporter, falco and fluent-bit all need host access that
+// restricted forbids, so enforcing it would refuse the size's own addons.
 var sizeLarge = core.Profile{
 	Name: "large",
 	Addons: withAddons(replaceAddon(sizeMedium.Addons, "kyverno-policies", core.AddonRef{
 		Name:       "kyverno-policies",
-		Chart:      "kyverno-policies-regulated",
-		Repository: "https://charts.kubespin.dev",
-		Version:    "0.1.0",
+		Chart:      "kyverno-policies",
+		Repository: "https://kyverno.github.io/kyverno",
+		Version:    "3.9.1",
 		Namespace:  "kyverno",
-		Values: map[string]any{"policies": map[string]any{
-			"publicExposureDeny":     true,
-			"denyPrivilegedPods":     true,
-			"mandatoryQuotas":        true,
-			"mandatoryNetworkPolicy": true,
-			"requireImageSignature":  true,
-		}},
+		Values: map[string]any{
+			"podSecurityStandard":     "restricted",
+			"validationFailureAction": "Audit",
+		},
 	}),
 		core.AddonRef{
-			Name:       "audit-logging",
-			Chart:      "audit-logging",
-			Repository: "https://charts.kubespin.dev",
-			Version:    "0.1.0",
-			Namespace:  "kubespin-system",
-		},
-		core.AddonRef{
+			// The chart renders nothing without a mode and an image: it
+			// ships no default for either.
 			Name:       "otel-collector",
 			Chart:      "opentelemetry-collector",
 			Repository: "https://open-telemetry.github.io/opentelemetry-helm-charts",
 			Version:    "0.108.0",
 			Namespace:  "observability",
+			Values: map[string]any{
+				"mode":  "deployment",
+				"image": map[string]any{"repository": "otel/opentelemetry-collector-k8s"},
+			},
 		},
 	),
 }
