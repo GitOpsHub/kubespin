@@ -193,8 +193,9 @@ options bag, because it branches behaviour in two places that must agree:
 - **At addon templating**, it decides load balancer exposure — internal unless
   the cluster is `public` *and* the ingress explicitly asks to be external.
 
-A Kyverno public-exposure-deny policy enforces the same rule at admission, so a
-misconfigured default is caught by the cluster rather than by a reviewer.
+Nothing enforces this rule at admission yet. The Kyverno public-exposure-deny
+policy meant to do it lived in a chart repository that never existed, so it
+never ran. The rule is only as good as the templating above.
 `AuthorizedCIDRs` is rejected on a private cluster: there is no public endpoint
 to restrict, and silently accepting the field would imply otherwise.
 

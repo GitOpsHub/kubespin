@@ -138,3 +138,65 @@ func TestApplyIngressDefaults_DoesNotMutateInput(t *testing.T) {
 		t.Error("ApplyIngressDefaults mutated the caller's values map")
 	}
 }
+
+func loadBalancerAddon(exposure string) core.AddonRef {
+	return core.AddonRef{
+		Name: "opencost", Chart: "opencost", Repository: "https://example", Version: "1.0.0", Namespace: "opencost",
+		Values: map[string]any{
+			"ingress": map[string]any{"exposure": exposure},
+			"service": map[string]any{"type": "LoadBalancer", "annotations": map[string]any{"keep": "me"}},
+		},
+	}
+}
+
+// A private cluster's LoadBalancer Service must come out internal on
+// whichever cloud renders it, whatever the addon asked for.
+func TestApplyIngressDefaults_PrivateLoadBalancerGetsInternalAnnotations(t *testing.T) {
+	patched := ApplyIngressDefaults(core.AccessPrivate, loadBalancerAddon("external"),
+		WithAuthorizedCIDRs([]string{"203.0.113.0/24"}))
+
+	service, _ := patched.Values["service"].(map[string]any)
+	annotations, _ := service["annotations"].(map[string]any)
+	for k, v := range internalLoadBalancerAnnotations {
+		if annotations[k] != v {
+			t.Errorf("annotation %s = %v, want %v", k, annotations[k], v)
+		}
+	}
+	if annotations["keep"] != "me" {
+		t.Error("an existing service annotation was dropped")
+	}
+	if _, ok := service["loadBalancerSourceRanges"]; ok {
+		t.Error("an internal load balancer was given source ranges meant for an external one")
+	}
+}
+
+// A public cluster honours an external request, but only admits the
+// cluster's authorized CIDRs.
+func TestApplyIngressDefaults_PublicLoadBalancerIsLimitedToAuthorizedCIDRs(t *testing.T) {
+	addon := loadBalancerAddon("external")
+	patched := ApplyIngressDefaults(core.AccessPublic, addon, WithAuthorizedCIDRs([]string{"203.0.113.0/24"}))
+
+	service, _ := patched.Values["service"].(map[string]any)
+	ranges, _ := service["loadBalancerSourceRanges"].([]any)
+	if len(ranges) != 1 || ranges[0] != "203.0.113.0/24" {
+		t.Errorf("loadBalancerSourceRanges = %v, want [203.0.113.0/24]", service["loadBalancerSourceRanges"])
+	}
+	annotations, _ := service["annotations"].(map[string]any)
+	if _, ok := annotations["service.beta.kubernetes.io/aws-load-balancer-internal"]; ok {
+		t.Error("an external load balancer was annotated internal")
+	}
+	original, _ := addon.Values["service"].(map[string]any)
+	if _, ok := original["loadBalancerSourceRanges"]; ok {
+		t.Error("ApplyIngressDefaults mutated the caller's service values")
+	}
+}
+
+// A public cluster with no authorized CIDRs leaves the load balancer open,
+// the same as its API endpoint.
+func TestApplyIngressDefaults_PublicLoadBalancerWithoutCIDRsHasNoSourceRanges(t *testing.T) {
+	patched := ApplyIngressDefaults(core.AccessPublic, loadBalancerAddon("external"))
+	service, _ := patched.Values["service"].(map[string]any)
+	if _, ok := service["loadBalancerSourceRanges"]; ok {
+		t.Error("source ranges were set with no authorized CIDRs to take them from")
+	}
+}

@@ -75,33 +75,30 @@ func TestSizeLarge_ReplacesBaselinePolicyRatherThanDuplicatingIt(t *testing.T) {
 		t.Fatalf("kyverno-policies appears %d times, want exactly 1", count)
 	}
 
-	for _, want := range []string{"audit-logging", "otel-collector", "argocd", "velero", "falco"} {
+	for _, want := range []string{"otel-collector", "argocd", "velero", "falco"} {
 		if !large[want] {
 			t.Errorf("size large is missing %s", want)
 		}
 	}
 }
 
+// large raises Pod Security from baseline to restricted, and every size
+// audits rather than enforces: restricted forbids the host access
+// node-exporter, falco and fluent-bit need, so enforcing it would refuse the
+// size's own addons.
 func TestSizeLarge_StrictPolicySetReplacesBaseline(t *testing.T) {
-	for _, a := range sizeLarge.Addons {
-		if a.Name != "kyverno-policies" {
-			continue
-		}
-		policies, ok := a.Values["policies"].(map[string]any)
+	for size, want := range map[*core.Profile]string{&sizeSmall: "baseline", &sizeMedium: "baseline", &sizeLarge: "restricted"} {
+		policies, ok := size.Addon("kyverno-policies")
 		if !ok {
-			t.Fatalf("kyverno-policies has no policies values: %+v", a.Values)
+			t.Fatalf("size %s has no kyverno-policies addon", size.Name)
 		}
-		for _, rule := range []string{
-			"publicExposureDeny", "denyPrivilegedPods", "mandatoryQuotas",
-			"mandatoryNetworkPolicy", "requireImageSignature",
-		} {
-			if policies[rule] != true {
-				t.Errorf("policy %s = %v, want true", rule, policies[rule])
-			}
+		if got := policies.Values["podSecurityStandard"]; got != want {
+			t.Errorf("size %s: podSecurityStandard = %v, want %s", size.Name, got, want)
 		}
-		return
+		if got := policies.Values["validationFailureAction"]; got != "Audit" {
+			t.Errorf("size %s: validationFailureAction = %v, want Audit", size.Name, got)
+		}
 	}
-	t.Fatal("size large has no kyverno-policies addon")
 }
 
 // Every size ships Argo CD and exactly one cluster-autoscaler per cloud —

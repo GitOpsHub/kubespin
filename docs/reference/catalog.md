@@ -44,7 +44,7 @@ build, not editing an external repo or pinning a version.
 func ResolveForCluster(ctx context.Context, resolver Resolver, spec core.ClusterSpec) (core.Profile, error)
 ```
 
-- **Behavior:** `resolver.Resolve(ctx, spec.Size)`, then `Profile.ForProvider(spec.Provider)` to drop unsupported addons, then `withArgoCDAddon` (unexported: injects `argocd.DefaultAddon` as a defensive stand-in `"argocd"` catalog entry on the rare chance a size's catalog entry doesn't carry one — every builtin size does, via `baseAddons`), then `Merge(profile, spec.Overrides)`, then `argocd.ApplyProfileIngressDefaults(spec.Access, merged)`.
+- **Behavior:** `resolver.Resolve(ctx, spec.Size)`, then `Profile.ForProvider(spec.Provider)` to drop unsupported addons, then `withArgoCDAddon` (unexported: injects `argocd.DefaultAddon` as a defensive stand-in `"argocd"` catalog entry on the rare chance a size's catalog entry doesn't carry one — every builtin size does, via `baseAddons`), then `Merge(profile, spec.Overrides)`, then `argocd.ApplyProfileIngressDefaults(spec.Access, merged, argocd.WithAuthorizedCIDRs(spec.AuthorizedCIDRs))`.
 - **Invariant:** because `withArgoCDAddon` runs before `Merge`, every resolved profile always has an `"argocd"` entry, so a `cluster.yaml` override naming `"argocd"` is always legal.
 - **Behavior:** the single seam `internal/orchestrator` goes through (`installArgoCDStep`, `seedRepoStep`, `ReadyReconcile`), so every step of an `apply` resolves the same cluster's size identically.
 
@@ -100,7 +100,8 @@ var baseAddons = []core.AddonRef{ /* cert-manager, gateway-api,
 
 - **Behavior:** the addon set every size carries, unconditionally — this is what "Argo CD and an autoscaler ship at every size" means in practice. `sizeSmall` is exactly this list; `sizeMedium`/`sizeLarge` layer on top of it via `withAddons`/`replaceAddon`.
 - **Invariant — one autoscaler per cluster:** `cluster-autoscaler` appears twice under the same name, once with `Providers: []core.Provider{core.ProviderAWS}` and AWS values, once with `Providers: []core.Provider{core.ProviderGCP, core.ProviderAzure}`. `core.Profile.Validate` allows a repeated name only when the `Providers` gates don't overlap, and `core.Profile.ForProvider` keeps exactly one before an override patch or Argo CD ever sees it, so an override named `cluster-autoscaler` works on every cloud. The AWS entry's values use `${CLUSTER_ID}` and `${REGION}` placeholders, which `ResolveForCluster` fills in before overrides apply. It finds the EKS managed node groups through the `k8s.io/cluster-autoscaler/<cluster>` tag EKS puts on their Auto Scaling groups, and it gets its AWS permissions through EKS Pod Identity (see `provisioner-aws.md`).
-- `ingress-nginx` defaults `ingress.exposure` to `"internal"` until `internal/argocd.ApplyIngressDefaults` overlays the resolved access-mode value; `kyverno-policies` sets `policies.publicExposureDeny: true`, the baseline admission rule the project's architecture invariants require regardless of access mode.
+- `opencost` (chart 2.5.32) serves its UI from a `LoadBalancer` Service. It requests `ingress.exposure: external`, which access-mode templating grants only on a public cluster, and there only to the cluster's `authorizedCIDRs`; a private cluster gets an internal load balancer. OpenCost has no authentication of its own, so its MCP server is turned off rather than exposed alongside the UI. It reads metrics from kube-prometheus-stack's Prometheus (`kube-prometheus-stack-prometheus.monitoring:9090`), because the chart's default `prometheus-server` in `prometheus-system` is never installed. The earlier `1.44.0` pin didn't exist in the chart repository, so the app never synced.
+- `ingress-nginx` defaults `ingress.exposure` to `"internal"` until `internal/argocd.ApplyIngressDefaults` overlays the resolved access-mode value; `kyverno-policies` is Kyverno's upstream Pod Security Standards chart at `baseline`, with `validationFailureAction: Audit`. Violations are reported in PolicyReports but not blocked. There is no public-exposure-deny policy: the `charts.kubespin.dev` repository it came from never existed.
 
 </details>
 
@@ -174,7 +175,7 @@ by `NewBuiltinResolver`, each layering onto `catalog.go`'s `baseAddons`:
 |---|---|---|
 | `sizeSmall` | `"small"` | Exactly `baseAddons` — no layer on top. |
 | `sizeMedium` | `"medium"` | `baseAddons` (via `withAddons`) plus `velero` and `falco`. |
-| `sizeLarge` | `"large"` | `sizeMedium`'s addons with `kyverno-policies` *replaced* (via `replaceAddon`, not appended) by a stricter `kyverno-policies-regulated` chart (`publicExposureDeny`, `denyPrivilegedPods`, `mandatoryQuotas`, `mandatoryNetworkPolicy`, `requireImageSignature` all `true`), plus `audit-logging` and `otel-collector`. |
+| `sizeLarge` | `"large"` | `sizeMedium`'s addons with `kyverno-policies` *replaced* (via `replaceAddon`, not appended) by the same chart at `podSecurityStandard: restricted` (still `Audit`), plus `otel-collector` (`mode: deployment`, `image.repository: otel/opentelemetry-collector-k8s`, since the chart has no default for either). |
 
 **What each size adds, concretely** (the size-comparison a reader most often
 wants):
@@ -182,12 +183,14 @@ wants):
 - **small → medium**: `+velero`, `+falco`. Everything else — including Argo
   CD and the autoscaler — is already present at `small`; medium is a strict
   superset.
-- **medium → large**: `kyverno-policies` is *swapped*, not added to — the
-  baseline `kyverno-policies-baseline` chart (just `publicExposureDeny`) is
-  replaced by `kyverno-policies-regulated` (five strict rules). Replacing
-  rather than layering avoids two Argo CD Applications installing
-  overlapping `ClusterPolicy` resources into the same cluster and fighting
-  over ownership. Plus `+audit-logging`, `+otel-collector`.
+- **medium → large**: `kyverno-policies` is *swapped*, not added to. The
+  `baseline` Pod Security level becomes `restricted`. Replacing rather than
+  layering avoids two Argo CD Applications installing overlapping policies
+  into the same cluster and fighting over ownership. Both stay in Audit mode:
+  restricted forbids the host access node-exporter, falco and fluent-bit
+  need, so enforcing it would refuse the size's own addons. Plus
+  `+otel-collector`. (An `audit-logging` addon was listed here once; its chart
+  never existed, and it was removed.)
 
 #### `withAddons`
 

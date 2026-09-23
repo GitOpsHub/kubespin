@@ -116,3 +116,18 @@ func TestRenderAddonApplications_AddonsAreIndependent(t *testing.T) {
 		t.Error("cert-manager's Application references external-dns")
 	}
 }
+
+// Addon CRDs larger than the 256 KiB last-applied annotation (kyverno's,
+// kube-prometheus-stack's) only apply server-side.
+func TestRenderAddonApplication_UsesServerSideApply(t *testing.T) {
+	app, err := RenderAddonApplication(core.AddonRef{
+		Name: "kyverno", Chart: "kyverno", Repository: "https://kyverno.github.io/kyverno",
+		Version: "3.9.1", Namespace: "kyverno",
+	})
+	if err != nil {
+		t.Fatalf("RenderAddonApplication: %v", err)
+	}
+	if !strings.Contains(string(app), "ServerSideApply=true") {
+		t.Errorf("Application has no ServerSideApply=true sync option:\n%s", app)
+	}
+}
