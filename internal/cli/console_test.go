@@ -3,9 +3,11 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 func consoleLogger(buf *bytes.Buffer, level slog.Level) *slog.Logger {
@@ -18,8 +20,8 @@ func TestConsoleHandler_AlignsColumns(t *testing.T) {
 	var buf bytes.Buffer
 	l := consoleLogger(&buf, slog.LevelInfo)
 
-	l.Info("registered cluster", "cluster", "eks-auto-dev", "phase", "pending")
-	l.Info("phase complete", "cluster", "eks-auto-dev", "phase", "ready")
+	l.Info("Registered Cluster", "cluster", "eks-auto-dev", "phase", "pending")
+	l.Info("Completed Step", "cluster", "eks-auto-dev", "phase", "ready")
 
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	if len(lines) != 2 {
@@ -41,7 +43,7 @@ func TestConsoleHandler_AlignsColumns(t *testing.T) {
 // The cluster is hoisted out of the attributes rather than printed twice.
 func TestConsoleHandler_HoistsCluster(t *testing.T) {
 	var buf bytes.Buffer
-	consoleLogger(&buf, slog.LevelInfo).Info("running step", "cluster", "gke-spot-dev", "step", "create cluster")
+	consoleLogger(&buf, slog.LevelInfo).Info("Starting Step", "cluster", "gke-spot-dev", "step", "create cluster")
 
 	got := buf.String()
 	if !strings.Contains(got, "gke-spot-dev") {
@@ -56,10 +58,10 @@ func TestConsoleHandler_HoistsCluster(t *testing.T) {
 // and config paths log plenty of them.
 func TestConsoleHandler_WithoutACluster(t *testing.T) {
 	var buf bytes.Buffer
-	consoleLogger(&buf, slog.LevelInfo).Info("logging in", "providers", "aws")
+	consoleLogger(&buf, slog.LevelInfo).Info("Logging In", "providers", "aws")
 
 	got := strings.TrimSpace(buf.String())
-	if !strings.Contains(got, "logging in") || !strings.HasSuffix(got, "providers=aws") {
+	if !strings.Contains(got, "Logging In") || !strings.HasSuffix(got, "providers=aws") {
 		t.Errorf("line = %q, want the message and its attributes", got)
 	}
 	if strings.HasSuffix(got, " ") {
@@ -99,7 +101,7 @@ func TestConsoleHandler_RespectsLevel(t *testing.T) {
 // to watch a multi-cloud run pipes every stream through sed.
 func TestConsoleHandler_NoColorWhenNotATerminal(t *testing.T) {
 	var buf bytes.Buffer
-	consoleLogger(&buf, slog.LevelInfo).Info("phase complete", "cluster", "eks-auto-dev")
+	consoleLogger(&buf, slog.LevelInfo).Info("Completed Step", "cluster", "eks-auto-dev")
 
 	if strings.Contains(buf.String(), "\033[") {
 		t.Errorf("ANSI escapes written to a non-terminal: %q", buf.String())
@@ -110,7 +112,7 @@ func TestConsoleHandler_NoColorWhenNotATerminal(t *testing.T) {
 // must not be cluttered with quotes.
 func TestConsoleHandler_QuotesOnlyWhenNeeded(t *testing.T) {
 	var buf bytes.Buffer
-	consoleLogger(&buf, slog.LevelInfo).Info("running step",
+	consoleLogger(&buf, slog.LevelInfo).Info("Starting Step",
 		"step", "create and seed repository", "phase", "cluster-created", "empty", "")
 
 	got := buf.String()
@@ -125,7 +127,7 @@ func TestConsoleHandler_WithAttrsAndGroups(t *testing.T) {
 	var buf bytes.Buffer
 	l := consoleLogger(&buf, slog.LevelInfo).With("run", "abc123").WithGroup("cloud")
 
-	l.Info("created VPC", "vpc", "vpc-01", "cidr", "10.0.0.0/16")
+	l.Info("Created VPC", "vpc", "vpc-01", "cidr", "10.0.0.0/16")
 
 	got := buf.String()
 	for _, want := range []string{"run=abc123", "cloud.vpc=vpc-01", "cloud.cidr=10.0.0.0/16"} {
@@ -176,5 +178,37 @@ func TestConfigLogger_Formats(t *testing.T) {
 	}
 	if defaultLogFormat != "console" {
 		t.Errorf("defaultLogFormat = %q, want console", defaultLogFormat)
+	}
+}
+
+// An error is what a reader scans a failed run for, so it always lands at the
+// end of the line, whatever order the caller passed it in.
+func TestConsoleHandler_ErrorLast(t *testing.T) {
+	var buf bytes.Buffer
+	consoleLogger(&buf, slog.LevelInfo).Error("Step Failed 1/4",
+		"cluster", "eks-auto-dev", "error", errors.New("boom: quota exceeded"), "step", "create cluster")
+
+	got := strings.TrimSpace(buf.String())
+	if !strings.HasSuffix(got, `error="boom: quota exceeded"`) {
+		t.Errorf("error attr is not last: %q", got)
+	}
+	if strings.Count(got, "error=") != 1 {
+		t.Errorf("error attr printed more than once: %q", got)
+	}
+}
+
+// Durations are rounded for a human; nanosecond precision on a multi-minute
+// step is noise.
+func TestConsoleHandler_RoundsDurations(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		12*time.Minute + 3481920317*time.Nanosecond: "took=12m3s",
+		13*time.Second + 234*time.Millisecond:       "took=13.2s",
+		42*time.Millisecond + 7*time.Microsecond:    "took=42ms",
+	} {
+		var buf bytes.Buffer
+		consoleLogger(&buf, slog.LevelInfo).Info("Completed Step", "took", d)
+		if !strings.HasSuffix(strings.TrimSpace(buf.String()), want) {
+			t.Errorf("%v rendered as %q, want %s", d, buf.String(), want)
+		}
 	}
 }

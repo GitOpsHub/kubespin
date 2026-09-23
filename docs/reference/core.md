@@ -396,7 +396,7 @@ type AddonRef struct {
 ```
 
 - **Behavior:** one Helm chart delivered to a cluster; each addon becomes its own Argo CD Application, so addons sync and fail independently.
-- **Fields:** `Providers` restricts the addon to the named clouds (e.g. Karpenter, EKS-only); empty means every provider — only `Profile.ForProvider` acts on it, so a profile resolved without going through `ForProvider` still carries every addon regardless of this field.
+- **Fields:** `Providers` restricts the addon to the named clouds (e.g. the AWS-configured `cluster-autoscaler` entry); empty means every provider — only `Profile.ForProvider` acts on it, so a profile resolved without going through `ForProvider` still carries every addon regardless of this field.
 
 </details>
 
@@ -471,7 +471,7 @@ func (p Profile) Validate() error
 ```
 
 - **Behavior:** `ForProvider` returns a copy of `p` with every addon that does not support `provider` dropped (via `AddonRef.SupportsProvider`); `ForAutopilot` returns a copy of `p` with every addon dropped when `autopilot` is true (GKE Autopilot and EKS Auto Mode manage compute, storage, load balancing, and autoscaling natively, so none of a size tier's addons are meaningful — the cluster gets nothing beyond Argo CD itself, re-added by `catalog.withArgoCDAddon`); `Addon` looks up an addon by name, reporting whether it was found; `Validate` requires a non-empty `Name`, requires at least one addon, validates each `AddonRef`, and rejects duplicate addon names (two Argo CD Applications cannot share a name).
-- **Invariants:** callers resolve a profile for a specific cluster's provider through `ForProvider` before applying override patches, so e.g. Karpenter never renders into a GCP or Azure cluster's `addons.yaml`, and an override naming it on those clouds correctly fails as unknown rather than silently applying.
+- **Invariants:** callers resolve a profile for a specific cluster's provider through `ForProvider` before applying override patches, so an addon configured for one cloud never renders into another cloud's `addons.yaml`, and an override naming a gated-out addon correctly fails as unknown rather than silently applying. `Profile.Validate` allows two addons with the same name only when their `Providers` gates are disjoint, so `ForProvider` keeps at most one of them.
 - **Behavior:** `Addon` is what `internal/orchestrator.installArgoCDStep` uses to pull the `"argocd"` entry `catalog.ResolveForCluster` guarantees is always present, instead of a caller-side loop.
 
 </details>

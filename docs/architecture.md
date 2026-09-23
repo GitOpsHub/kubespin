@@ -215,18 +215,20 @@ Three shape decisions matter more than they look:
 - **`Reconcile` reports "already correct" as data**, not by the caller diffing
   before-and-after state. The no-op guarantee above depends on being able to
   prove nothing happened.
-- **Workload identity is bound after the control plane is up.** A cluster's
-  OIDC issuer does not exist until then, so AWS's EBS/EFS CSI IRSA roles are
-  provisioned during the cluster reconcile rather than alongside the create
-  request.
+- **Workload identity is bound after the control plane is up.** On AWS every
+  add-on that needs AWS permissions gets them through EKS Pod Identity. The
+  association names a namespace and service account and needs a live cluster,
+  so these roles are bound during the cluster reconcile rather than alongside
+  the create request.
 
 `Reconcile` never deletes a node pool. Removing one evicts running workloads,
 which is a decision for a human rather than something a loop does because a file
 changed.
 
-On AWS the IRSA trust policy is scoped by both `sub` and `aud` — without `sub`
-any service account in the cluster could assume the role, and without `aud` a
-token minted for another audience would be accepted.
+On AWS each add-on role trusts only `pods.eks.amazonaws.com`. Which pod can
+use a role is decided by its Pod Identity association, which names one
+service account in one namespace of one cluster. The trust policy doesn't
+have to encode that, and there's no IAM OIDC provider to register or clean up.
 
 ## Convergence without a state file
 

@@ -30,13 +30,19 @@ var defaultInstanceType = map[core.Provider]string{
 
 // spotNodePoolDefault is the node pool shape --spot implies unless the
 // operator overrides a piece of it explicitly. The default (size=small)
-// addon set (cilium, kube-prometheus-stack, ingress-nginx, kyverno, ...) needs more
+// addon set (kube-prometheus-stack, ingress-nginx, kyverno, ...) needs more
 // headroom than a free-tier micro instance provides — these are the
 // smallest instance types that reliably schedule it, not each cloud's
 // absolute cheapest SKU, plus a small node count and disk size to match.
 // This is what lets --spot alone be enough for a cheap dev cluster instead
 // of also requiring --instance-type/--min-size/--max-size/--desired-size/
 // --disk-size to avoid launching at m6i.large-equivalent size and cost.
+//
+// AWS gets core.InstanceTypeAuto rather than a fixed type: the provisioner
+// prices every 2 vCPU / 4 GiB+ spot type live at node-group creation and
+// hands EKS the cheapest few, so the pool always runs on whatever is lowest
+// cost in that region right now. GKE and AKS pools take a single machine
+// size, so those clouds keep a fixed cheap one.
 type spotNodePoolDefault struct {
 	instanceType string
 	minSize      int32
@@ -46,7 +52,7 @@ type spotNodePoolDefault struct {
 }
 
 var spotNodePoolDefaults = map[core.Provider]spotNodePoolDefault{
-	core.ProviderAWS:   {instanceType: "t3.medium", minSize: 1, maxSize: 2, desiredSize: 1, diskSizeGB: 20},
+	core.ProviderAWS:   {instanceType: core.InstanceTypeAuto, minSize: 1, maxSize: 2, desiredSize: 1, diskSizeGB: 20},
 	core.ProviderGCP:   {instanceType: "e2-medium", minSize: 1, maxSize: 2, desiredSize: 1, diskSizeGB: 30},
 	core.ProviderAzure: {instanceType: "Standard_B2s", minSize: 1, maxSize: 2, desiredSize: 1, diskSizeGB: 30},
 }

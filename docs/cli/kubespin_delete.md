@@ -9,13 +9,13 @@ Decommission a cluster and its supporting resources
 ## Synopsis
 
 delete performs the teardown in reverse order: mark the cluster
-decommissioning in the cluster registry, delete the cluster, archive its
-repository, and record it decommissioned.
+decommissioning in the cluster registry, delete the cluster, its network and
+its repository, then remove the cluster's registry record.
 
-Repositories are archived, never deleted: history is retained.
+Once the record is removed, the cluster ID is free: a later apply with the
+same ID provisions a brand-new cluster.
 
-delete is idempotent and resumable exactly like apply: a cluster already
-decommissioned is a no-op, and a failed teardown resumes from
+delete is resumable exactly like apply: a failed teardown resumes from
 decommissioning on retry rather than needing to be reasoned about by hand.
 
 The spec identifies which cluster and cloud to tear down. It may come from a

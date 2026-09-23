@@ -32,9 +32,12 @@ type eksAPI interface {
 	DescribeAddon(context.Context, *eks.DescribeAddonInput, ...func(*eks.Options)) (*eks.DescribeAddonOutput, error)
 	CreateAddon(context.Context, *eks.CreateAddonInput, ...func(*eks.Options)) (*eks.CreateAddonOutput, error)
 	UpdateAddon(context.Context, *eks.UpdateAddonInput, ...func(*eks.Options)) (*eks.UpdateAddonOutput, error)
+	ListPodIdentityAssociations(context.Context, *eks.ListPodIdentityAssociationsInput, ...func(*eks.Options)) (*eks.ListPodIdentityAssociationsOutput, error)
+	CreatePodIdentityAssociation(context.Context, *eks.CreatePodIdentityAssociationInput, ...func(*eks.Options)) (*eks.CreatePodIdentityAssociationOutput, error)
 }
 
-// iamAPI covers both the service roles EKS needs and the IRSA role.
+// iamAPI covers the service roles EKS needs and each add-on's Pod Identity
+// role. The OIDC provider calls only clean up after IRSA-era clusters.
 type iamAPI interface {
 	GetRole(context.Context, *iam.GetRoleInput, ...func(*iam.Options)) (*iam.GetRoleOutput, error)
 	CreateRole(context.Context, *iam.CreateRoleInput, ...func(*iam.Options)) (*iam.CreateRoleOutput, error)
@@ -44,10 +47,13 @@ type iamAPI interface {
 	DetachRolePolicy(context.Context, *iam.DetachRolePolicyInput, ...func(*iam.Options)) (*iam.DetachRolePolicyOutput, error)
 	ListOpenIDConnectProviders(context.Context, *iam.ListOpenIDConnectProvidersInput, ...func(*iam.Options)) (*iam.ListOpenIDConnectProvidersOutput, error)
 	GetOpenIDConnectProvider(context.Context, *iam.GetOpenIDConnectProviderInput, ...func(*iam.Options)) (*iam.GetOpenIDConnectProviderOutput, error)
-	CreateOpenIDConnectProvider(context.Context, *iam.CreateOpenIDConnectProviderInput, ...func(*iam.Options)) (*iam.CreateOpenIDConnectProviderOutput, error)
 	DeleteOpenIDConnectProvider(context.Context, *iam.DeleteOpenIDConnectProviderInput, ...func(*iam.Options)) (*iam.DeleteOpenIDConnectProviderOutput, error)
 	ListInstanceProfilesForRole(context.Context, *iam.ListInstanceProfilesForRoleInput, ...func(*iam.Options)) (*iam.ListInstanceProfilesForRoleOutput, error)
 	RemoveRoleFromInstanceProfile(context.Context, *iam.RemoveRoleFromInstanceProfileInput, ...func(*iam.Options)) (*iam.RemoveRoleFromInstanceProfileOutput, error)
+	GetRolePolicy(context.Context, *iam.GetRolePolicyInput, ...func(*iam.Options)) (*iam.GetRolePolicyOutput, error)
+	PutRolePolicy(context.Context, *iam.PutRolePolicyInput, ...func(*iam.Options)) (*iam.PutRolePolicyOutput, error)
+	ListRolePolicies(context.Context, *iam.ListRolePoliciesInput, ...func(*iam.Options)) (*iam.ListRolePoliciesOutput, error)
+	DeleteRolePolicy(context.Context, *iam.DeleteRolePolicyInput, ...func(*iam.Options)) (*iam.DeleteRolePolicyOutput, error)
 }
 
 // ec2API covers the VPC/subnets/Internet Gateway/route table EnsureNetwork
@@ -67,6 +73,12 @@ type ec2API interface {
 	CreateRouteTable(context.Context, *ec2.CreateRouteTableInput, ...func(*ec2.Options)) (*ec2.CreateRouteTableOutput, error)
 	CreateRoute(context.Context, *ec2.CreateRouteInput, ...func(*ec2.Options)) (*ec2.CreateRouteOutput, error)
 	AssociateRouteTable(context.Context, *ec2.AssociateRouteTableInput, ...func(*ec2.Options)) (*ec2.AssociateRouteTableOutput, error)
+
+	// Used only to resolve core.InstanceTypeAuto into the cheapest spot
+	// instance types at node-group creation.
+	DescribeInstanceTypes(context.Context, *ec2.DescribeInstanceTypesInput, ...func(*ec2.Options)) (*ec2.DescribeInstanceTypesOutput, error)
+	DescribeInstanceTypeOfferings(context.Context, *ec2.DescribeInstanceTypeOfferingsInput, ...func(*ec2.Options)) (*ec2.DescribeInstanceTypeOfferingsOutput, error)
+	DescribeSpotPriceHistory(context.Context, *ec2.DescribeSpotPriceHistoryInput, ...func(*ec2.Options)) (*ec2.DescribeSpotPriceHistoryOutput, error)
 
 	// The rest are used only by DeleteNetwork, reversing EnsureNetwork.
 	DescribeSecurityGroups(context.Context, *ec2.DescribeSecurityGroupsInput, ...func(*ec2.Options)) (*ec2.DescribeSecurityGroupsOutput, error)
@@ -120,14 +132,12 @@ func NewClients(ctx context.Context, region string, opts ...Option) (*Clients, e
 // AWS-managed policies. Attaching these rather than authoring equivalents keeps
 // the cluster current as AWS extends what EKS control planes and nodes need.
 const (
-	policyEKSCluster        = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
-	policyEKSWorkerNode     = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
-	policyEKSCNI            = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
-	policyECRReadOnly       = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
-	policyEBSCSIDriver      = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
-	policyEFSCSIDriver      = "arn:aws:iam::aws:policy/service-role/AmazonEFSCSIDriverPolicy"
-	eksOIDCThumbprint       = "9e99a48a9960b14926bb7f3b02e22da2b0ab7280"
-	eksOIDCClientIDAudience = "sts.amazonaws.com"
+	policyEKSCluster    = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+	policyEKSWorkerNode = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+	policyEKSCNI        = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+	policyECRReadOnly   = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+	policyEBSCSIDriver  = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+	policyEFSCSIDriver  = "arn:aws:iam::aws:policy/service-role/AmazonEFSCSIDriverPolicy"
 
 	// EKS Auto Mode policies: the cluster role needs four extra managed
 	// policies beyond policyEKSCluster, and Auto Mode's self-managed nodes
@@ -144,13 +154,6 @@ const (
 	// auto-create-node-role.html).
 	policyEKSWorkerNodeMinimal = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodeMinimalPolicy"
 	policyECRPullOnly          = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly"
-
-	// addonEBSCSIDriver and addonEFSCSIDriver are the EKS-managed addon names
-	// (not Helm charts): EKS installs and updates these itself, so kubespin
-	// only has to provision the IRSA role each one assumes and request the
-	// addon by name, the same way `eksctl create addon` would.
-	addonEBSCSIDriver = "aws-ebs-csi-driver"
-	addonEFSCSIDriver = "aws-efs-csi-driver"
 )
 
 // names derives every AWS resource name from the cluster ID, so a cluster's
@@ -169,12 +172,18 @@ func (n names) nodeGroup(pool string) string {
 	return n.spec.ID.String() + "-" + pool
 }
 
-func (n names) irsaRole(comp string) string {
+// addonRole names the Pod Identity role of one add-on. IRSA-era clusters
+// used the same names, so their roles are still found and cleaned up.
+func (n names) addonRole(comp string) string {
 	return "kubespin-" + n.spec.ID.String() + "-" + comp
 }
 
-func (n names) ebsCSIRole() string { return n.irsaRole("ebs-csi") }
-func (n names) efsCSIRole() string { return n.irsaRole("efs-csi") }
+func (n names) ebsCSIRole() string      { return n.addonRole("ebs-csi") }
+func (n names) efsCSIRole() string      { return n.addonRole("efs-csi") }
+func (n names) externalDNSRole() string { return n.addonRole("external-dns") }
+func (n names) clusterAutoscalerRole() string {
+	return n.addonRole("cluster-autoscaler")
+}
 
 func (n names) vpcName() string { return "kubespin-" + n.spec.ID.String() }
 func (n names) subnetName(az string) string {

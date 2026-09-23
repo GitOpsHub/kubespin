@@ -154,10 +154,10 @@ func (h *HelmInstaller) Install(ctx context.Context, restConfig *rest.Config, ad
 		case err != nil:
 			// Not fatal: an unreadable release is a reason to converge, not
 			// to fail an apply. Fall through to the upgrade.
-			h.logger.Warn("could not read the current argocd release; upgrading to converge",
-				"release", ReleaseName, "error", err)
+			h.logger.Warn("Argo CD Release Unreadable",
+				"release", ReleaseName, "action", "upgrading to converge", "error", err)
 		case upToDate(current, addon):
-			h.logger.Info("argocd already at the desired chart version and values; nothing to upgrade",
+			h.logger.Info("Argo CD Up To Date",
 				"chart", addon.Chart, "version", addon.Version, "revision", current.Version)
 			return nil
 		}
@@ -179,12 +179,12 @@ func (h *HelmInstaller) Install(ctx context.Context, restConfig *rest.Config, ad
 		if err != nil {
 			return fmt.Errorf("loading chart %s: %w", addon.Chart, err)
 		}
-		h.logger.Info("upgrading argocd and waiting for it to become ready",
+		h.logger.Info("Upgrading Argo CD",
 			"chart", addon.Chart, "version", addon.Version, "timeout", h.waitTimeout())
 		if _, err := up.RunWithContext(ctx, ReleaseName, chrt, addon.Values); err != nil {
 			return fmt.Errorf("upgrading %s: %w", ReleaseName, err)
 		}
-		h.logger.Info("upgraded argocd release", "chart", addon.Chart, "version", addon.Version)
+		h.logger.Info("Upgraded Argo CD", "chart", addon.Chart, "version", addon.Version)
 		return nil
 	}
 
@@ -221,12 +221,12 @@ func (h *HelmInstaller) Install(ctx context.Context, restConfig *rest.Config, ad
 	}
 	// Pulling Argo CD's images onto fresh nodes takes minutes; say so rather
 	// than looking hung.
-	h.logger.Info("installing argocd and waiting for it to become ready; this takes a few minutes",
-		"chart", addon.Chart, "version", addon.Version, "timeout", h.waitTimeout())
+	h.logger.Info("Installing Argo CD",
+		"chart", addon.Chart, "version", addon.Version, "timeout", h.waitTimeout(), "note", "waits for readiness; takes a few minutes")
 	if _, err := inst.RunWithContext(ctx, chrt, addon.Values); err != nil {
 		return fmt.Errorf("installing %s: %w", ReleaseName, err)
 	}
-	h.logger.Info("installed argocd release", "chart", addon.Chart, "version", addon.Version)
+	h.logger.Info("Installed Argo CD", "chart", addon.Chart, "version", addon.Version)
 	return nil
 }
 
@@ -327,7 +327,7 @@ func (h *HelmInstaller) releaseExists(cfg *action.Configuration, releaseName str
 func (h *HelmInstaller) recoverPendingRelease(
 	cfg *action.Configuration, releaseName string, hist []*release.Release, latest *release.Release,
 ) (bool, error) {
-	h.logger.Warn("release stuck mid-operation from an earlier interrupted run; recovering",
+	h.logger.Warn("Recovering Stuck Release",
 		"release", releaseName, "status", latest.Info.Status, "revision", latest.Version)
 
 	lastDeployed := lastDeployedRevision(hist)
@@ -336,7 +336,7 @@ func (h *HelmInstaller) recoverPendingRelease(
 		if _, err := action.NewUninstall(cfg).Run(releaseName); err != nil && !errors.Is(err, driver.ErrReleaseNotFound) {
 			return false, fmt.Errorf("uninstalling stuck %s release: %w", releaseName, err)
 		}
-		h.logger.Info("uninstalled stuck release; will install fresh", "release", releaseName)
+		h.logger.Info("Uninstalled Stuck Release", "release", releaseName)
 		return false, nil
 	}
 
@@ -345,7 +345,7 @@ func (h *HelmInstaller) recoverPendingRelease(
 	if err := rb.Run(releaseName); err != nil {
 		return false, fmt.Errorf("rolling back stuck %s release to revision %d: %w", releaseName, lastDeployed.Version, err)
 	}
-	h.logger.Info("rolled back stuck release to its last good revision",
+	h.logger.Info("Rolled Back Stuck Release",
 		"release", releaseName, "revision", lastDeployed.Version)
 	return true, nil
 }
@@ -372,7 +372,7 @@ func lastDeployedRevision(hist []*release.Release) *release.Release {
 func (h *HelmInstaller) actionConfig(restConfig *rest.Config) (*action.Configuration, error) {
 	cfg := new(action.Configuration)
 	getter := &staticRESTClientGetter{cfg: restConfig}
-	debugLog := func(format string, v ...any) { h.logger.Debug(fmt.Sprintf(format, v...)) }
+	debugLog := func(format string, v ...any) { h.logger.Debug("Helm", "detail", fmt.Sprintf(format, v...)) }
 	if err := cfg.Init(getter, installNamespace, "secret", debugLog); err != nil {
 		return nil, fmt.Errorf("initialising helm action configuration: %w", err)
 	}

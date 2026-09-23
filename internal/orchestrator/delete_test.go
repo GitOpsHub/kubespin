@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/GitOpsHub/kubespin/internal/core"
 	"github.com/GitOpsHub/kubespin/internal/registry"
@@ -44,40 +45,44 @@ func TestDelete_TearsDownAReadyCluster(t *testing.T) {
 		t.Error("teardown was never called")
 	}
 
-	stored, err := reg.Get(t.Context(), spec.ID)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if stored.Phase != core.PhaseDecommissioned {
-		t.Errorf("stored phase = %s, want decommissioned", stored.Phase)
+	if _, err := reg.Get(t.Context(), spec.ID); !errors.Is(err, registry.ErrNotFound) {
+		t.Errorf("Get after delete: error = %v, want ErrNotFound; the record should be removed", err)
 	}
 }
 
-func TestDelete_IsIdempotent(t *testing.T) {
+func TestDelete_RemovesALegacyDecommissionedRecord(t *testing.T) {
 	reg := registry.NewMemory()
 	spec := testSpec()
-	seedReadyCluster(t, reg, spec)
 
-	o := newOrchestrator(t, reg, newRecorder().steps())
-	noop := func(context.Context, core.ClusterSpec, registry.Record) error { return nil }
-
-	if _, err := o.Delete(t.Context(), spec, noop); err != nil {
-		t.Fatalf("first Delete: %v", err)
-	}
-
-	var calledAgain bool
-	rec, err := o.Delete(t.Context(), spec, func(context.Context, core.ClusterSpec, registry.Record) error {
-		calledAgain = true
-		return nil
-	})
+	created, err := reg.Create(t.Context(), registry.NewRecord(spec, time.Now()))
 	if err != nil {
-		t.Fatalf("second Delete: %v", err)
+		t.Fatalf("Create: %v", err)
 	}
-	if calledAgain {
+	decommissioning, err := reg.UpdatePhase(t.Context(), created, core.PhaseDecommissioning)
+	if err != nil {
+		t.Fatalf("UpdatePhase: %v", err)
+	}
+	if _, err := reg.UpdatePhase(t.Context(), decommissioning, core.PhaseDecommissioned); err != nil {
+		t.Fatalf("UpdatePhase: %v", err)
+	}
+
+	var torndown bool
+	rec, err := newOrchestrator(t, reg, newRecorder().steps()).Delete(t.Context(), spec,
+		func(context.Context, core.ClusterSpec, registry.Record) error {
+			torndown = true
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if torndown {
 		t.Error("teardown ran again on an already-decommissioned cluster")
 	}
 	if rec.Phase != core.PhaseDecommissioned {
 		t.Errorf("Phase = %s, want decommissioned", rec.Phase)
+	}
+	if _, err := reg.Get(t.Context(), spec.ID); !errors.Is(err, registry.ErrNotFound) {
+		t.Errorf("Get after delete: error = %v, want ErrNotFound", err)
 	}
 }
 

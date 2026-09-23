@@ -27,10 +27,12 @@ here is cloud-specific to that pair.
 |---|---|---|---|
 | [`eksAPI`, `iamAPI`, `ec2API`](#eksapi-iamapi-ec2api-interfaces) | interfaces | aws.go | narrow SDK v2 client interfaces |
 | [`Clients`](#clients) | struct | aws.go | shared SDK clients + logger |
-| [AWS-managed policy / OIDC constants](#aws-managed-policy--oidc-constants) | constants | aws.go | policy ARNs, OIDC thumbprint |
+| [AWS-managed policy constants](#aws-managed-policy--oidc-constants) | constants | aws.go | policy ARNs |
 | [`names`](#names--deterministic-resource-naming) | struct | aws.go | deterministic resource naming from cluster ID |
 | [`ClusterProvisioner`](#clusterprovisioner-1) | struct | cluster.go | EKS cluster + node group lifecycle |
-| [EKS-managed CSI addons](#eks-managed-csi-addons-ebsefs) | functions | cluster.go | `ensureCSIAddons`, `ensureAddon` — EBS/EFS CSI drivers via the EKS addon API |
+| [EKS add-ons](#addonsgo) | functions | addons.go | `networkAddons`, `workloadAddons`, `ensureManagedAddon` — every EKS add-on kubespin installs, with Pod Identity |
+| [Cluster autoscaler identity](#autoscalergo) | functions | autoscaler.go | `ensureClusterAutoscalerIdentity` — Pod Identity for the one Helm chart that needs AWS permissions |
+| [Spot instance selection](#instancetypesgo) | functions | instancetypes.go | `resolveAutoInstanceTypes` — the cheapest spot types for `instanceType: auto` |
 | [Role helpers](#role-helpers) | functions | cluster.go | `ensureRole`, `attachPolicies`, `eksServiceTrust` |
 | [Validation and misc](#validation-and-misc) | functions | cluster.go | `validateForEKS`, `findPool`, `record` |
 | [REST config / bearer token minting](#kubeauthgo--rest-config--bearer-token-minting) | functions | kubeauth.go | STS-presigned bearer token for `*rest.Config` |
@@ -207,7 +209,41 @@ func WaitUntilGone(ctx context.Context, p ClusterProvisioner, spec core.ClusterS
 
 ## AWS implementation (`internal/provisioner/aws`)
 
-Package doc: "provisions EKS clusters and IRSA identities." Every AWS service is reached through a narrow interface listing only the calls the package makes — this keeps the provisioner testable without credentials and doubles as the exact IAM permission set an operator must grant.
+Package doc: "provisions EKS clusters and their networks." Every AWS service is reached through a narrow interface listing only the calls the package makes — this keeps the provisioner testable without credentials and doubles as the exact IAM permission set an operator must grant.
+
+## addons.go
+
+Where AWS ships an EKS add-on for a component a cluster needs, kubespin installs that through the EKS add-on API instead of a Helm chart delivered by Argo CD. EKS owns the add-on's lifecycle and its compatibility with the control plane, and binds its AWS permissions itself. The catalog limits the Helm equivalents (`cert-manager`, `external-dns`, `fluent-bit`) to GCP/Azure through `Providers`, so the two never both run on one cluster.
+
+| Add-on | Phase | Pod Identity role | Configuration |
+|---|---|---|---|
+| `vpc-cni` | before node groups | — (node role's `AmazonEKS_CNI_Policy`) | `ENABLE_PREFIX_DELEGATION=true`, `WARM_PREFIX_TARGET=1` |
+| `kube-proxy` | before node groups | — | defaults |
+| `eks-pod-identity-agent` | after node groups | — | defaults |
+| `coredns` | after node groups | — | defaults |
+| `aws-ebs-csi-driver` | after node groups | `kubespin-<id>-ebs-csi` (`AmazonEBSCSIDriverPolicy`) | defaults |
+| `aws-efs-csi-driver` | after node groups; also on Auto Mode | `kubespin-<id>-efs-csi` (`AmazonEFSCSIDriverPolicy`) | defaults |
+| `cert-manager` | after node groups | — | defaults |
+| `external-dns` | after node groups | `kubespin-<id>-external-dns` (inline: record-set writes, zone reads) | `txtOwnerId: <cluster id>` |
+| `fluent-bit` | after node groups | — | defaults |
+
+- **Prefix delegation:** each ENI slot provides a /28 prefix instead of a single IP. That raises a node's pod limit from its ENI-bound value (17 on a `t3.medium`) to EKS's cap of 110. `vpc-cni` is installed before any node group because a managed node group sets its nodes' max-pods from the CNI configuration when the group is created. Prefix delegation needs Nitro instances, so `instanceType: auto` only selects Nitro types.
+- **Why `vpc-cni` keeps the node role:** it must hand out pod IPs before the Pod Identity agent can start, so it doesn't use Pod Identity.
+- **Pod Identity is the default for every add-on that needs AWS permissions.** `ensureManagedAddon` creates a role trusting only `pods.eks.amazonaws.com` and passes it on the add-on itself (`CreateAddon`/`UpdateAddon` `PodIdentityAssociations`). No IAM OIDC provider is registered.
+- **IRSA-era add-ons are left alone:** an add-on an older kubespin bound through IRSA (a `ServiceAccountRoleArn`) keeps that binding, because it still works. Moving it to Pod Identity is a deliberate, separate step, not something every apply retries.
+- **Adopting existing installs:** `ResolveConflicts=OVERWRITE` adopts what's already running: the unmanaged `vpc-cni`/`kube-proxy`/`coredns` EKS installs on every cluster, and Helm releases an older kubespin delivered through Argo CD.
+- **No-op applies stay no-op:** configuration drift is compared as JSON, so key order and whitespace don't count. An unchanged add-on costs one `DescribeAddon`, plus role reads when it has an identity, and no writes.
+- **Auto Mode:** it runs its own networking, DNS, block storage and Pod Identity agent, so only `aws-efs-csi-driver` is installed there.
+- **Kept as Helm charts on AWS:** there's no EKS add-on running the same software for `cluster-autoscaler`, kube-prometheus-stack, kyverno, ingress-nginx, external-secrets, opencost, velero, falco, the OTel collector, or gateway-api. `adot` sends to CloudWatch/X-Ray rather than acting as a generic collector, and `kubecost` is a Marketplace product.
+
+## autoscaler.go
+
+`ensureClusterAutoscalerIdentity` gives the catalog's `cluster-autoscaler` addon its AWS permissions. It runs on every non-Auto-Mode `Create`/`Reconcile`, and each step is a no-op when nothing has drifted:
+
+1. Ensures role `kubespin-<id>-cluster-autoscaler`, trusting `pods.eks.amazonaws.com`, with an inline policy. The policy allows the read-only Auto Scaling/EC2 discovery calls everywhere, but `SetDesiredCapacity`/`TerminateInstanceInAutoScalingGroup` only on groups tagged `k8s.io/cluster-autoscaler/<cluster>=owned`.
+2. Binds that role to `kube-system/cluster-autoscaler` with an EKS Pod Identity association.
+
+AWS ships no EKS add-on for cluster-autoscaler, so it stays a catalog Helm chart. Its association is created directly (`CreatePodIdentityAssociation`) rather than through `CreateAddon`, and the chart's values only need to name the service account. It depends on the `eks-pod-identity-agent` add-on from `addons.go`. `Delete` removes the role; `deleteRole` now also deletes inline policies, because IAM refuses to delete a role that still has one.
 
 ## aws.go
 
@@ -218,9 +254,9 @@ Narrow interfaces over the AWS SDK v2 clients.
 <details>
 <summary>Signature</summary>
 
-- **`eksAPI`:** `DescribeCluster`, `CreateCluster`, `UpdateClusterConfig`, `DeleteCluster`, `ListNodegroups`, `DescribeNodegroup`, `CreateNodegroup`, `UpdateNodegroupConfig`, `DeleteNodegroup`.
-- **`iamAPI`:** service-role and IRSA-role calls — `GetRole`, `CreateRole`, `DeleteRole`, `UpdateAssumeRolePolicy`, `AttachRolePolicy`, `ListAttachedRolePolicies`, `DetachRolePolicy`, `ListOpenIDConnectProviders`, `GetOpenIDConnectProvider`, `CreateOpenIDConnectProvider`.
-- **`ec2API`:** when `spec.Subnets` is empty, VPC/subnet/IGW/route-table creation (`DescribeVpcs`, `CreateVpc`, `ModifyVpcAttribute`, `DescribeAvailabilityZones`, `DescribeSubnets`, `CreateSubnet`, `DescribeInternetGateways`, `CreateInternetGateway`, `AttachInternetGateway`, `DescribeRouteTables`, `CreateRouteTable`, `CreateRoute`, `AssociateRouteTable`).
+- **`eksAPI`:** `DescribeCluster`, `CreateCluster`, `UpdateClusterConfig`, `DeleteCluster`, `ListNodegroups`, `DescribeNodegroup`, `CreateNodegroup`, `UpdateNodegroupConfig`, `DeleteNodegroup`, `DescribeAddon`, `CreateAddon`, `UpdateAddon`, `ListPodIdentityAssociations`, `CreatePodIdentityAssociation`.
+- **`iamAPI`:** service roles and add-on Pod Identity roles — `GetRole`, `CreateRole`, `DeleteRole`, `UpdateAssumeRolePolicy`, `AttachRolePolicy`, `ListAttachedRolePolicies`, `DetachRolePolicy`, `GetRolePolicy`, `PutRolePolicy`, `ListRolePolicies`, `DeleteRolePolicy`, `ListInstanceProfilesForRole`, `RemoveRoleFromInstanceProfile`; plus `ListOpenIDConnectProviders`, `GetOpenIDConnectProvider`, `DeleteOpenIDConnectProvider`, used only to remove the OIDC provider an IRSA-era cluster had.
+- **`ec2API`:** when `spec.Subnets` is empty, VPC/subnet/IGW/route-table creation (`DescribeVpcs`, `CreateVpc`, `ModifyVpcAttribute`, `DescribeAvailabilityZones`, `DescribeSubnets`, `CreateSubnet`, `DescribeInternetGateways`, `CreateInternetGateway`, `AttachInternetGateway`, `DescribeRouteTables`, `CreateRouteTable`, `CreateRoute`, `AssociateRouteTable`); for a node pool with `instanceType: auto`, the spot price lookup at node-group creation (`DescribeSubnets`, `DescribeInstanceTypes`, `DescribeInstanceTypeOfferings`, `DescribeSpotPriceHistory`).
 
 </details>
 
@@ -282,7 +318,7 @@ func (n names) cluster() string
 func (n names) clusterRole() string             // "kubespin-<clusterID>-cluster"
 func (n names) nodeRole() string                // "kubespin-<clusterID>-node"
 func (n names) nodeGroup(pool string) string     // "<clusterID>-<pool>"
-func (n names) irsaRole(comp string) string      // "kubespin-<clusterID>-<comp>"
+func (n names) addonRole(comp string) string     // "kubespin-<clusterID>-<comp>" (Pod Identity role)
 func (n names) vpcName() string                  // "kubespin-<clusterID>"
 func (n names) subnetName(az string) string      // "kubespin-<clusterID>-subnet-<az>"
 func (n names) igwName() string                  // "kubespin-<clusterID>-igw"
@@ -328,7 +364,7 @@ func (p *ClusterProvisioner) Provider() core.Provider // core.ProviderAWS
     - Validates the spec (`validateForEKS`).
     - Ensures the EKS cluster service role exists with `AmazonEKSClusterPolicy` attached.
     - `Describe`s the cluster. If absent, calls `createCluster` and returns — node groups cannot attach until the control plane is active, so they are deferred to `Reconcile` once the caller has polled to active.
-    - If already active, calls `ensureNodeGroups` then `ensureCSIAddons` directly (covers a resumed run that crashed after cluster creation but before node groups/addons).
+    - If already active, calls `ensureComputeAndAddons` directly (covers a resumed run that crashed after cluster creation but before node groups/addons).
 - `createCluster` issues `eks.CreateCluster` with:
 
 ```go
@@ -395,7 +431,7 @@ func vpcConfig(spec core.ClusterSpec) *ekstypes.VpcConfigRequest {
 <details>
 <summary>`Reconcile(ctx, spec) (provisioner.Change, error)`</summary>
 
-- **Behavior:** `Describe`s the cluster (errors if `StatusAbsent`, wrapping `provisioner.ErrNotFound`), then merges the `Change` from `reconcileAccess`, `ensureNodeGroups`, and `ensureCSIAddons`.
+- **Behavior:** `Describe`s the cluster (errors if `StatusAbsent`, wrapping `provisioner.ErrNotFound`), then merges the `Change` from `reconcileAccess` and `ensureComputeAndAddons`. That runs, in order: the network add-ons, `ensureNodeGroups`, the workload add-ons, and `ensureClusterAutoscalerIdentity`. Auto Mode skips the node groups and the autoscaler identity, and gets only the add-ons it lacks.
 - `reconcileAccess`: compares `state.Access` to `spec.Access`; if they differ, calls `eks.UpdateClusterConfig` with the same `vpcConfig(spec)` used at creation, and reports a `Change` detail `"access <old> -> <new>"`.
 - `ensureNodeGroups`:
     - First ensures the node IAM role (`AmazonEKSWorkerNodePolicy`, `AmazonEKS_CNI_Policy`, `AmazonEC2ContainerRegistryReadOnly`) exists.
@@ -411,58 +447,18 @@ func vpcConfig(spec core.ClusterSpec) *ekstypes.VpcConfigRequest {
 
 - **Behavior:** tears down everything `Create` provisioned, not just the cluster resource itself — EKS's own `DeleteCluster` removes only the cluster, so nothing else here is cleaned up on its own:
     - `Describe`s first. If the cluster is not already `StatusAbsent`/`StatusDeleting`: lists node groups and deletes each (`DeleteNodegroup`) — node groups must go first because EKS refuses to delete a cluster with any attached; calls `waitForNodeGroupsGone` if any existed; deletes the `nodeRole` (nodes are fully terminated by this point, so its instance-profile job is done); requests `eks.DeleteCluster`.
-    - Unconditionally, regardless of which branch above ran: deletes the `clusterRole` and the two CSI IRSA roles (`ebsCSIRole()`/`efsCSIRole()`), then — if `Describe` reported an `OIDCIssuer` — deletes the matching IAM OIDC provider via `deleteOIDCProvider` (found by issuer host, the same lookup `ensureOIDCProvider` uses, since nothing persists the ARN from creation time).
+    - Always, whichever branch above ran: deletes the `clusterRole`, the Auto Mode node role, every add-on Pod Identity role (`identityRoles`), and the cluster-autoscaler role. EKS removes Pod Identity associations along with the cluster. Then, if `Describe` reported an `OIDCIssuer`, it calls `deleteOIDCProvider`: a cluster created by an IRSA-era kubespin has an IAM OIDC provider, found by issuer host; a newer cluster has none, so this does nothing.
     - `NoSuchEntityException`/`ResourceNotFoundException` at any step converges rather than erroring, so a retried teardown resumes cleanly — including a retry against a cluster an earlier, interrupted run already left `StatusDeleting`, which still reaches the role/OIDC cleanup rather than short-circuiting past it.
     - **Known gap:** if a cluster finishes deleting entirely between one `Delete` call and the next, `Describe` can no longer report its OIDC issuer (EKS drops it once the cluster is gone), so a delete resumed only after that point cannot find the OIDC provider by issuer host and leaves it behind. Narrow — deletion takes minutes — but real.
 - `waitForNodeGroupsGone` polls `ListNodegroups` on `p.wait.Interval`/`p.wait.Timeout` (falling back to `provisioner.DefaultWaitOptions()` values if unset) until the list is empty, because `DeleteNodegroup` only accepts the request — draining and terminating nodes takes minutes, and `DeleteCluster` fails with `ResourceInUseException` the whole time.
-- `deleteRole(ctx, name)` — lists attached policies, detaches each (IAM refuses to delete a role with any still attached), then `DeleteRole`; `NoSuchEntityException` at either step converges.
+- `deleteRole(ctx, name)` — detaches every attached policy, deletes every inline policy, and removes the role from any instance profile (IAM refuses to delete a role with any of these left), then `DeleteRole`; `NoSuchEntityException` converges.
 - `deleteOIDCProvider(ctx, issuer)` — `ListOpenIDConnectProviders`, `GetOpenIDConnectProvider`s each to compare its `Url` against the issuer host, and `DeleteOpenIDConnectProvider`s the match; no match found is a no-op, not an error.
 
 </details>
 
-### EKS-managed CSI addons (EBS/EFS)
+### EKS add-ons
 
-The EBS and EFS CSI drivers are installed as **EKS-managed addons** — via
-the EKS addon API (`eks.CreateAddon`/`UpdateAddon`), not Helm. EKS owns
-their lifecycle once requested; this package only has to provision the IRSA
-role each one assumes and request/update the addon by name — the same
-division of labor `eksctl create addon` uses. Both are AWS-only by
-construction (they're EKS addon names), so unlike Karpenter/cluster-autoscaler
-in `internal/catalog`, there's no `Providers` gate to reason about here.
-
-<details>
-<summary>`ensureCSIAddons(ctx, spec, state, change) error`</summary>
-
-```go
-func (p *ClusterProvisioner) ensureCSIAddons(
-    ctx context.Context, spec core.ClusterSpec, state provisioner.ClusterState, change *provisioner.Change,
-) error
-```
-
-- **Behavior:** called from `Create` once the cluster is active, and from every `Reconcile`. Requires `state.OIDCIssuer` to be set (errors otherwise — the OIDC provider must exist before an IRSA role can trust it). Registers the cluster's OIDC provider (`ensureOIDCProvider`, in `oidc.go`), then for each of `aws-ebs-csi-driver` and `aws-efs-csi-driver`: builds an IRSA trust policy scoped to `kube-system:ebs-csi-controller-sa`/`efs-csi-controller-sa`, calls `ensureRole` with the matching AWS-managed policy (`AmazonEBSCSIDriverPolicy`/`AmazonEFSCSIDriverPolicy`) attached, then `ensureAddon` to request/update the EKS addon with that role's ARN.
-- **Invariant:** IRSA roles are named `kubespin-<cluster>-ebs-csi`/`kubespin-<cluster>-efs-csi` (`names{spec}.ebsCSIRole()`/`.efsCSIRole()`), matching the naming convention every other IRSA role in this package follows.
-
-</details>
-
-<details>
-<summary>`ensureAddon(ctx, spec, addonName, roleARN) (bool, error)`</summary>
-
-```go
-func (p *ClusterProvisioner) ensureAddon(
-    ctx context.Context, spec core.ClusterSpec, addonName, roleARN string,
-) (bool, error)
-```
-
-- **Behavior:** `DescribeAddon` first; if found and its `ServiceAccountRoleArn` differs from `roleARN`, calls `UpdateAddon` to converge it (reports no installation, just a role-drift fix). If not found (`ekstypes.ResourceNotFoundException`), calls `CreateAddon` with `ResolveConflicts: ekstypes.ResolveConflictsOverwrite`.
-- **Returns:** `true` only when the addon was newly created — this is what lets `ensureCSIAddons` record an accurate `Change` detail (`"install addon <name>"`) rather than reporting a change on every no-op reconcile.
-- **Invariant:** `ekstypes.ResourceInUseException` on create (a concurrent run got there first) converges rather than erroring, matching every other create-or-adopt call in this package.
-
-</details>
-
-Cleanup: `Delete` deletes both IRSA roles (`ebsCSIRole()`/`efsCSIRole()`)
-alongside the cluster/node roles it already tore down — the EKS addons
-themselves are removed automatically as part of `DeleteCluster`, so only
-the roles need explicit cleanup.
+See [addons.go](#addonsgo). `ensureManagedAddon` replaces the CSI-only `ensureCSIAddons`/`ensureAddon` of the IRSA era.
 
 ### Role helpers
 

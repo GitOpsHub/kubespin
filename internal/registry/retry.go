@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"syscall"
@@ -91,8 +92,8 @@ func (p *Postgres) retry(ctx context.Context, what string, fn func(context.Conte
 			return attempt, err
 		}
 
-		p.log().Warn("registry call failed; retrying",
-			"operation", what, "attempt", attempt, "of", policy.Attempts, "backoff", backoff, "error", err)
+		p.log().Warn("Registry Call Failed, Retrying",
+			"operation", what, "attempt", fmt.Sprintf("%d/%d", attempt, policy.Attempts), "backoff", backoff, "error", err)
 
 		select {
 		case <-ctx.Done():

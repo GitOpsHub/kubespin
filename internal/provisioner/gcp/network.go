@@ -118,7 +118,7 @@ func (p *NetworkProvisioner) ensureCloudNAT(
 		return fmt.Errorf("creating router %s: %w", name, err)
 	}
 
-	p.c.logger.Info("created Cloud Router and NAT", "router", name)
+	p.c.logger.Info("Created Cloud Router And NAT", "router", name)
 	change.Changed = true
 	change.Details = append(change.Details, fmt.Sprintf("created Cloud Router and NAT %s", name))
 	return nil
@@ -151,7 +151,7 @@ func (p *NetworkProvisioner) ensureVPCNetwork(
 		return fmt.Errorf("creating network %s: %w", name, err)
 	}
 
-	p.c.logger.Info("created VPC network", "network", name)
+	p.c.logger.Info("Created VPC Network", "network", name)
 	change.Changed = true
 	change.Details = append(change.Details, fmt.Sprintf("created network %s", name))
 	return nil
@@ -193,7 +193,7 @@ func (p *NetworkProvisioner) ensureSubnetwork(
 		return fmt.Errorf("creating subnetwork %s: %w", name, err)
 	}
 
-	p.c.logger.Info("created subnetwork", "subnetwork", name, "cidr", cidr)
+	p.c.logger.Info("Created Subnetwork", "subnetwork", name, "cidr", cidr)
 	change.Changed = true
 	change.Details = append(change.Details, fmt.Sprintf("created subnetwork %s (%s)", name, cidr))
 	return nil
@@ -252,7 +252,7 @@ func (p *NetworkProvisioner) deleteEgressFirewall(ctx context.Context, spec core
 	if err := p.c.firewalls.DeleteFirewall(ctx, p.c.project, name); err != nil {
 		return fmt.Errorf("deleting firewall rule %s: %w", name, err)
 	}
-	p.c.logger.Info("deleted egress firewall rule", "rule", name)
+	p.c.logger.Info("Deleted Egress Firewall Rule", "rule", name)
 	return nil
 }
 
@@ -268,7 +268,7 @@ func (p *NetworkProvisioner) deleteRouter(ctx context.Context, n names) error {
 	if err := p.c.routers.DeleteRouter(ctx, n.project, n.location(), name); err != nil {
 		return fmt.Errorf("deleting router %s: %w", name, err)
 	}
-	p.c.logger.Info("deleted Cloud Router and NAT", "router", name)
+	p.c.logger.Info("Deleted Cloud Router And NAT", "router", name)
 	return nil
 }
 
@@ -284,7 +284,7 @@ func (p *NetworkProvisioner) deleteSubnetwork(ctx context.Context, n names) erro
 	if err := p.c.subnetworks.DeleteSubnetwork(ctx, n.project, n.location(), name); err != nil {
 		return fmt.Errorf("deleting subnetwork %s: %w", name, err)
 	}
-	p.c.logger.Info("deleted subnetwork", "subnetwork", name)
+	p.c.logger.Info("Deleted Subnetwork", "subnetwork", name)
 	return nil
 }
 
@@ -298,7 +298,7 @@ func (p *NetworkProvisioner) deleteNetwork(ctx context.Context, n names) error {
 	for attempt := 0; attempt < deleteNetworkRetries; attempt++ {
 		err := p.c.networks.DeleteNetwork(ctx, n.project, name)
 		if err == nil {
-			p.c.logger.Info("deleted VPC network", "network", name)
+			p.c.logger.Info("Deleted VPC Network", "network", name)
 			return nil
 		}
 		if !isResourceInUse(err) {

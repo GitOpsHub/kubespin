@@ -113,7 +113,7 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 	if err := p.c.cluster.CreateOrUpdate(ctx, n.resourceGroup(), n.cluster(), cluster); err != nil {
 		return fmt.Errorf("creating AKS cluster %s: %w", spec.ID, err)
 	}
-	p.c.logger.Info("requested AKS cluster", "cluster", spec.ID, "region", spec.Region)
+	p.c.logger.Info("Requested AKS Cluster", "cluster", spec.ID, "region", spec.Region)
 	return nil
 }
 
@@ -292,7 +292,7 @@ func (p *ClusterProvisioner) reconcileAccess(
 	if err := p.c.cluster.CreateOrUpdate(ctx, n.resourceGroup(), n.cluster(), *cluster); err != nil {
 		return provisioner.Change{}, fmt.Errorf("updating access mode for %s: %w", spec.ID, err)
 	}
-	p.c.logger.Info("updated cluster access mode", "cluster", spec.ID, "from", state.Access, "to", spec.Access)
+	p.c.logger.Info("Updated Access Mode", "cluster", spec.ID, "from", state.Access, "to", spec.Access)
 
 	return provisioner.Change{
 		Changed: true,
@@ -324,7 +324,7 @@ func (p *ClusterProvisioner) ensureNodePools(
 			); err != nil {
 				return fmt.Errorf("creating node pool %s: %w", want.Name, err)
 			}
-			p.c.logger.Info("created node pool", "cluster", spec.ID, "pool", want.Name)
+			p.c.logger.Info("Created Node Pool", "cluster", spec.ID, "pool", want.Name)
 			record(change, fmt.Sprintf("create node pool %s", want.Name))
 			continue
 		}
@@ -347,7 +347,7 @@ func (p *ClusterProvisioner) ensureNodePools(
 		); err != nil {
 			return fmt.Errorf("resizing node pool %s: %w", want.Name, err)
 		}
-		p.c.logger.Info("resized node pool", "cluster", spec.ID, "pool", want.Name,
+		p.c.logger.Info("Resized Node Pool", "cluster", spec.ID, "pool", want.Name,
 			"min", want.MinSize, "desired", want.DesiredSize, "max", want.MaxSize)
 		record(change, fmt.Sprintf("resize node pool %s to %d/%d/%d",
 			want.Name, want.MinSize, want.DesiredSize, want.MaxSize))
@@ -401,7 +401,7 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 		}
 		return fmt.Errorf("deleting AKS cluster %s: %w", spec.ID, err)
 	}
-	p.c.logger.Info("requested AKS cluster deletion", "cluster", spec.ID)
+	p.c.logger.Info("Requested AKS Cluster Deletion", "cluster", spec.ID)
 	return nil
 }
 

@@ -92,14 +92,14 @@ func (r *BuiltinResolver) Resolve(_ context.Context, size core.ClusterSize) (cor
 <summary>`baseAddons` — var</summary>
 
 ```go
-var baseAddons = []core.AddonRef{ /* cilium, cert-manager, gateway-api,
-	external-secrets, cluster-autoscaler, karpenter, kube-prometheus-stack,
+var baseAddons = []core.AddonRef{ /* cert-manager, gateway-api,
+	external-secrets, cluster-autoscaler (aws), cluster-autoscaler (gcp/azure), kube-prometheus-stack,
 	fluent-bit, opencost, external-dns, ingress-nginx, kyverno,
 	kyverno-policies, argocd.DefaultAddon */ }
 ```
 
 - **Behavior:** the addon set every size carries, unconditionally — this is what "Argo CD and an autoscaler ship at every size" means in practice. `sizeSmall` is exactly this list; `sizeMedium`/`sizeLarge` layer on top of it via `withAddons`/`replaceAddon`.
-- **Invariant — autoscaler mutual exclusion:** `cluster-autoscaler` carries `Providers: []core.Provider{core.ProviderGCP, core.ProviderAzure}`; `karpenter` carries `Providers: []core.Provider{core.ProviderAWS}`. `core.Profile.ForProvider` drops whichever doesn't apply before an override patch or Argo CD ever sees it, so a given cluster only ever renders one of the two. Karpenter is genuinely EKS-only technology — there is no GCP/Azure port — so `cluster-autoscaler` is the functional equivalent on those clouds, not a lesser fallback.
+- **Invariant — one autoscaler per cluster:** `cluster-autoscaler` appears twice under the same name, once with `Providers: []core.Provider{core.ProviderAWS}` and AWS values, once with `Providers: []core.Provider{core.ProviderGCP, core.ProviderAzure}`. `core.Profile.Validate` allows a repeated name only when the `Providers` gates don't overlap, and `core.Profile.ForProvider` keeps exactly one before an override patch or Argo CD ever sees it, so an override named `cluster-autoscaler` works on every cloud. The AWS entry's values use `${CLUSTER_ID}` and `${REGION}` placeholders, which `ResolveForCluster` fills in before overrides apply. It finds the EKS managed node groups through the `k8s.io/cluster-autoscaler/<cluster>` tag EKS puts on their Auto Scaling groups, and it gets its AWS permissions through EKS Pod Identity (see `provisioner-aws.md`).
 - `ingress-nginx` defaults `ingress.exposure` to `"internal"` until `internal/argocd.ApplyIngressDefaults` overlays the resolved access-mode value; `kyverno-policies` sets `policies.publicExposureDeny: true`, the baseline admission rule the project's architecture invariants require regardless of access mode.
 
 </details>

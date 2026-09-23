@@ -98,12 +98,12 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 	if err != nil {
 		if status.Code(err) == codes.AlreadyExists {
 			// Another run got there first; that is convergence, not failure.
-			p.c.logger.Debug("GKE cluster already exists", "cluster", spec.ID)
+			p.c.logger.Debug("GKE Cluster Already Exists", "cluster", spec.ID)
 			return nil
 		}
 		return fmt.Errorf("creating GKE cluster %s: %w", spec.ID, err)
 	}
-	p.c.logger.Info("requested GKE cluster", "cluster", spec.ID, "region", spec.Region)
+	p.c.logger.Info("Requested GKE Cluster", "cluster", spec.ID, "region", spec.Region)
 	return nil
 }
 
@@ -417,7 +417,7 @@ func (p *ClusterProvisioner) reconcileAccess(
 	if err != nil {
 		return provisioner.Change{}, fmt.Errorf("updating access mode for %s: %w", spec.ID, err)
 	}
-	p.c.logger.Info("updated cluster access mode", "cluster", spec.ID, "from", state.Access, "to", spec.Access)
+	p.c.logger.Info("Updated Access Mode", "cluster", spec.ID, "from", state.Access, "to", spec.Access)
 
 	return provisioner.Change{
 		Changed: true,
@@ -443,7 +443,7 @@ func (p *ClusterProvisioner) ensureNodePools(
 			if err := p.createNodePool(ctx, spec, want); err != nil {
 				return err
 			}
-			p.c.logger.Info("created node pool", "cluster", spec.ID, "pool", want.Name)
+			p.c.logger.Info("Created Node Pool", "cluster", spec.ID, "pool", want.Name)
 			record(change, fmt.Sprintf("create node pool %s", want.Name))
 			continue
 		}
@@ -460,7 +460,7 @@ func (p *ClusterProvisioner) ensureNodePools(
 		if err != nil {
 			return fmt.Errorf("resizing node pool %s: %w", want.Name, err)
 		}
-		p.c.logger.Info("resized node pool", "cluster", spec.ID, "pool", want.Name,
+		p.c.logger.Info("Resized Node Pool", "cluster", spec.ID, "pool", want.Name,
 			"min", want.MinSize, "desired", want.DesiredSize, "max", want.MaxSize)
 		record(change, fmt.Sprintf("resize node pool %s to %d/%d/%d",
 			want.Name, want.MinSize, want.DesiredSize, want.MaxSize))
@@ -524,7 +524,7 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 		}
 		return fmt.Errorf("deleting GKE cluster %s: %w", spec.ID, err)
 	}
-	p.c.logger.Info("requested GKE cluster deletion", "cluster", spec.ID)
+	p.c.logger.Info("Requested GKE Cluster Deletion", "cluster", spec.ID)
 	return nil
 }
 

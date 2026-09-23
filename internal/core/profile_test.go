@@ -102,8 +102,8 @@ func TestAddonRefSupportsProvider(t *testing.T) {
 func TestProfileForProvider(t *testing.T) {
 	agnostic := validAddon()
 	awsOnly := AddonRef{
-		Name: "karpenter", Chart: "karpenter", Repository: "oci://example",
-		Version: "1.0.0", Namespace: "karpenter", Providers: []Provider{ProviderAWS},
+		Name: "aws-only", Chart: "aws-only", Repository: "oci://example",
+		Version: "1.0.0", Namespace: "aws-only", Providers: []Provider{ProviderAWS},
 	}
 	p := Profile{Name: "medium", Addons: []AddonRef{agnostic, awsOnly}}
 
@@ -171,6 +171,31 @@ func TestClusterSizeValid(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if got := tc.size.Valid(); got != tc.valid {
 				t.Fatalf("Valid() = %v, want %v", got, tc.valid)
+			}
+		})
+	}
+}
+
+func TestProfileValidate_DuplicateNamesNeedDisjointProviders(t *testing.T) {
+	entry := func(providers ...Provider) AddonRef {
+		return AddonRef{
+			Name: "cluster-autoscaler", Chart: "cluster-autoscaler", Repository: "https://example",
+			Version: "1.0.0", Namespace: "kube-system", Providers: providers,
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		addons  []AddonRef
+		wantErr bool
+	}{
+		{"disjoint", []AddonRef{entry(ProviderAWS), entry(ProviderGCP, ProviderAzure)}, false},
+		{"overlapping", []AddonRef{entry(ProviderAWS), entry(ProviderAWS, ProviderGCP)}, true},
+		{"one ungated", []AddonRef{entry(), entry(ProviderAWS)}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := Profile{Name: "small", Addons: tc.addons}.Validate()
+			if (err != nil) != tc.wantErr {
+				t.Errorf("Validate() = %v, wantErr %v", err, tc.wantErr)
 			}
 		})
 	}

@@ -39,7 +39,7 @@ needless delay.`,
 				return err
 			}
 
-			logger.Info("logging in", "providers", providerNameList(providers), "force", force)
+			logger.Info("Logging In", "providers", providerNameList(providers), "force", force)
 			results := auth.Login(cmd.Context(), providers, force)
 			logResults(logger, results)
 			auth.WriteTable(cmd.OutOrStdout(), results)
@@ -77,7 +77,7 @@ in kubespin rather than an expired session.`,
 				return err
 			}
 
-			logger.Debug("checking authentication status", "providers", providerNameList(providers))
+			logger.Debug("Checking Authentication", "providers", providerNameList(providers))
 			results := auth.Status(cmd.Context(), providers)
 			logResults(logger, results)
 			auth.WriteTable(cmd.OutOrStdout(), results)
@@ -111,7 +111,7 @@ func newLogoutCommand() *cobra.Command {
 				return err
 			}
 
-			logger.Info("logging out", "providers", providerNameList(providers))
+			logger.Info("Logging Out", "providers", providerNameList(providers))
 			results := auth.Logout(cmd.Context(), providers)
 			logResults(logger, results)
 			auth.WriteTable(cmd.OutOrStdout(), results)
@@ -190,10 +190,10 @@ func providerNameList(providers []auth.Provider) []string {
 func logResults(logger *slog.Logger, results []auth.Result) {
 	for _, r := range results {
 		if r.Err != nil {
-			logger.Warn("provider auth check failed", "provider", r.Provider, "error", r.Err)
+			logger.Warn("Auth Check Failed", "provider", r.Provider, "error", r.Err)
 			continue
 		}
-		logger.Debug("provider auth result",
+		logger.Debug("Auth Result",
 			"provider", r.Provider,
 			"authenticated", r.Authenticated,
 			"detail", r.Status.Message,

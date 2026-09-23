@@ -96,8 +96,8 @@ func ApplyProfileIngressDefaults(access core.Access, profile core.Profile, opts 
 			if requested == ExposureExternal && ResolveExposure(access, requested) == ExposureInternal {
 				// Worth saying out loud: the operator asked for an external
 				// load balancer and is not getting one.
-				o.logger.Warn("addon requested external exposure; forced internal by cluster access mode",
-					"addon", addon.Name, "access", access)
+				o.logger.Warn("Forced Addon Exposure Internal",
+					"addon", addon.Name, "access", access, "reason", "cluster access mode does not allow external exposure")
 			}
 		}
 		patched.Addons[i] = addon

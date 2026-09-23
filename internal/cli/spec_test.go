@@ -118,7 +118,7 @@ func TestLoadSpec_Spot_PicksCheapDefaultsPerProvider(t *testing.T) {
 		instanceType string
 		disk         int32
 	}{
-		{"aws", "us-east-1", "t3.medium", 20},
+		{"aws", "us-east-1", core.InstanceTypeAuto, 20},
 		{"gcp", "us-central1", "e2-medium", 30},
 		{"azure", "eastus", "Standard_B2s", 30},
 	} {

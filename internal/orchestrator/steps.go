@@ -112,7 +112,7 @@ func installArgoCDStep(
 		if err := installer.Install(ctx, restConfig, addon); err != nil {
 			return fmt.Errorf("installing argocd for %s: %w", spec.ID, err)
 		}
-		logger.Info("installed argocd", "cluster", spec.ID)
+		logger.Info("Installed Argo CD", "cluster", spec.ID)
 
 		repoURL, err := repoProv.RepoURL(ctx, spec)
 		if err != nil {
@@ -132,7 +132,7 @@ func installArgoCDStep(
 		if err := applier.Apply(ctx, restConfig, repoCreds); err != nil {
 			return fmt.Errorf("applying repository credentials for %s: %w", spec.ID, err)
 		}
-		logger.Info("applied repository credentials", "cluster", spec.ID)
+		logger.Info("Applied Repository Credentials", "cluster", spec.ID)
 
 		rootApp, err := argocd.RenderRootApplication(repoURL)
 		if err != nil {
@@ -141,14 +141,14 @@ func installArgoCDStep(
 		if err := applier.Apply(ctx, restConfig, rootApp); err != nil {
 			return fmt.Errorf("applying root Application for %s: %w", spec.ID, err)
 		}
-		logger.Info("applied app-of-apps root application", "cluster", spec.ID)
+		logger.Info("Applied Root Application", "cluster", spec.ID)
 
 		committed, err := repo.ReconcileAppOfApps(ctx, repoProv, spec, profile)
 		if err != nil {
 			return fmt.Errorf("committing app-of-apps for %s: %w", spec.ID, err)
 		}
 		if committed {
-			logger.Info("committed app-of-apps addon applications", "cluster", spec.ID)
+			logger.Info("Committed Addon Applications", "cluster", spec.ID)
 		}
 		return nil
 	}
@@ -169,7 +169,7 @@ func seedRepoStep(
 			return fmt.Errorf("seeding repository for %s: %w", spec.ID, err)
 		}
 
-		logger.Info("seeded cluster repository", "cluster", spec.ID, "size", spec.Size)
+		logger.Info("Seeded Repository", "cluster", spec.ID, "size", spec.Size)
 		return nil
 	}
 }
@@ -203,7 +203,7 @@ func ReadyReconcile(
 			return fmt.Errorf("reconciling infra for %s: %w", spec.ID, err)
 		}
 		if change.Changed {
-			logger.Info("reconciled cluster infra", "cluster", spec.ID, "changes", change.Details)
+			logger.Info("Reconciled Cluster Infra", "cluster", spec.ID, "changes", change.Details)
 		}
 
 		profile, err := catalog.ResolveForCluster(ctx, resolver, spec)
@@ -228,13 +228,13 @@ func ReadyReconcile(
 			return fmt.Errorf("reconciling addons for %s: %w", spec.ID, err)
 		}
 		if committed {
-			logger.Info("committed addon changes", "cluster", spec.ID, "size", spec.Size)
+			logger.Info("Committed Addon Changes", "cluster", spec.ID, "size", spec.Size)
 		}
 
 		// addons.yaml above is the informational record of the resolved
 		// profile; apps/*.yaml is what Argo CD's app-of-apps root Application
 		// actually watches and syncs from. Without also reconciling this, an
-		// override on any Argo-CD-synced addon (cilium, cert-manager, ...)
+		// override on any Argo-CD-synced addon (cert-manager, external-dns, ...)
 		// would land in addons.yaml but never reach the Application Argo CD
 		// reads, so it would never sync — installArgoCDStep is the only other
 		// caller of ReconcileAppOfApps, and that runs once, at initial
@@ -244,7 +244,7 @@ func ReadyReconcile(
 			return fmt.Errorf("reconciling app-of-apps for %s: %w", spec.ID, err)
 		}
 		if appsCommitted {
-			logger.Info("committed app-of-apps changes", "cluster", spec.ID, "size", spec.Size)
+			logger.Info("Committed App-Of-Apps Changes", "cluster", spec.ID, "size", spec.Size)
 		}
 		return nil
 	}
@@ -277,8 +277,8 @@ func Teardown(cloud Cloud, repoProv repo.Provisioner, logger *slog.Logger) Teard
 
 		// Node pools drain before the control plane goes, so this call blocks
 		// for minutes; say so rather than looking hung.
-		logger.Info("deleting cluster; node pools drain first, this takes several minutes",
-			"cluster", spec.ID)
+		logger.Info("Deleting Cluster",
+			"cluster", spec.ID, "note", "node pools drain first; takes several minutes")
 		if err := cloud.Cluster.Delete(ctx, spec); err != nil {
 			return fmt.Errorf("deleting cluster %s: %w", spec.ID, err)
 		}
@@ -289,7 +289,7 @@ func Teardown(cloud Cloud, repoProv repo.Provisioner, logger *slog.Logger) Teard
 		if err := provisioner.WaitUntilGone(ctx, cloud.Cluster, spec, cloud.Wait); err != nil {
 			return fmt.Errorf("waiting for cluster %s to be deleted: %w", spec.ID, err)
 		}
-		logger.Info("deleted cluster", "cluster", spec.ID)
+		logger.Info("Deleted Cluster", "cluster", spec.ID)
 
 		// Reverses EnsureNetwork, symmetric with createClusterStep calling it on
 		// the way up. Identified by deterministic name rather than spec.Subnets,
@@ -299,7 +299,7 @@ func Teardown(cloud Cloud, repoProv repo.Provisioner, logger *slog.Logger) Teard
 			if err := cloud.Network.DeleteNetwork(ctx, spec); err != nil {
 				return fmt.Errorf("deleting network for %s: %w", spec.ID, err)
 			}
-			logger.Info("deleted network", "cluster", spec.ID)
+			logger.Info("Deleted Network", "cluster", spec.ID)
 		}
 
 		// Last, and deliberately after every cloud resource is gone: the
@@ -310,7 +310,7 @@ func Teardown(cloud Cloud, repoProv repo.Provisioner, logger *slog.Logger) Teard
 		if err := repoProv.Delete(ctx, spec); err != nil {
 			return fmt.Errorf("deleting repository for %s: %w", spec.ID, err)
 		}
-		logger.Info("deleted cluster repository", "cluster", spec.ID)
+		logger.Info("Deleted Repository", "cluster", spec.ID)
 
 		return nil
 	}
@@ -336,8 +336,8 @@ const (
 func drainLoadBalancers(ctx context.Context, cloud Cloud, spec core.ClusterSpec, logger *slog.Logger) error {
 	restConfig, err := restConfigFor(ctx, cloud, spec)
 	if err != nil {
-		logger.Debug("skipping load balancer drain; cluster is not reachable",
-			"cluster", spec.ID, "error", err)
+		logger.Debug("Skipped Load Balancer Drain",
+			"cluster", spec.ID, "reason", "cluster is not reachable", "error", err)
 		return nil
 	}
 
@@ -351,8 +351,8 @@ func drainLoadBalancers(ctx context.Context, cloud Cloud, spec core.ClusterSpec,
 		// Same reasoning as the RESTConfig failure above: an unreachable API
 		// server here means there is nothing left to drain, not a teardown
 		// failure.
-		logger.Debug("skipping load balancer drain; could not list services",
-			"cluster", spec.ID, "error", err)
+		logger.Debug("Skipped Load Balancer Drain",
+			"cluster", spec.ID, "reason", "could not list services", "error", err)
 		return nil
 	}
 
@@ -366,7 +366,7 @@ func drainLoadBalancers(ctx context.Context, cloud Cloud, spec core.ClusterSpec,
 		return nil
 	}
 
-	logger.Info("draining LoadBalancer services before cluster deletion",
+	logger.Info("Draining Load Balancers",
 		"cluster", spec.ID, "count", len(toDelete))
 	for _, svc := range toDelete {
 		err := clientset.CoreV1().Services(svc.Namespace).Delete(ctx, svc.Name, metav1.DeleteOptions{})
@@ -389,13 +389,13 @@ func drainLoadBalancers(ctx context.Context, cloud Cloud, spec core.ClusterSpec,
 			}
 		}
 		if remaining == 0 {
-			logger.Info("load balancer services drained", "cluster", spec.ID)
+			logger.Info("Drained Load Balancers", "cluster", spec.ID)
 			return nil
 		}
 		if time.Now().After(deadline) {
 			logger.Warn(
-				"load balancer services did not finish draining in time; proceeding with cluster deletion anyway",
-				"cluster", spec.ID, "still_present", remaining)
+				"Load Balancer Drain Timed Out",
+				"cluster", spec.ID, "stillPresent", remaining, "action", "proceeding with cluster deletion")
 			return nil
 		}
 
@@ -426,7 +426,7 @@ func createClusterStep(
 			// below, including Cluster.Create, must see the resolved subnets.
 			spec.Subnets = result.SubnetIDs
 			if result.Change.Changed {
-				logger.Info("provisioned network", "cluster", spec.ID, "changes", result.Change.Details)
+				logger.Info("Provisioned Network", "cluster", spec.ID, "changes", result.Change.Details)
 			}
 		}
 
@@ -434,7 +434,7 @@ func createClusterStep(
 			return fmt.Errorf("requesting cluster %s: %w", spec.ID, err)
 		}
 
-		logger.Info("waiting for the control plane", "cluster", spec.ID)
+		logger.Info("Waiting For Control Plane", "cluster", spec.ID)
 		if _, err := provisioner.WaitUntilActive(ctx, cloud.Cluster, spec, cloud.Wait); err != nil {
 			return fmt.Errorf("waiting for cluster %s: %w", spec.ID, err)
 		}
@@ -446,7 +446,7 @@ func createClusterStep(
 			return fmt.Errorf("reconciling cluster %s: %w", spec.ID, err)
 		}
 		if change.Changed {
-			logger.Info("reconciled cluster", "cluster", spec.ID, "changes", change.Details)
+			logger.Info("Reconciled Cluster", "cluster", spec.ID, "changes", change.Details)
 		}
 
 		return nil

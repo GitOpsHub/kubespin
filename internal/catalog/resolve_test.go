@@ -49,7 +49,35 @@ func TestResolveForCluster_NonAutopilot_KeepsAutoscalers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveForCluster: %v", err)
 	}
-	if _, ok := awsProfile.Addon("karpenter"); !ok {
-		t.Error("expected karpenter to remain without Autopilot")
+	if _, ok := awsProfile.Addon("cluster-autoscaler"); !ok {
+		t.Error("expected cluster-autoscaler to remain without Autopilot")
+	}
+}
+
+// The AWS autoscaler's values name its own cluster and region, which only
+// ResolveForCluster knows; no placeholder may reach the rendered values, and
+// the shared catalog entry must stay untouched for the next cluster.
+func TestResolveForCluster_FillsClusterValuesIntoTheAWSAutoscaler(t *testing.T) {
+	spec := testClusterSpec(core.ProviderAWS)
+	profile, err := ResolveForCluster(context.Background(), NewBuiltinResolver(), spec)
+	if err != nil {
+		t.Fatalf("ResolveForCluster: %v", err)
+	}
+	autoscaler, ok := profile.Addon("cluster-autoscaler")
+	if !ok {
+		t.Fatal("expected cluster-autoscaler on aws")
+	}
+	if got := autoscaler.Values["awsRegion"]; got != spec.Region {
+		t.Errorf("awsRegion = %v, want %s", got, spec.Region)
+	}
+	discovery, _ := autoscaler.Values["autoDiscovery"].(map[string]any)
+	if got := discovery["clusterName"]; got != spec.ID.String() {
+		t.Errorf("autoDiscovery.clusterName = %v, want %s", got, spec.ID)
+	}
+
+	for _, a := range baseAddons {
+		if a.Name == "cluster-autoscaler" && a.SupportsProvider(core.ProviderAWS) && a.Values["awsRegion"] != RegionPlaceholder {
+			t.Errorf("catalog entry was mutated: awsRegion = %v", a.Values["awsRegion"])
+		}
 	}
 }

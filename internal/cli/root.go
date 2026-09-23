@@ -48,10 +48,10 @@ See "kubespin <command> --help" for flags and more examples on any command.`,
 
 			logger := cfg.Logger(os.Stderr)
 			if cfg.SourceFile != "" {
-				logger.Debug("loaded config file", "path", cfg.SourceFile)
+				logger.Debug("Loaded Config File", "path", cfg.SourceFile)
 			}
 			if cfg.DryRun {
-				logger.Info("dry run: no changes will be made")
+				logger.Info("Dry Run", "note", "no changes will be made")
 			}
 
 			ctx := context.WithValue(cmd.Context(), configKey, cfg)

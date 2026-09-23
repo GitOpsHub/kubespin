@@ -77,12 +77,7 @@ func (p *ClusterProvisioner) Create(ctx context.Context, spec core.ClusterSpec) 
 	}
 
 	if state.Status == provisioner.StatusActive {
-		if !state.Autopilot {
-			if err := p.ensureNodeGroups(ctx, spec, nil); err != nil {
-				return err
-			}
-		}
-		return p.ensureCSIAddons(ctx, spec, state, nil)
+		return p.ensureComputeAndAddons(ctx, spec, state, nil)
 	}
 	return nil
 }
@@ -124,12 +119,12 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 		// Another run got there first; that is convergence, not failure.
 		var exists *ekstypes.ResourceInUseException
 		if errors.As(err, &exists) {
-			p.c.logger.Debug("EKS cluster already exists", "cluster", spec.ID)
+			p.c.logger.Debug("EKS Cluster Already Exists", "cluster", spec.ID)
 			return nil
 		}
 		return fmt.Errorf("creating EKS cluster %s: %w", spec.ID, err)
 	}
-	p.c.logger.Info("requested EKS cluster", "cluster", spec.ID, "region", spec.Region)
+	p.c.logger.Info("Requested EKS Cluster", "cluster", spec.ID, "region", spec.Region)
 	return nil
 }
 
@@ -295,125 +290,35 @@ func (p *ClusterProvisioner) Reconcile(ctx context.Context, spec core.ClusterSpe
 	}
 	change.Merge(accessChange)
 
-	if !state.Autopilot {
-		if err := p.ensureNodeGroups(ctx, spec, &change); err != nil {
-			return change, err
-		}
-	}
-	if err := p.ensureCSIAddons(ctx, spec, state, &change); err != nil {
+	if err := p.ensureComputeAndAddons(ctx, spec, state, &change); err != nil {
 		return change, err
 	}
 	return change, nil
 }
 
-// ensureCSIAddons installs the EBS and EFS CSI drivers as EKS-managed
-// addons (not Helm charts): EKS owns their lifecycle once requested, so this
-// only has to provision the IRSA role each one assumes and request/update
-// the addon by name — the same division of labor `eksctl create addon` uses.
-//
-// Both are AWS-only by construction: they are EKS addon names, so there is
-// nothing to gate by provider the way catalog addons gate karpenter.
-func (p *ClusterProvisioner) ensureCSIAddons(
+// ensureComputeAndAddons converges everything that runs on an active
+// cluster, in dependency order: the network add-ons (their configuration
+// fixes a node group's max-pods at creation), the node groups, the add-ons
+// that need nodes, then the cluster-autoscaler identity. Auto Mode manages
+// its own nodes and scaling, so it only gets the add-ons it lacks.
+func (p *ClusterProvisioner) ensureComputeAndAddons(
 	ctx context.Context, spec core.ClusterSpec, state provisioner.ClusterState, change *provisioner.Change,
 ) error {
-	if state.OIDCIssuer == "" {
-		return fmt.Errorf("cluster %s reports no OIDC issuer", spec.ID)
-	}
-
-	providerARN, err := p.ensureOIDCProvider(ctx, state.OIDCIssuer)
-	if err != nil {
+	if err := p.ensureManagedAddons(ctx, spec, networkAddons(), state.Autopilot, change); err != nil {
 		return err
 	}
-
-	for _, d := range []struct {
-		addonName string
-		roleName  string
-		policy    string
-		comp      provisioner.Component
-	}{
-		{
-			addonName: addonEBSCSIDriver,
-			roleName:  names{spec}.ebsCSIRole(),
-			policy:    policyEBSCSIDriver,
-			comp:      provisioner.Component{Name: "ebs-csi", Namespace: "kube-system", ServiceAccount: "ebs-csi-controller-sa"},
-		},
-		{
-			addonName: addonEFSCSIDriver,
-			roleName:  names{spec}.efsCSIRole(),
-			policy:    policyEFSCSIDriver,
-			comp:      provisioner.Component{Name: "efs-csi", Namespace: "kube-system", ServiceAccount: "efs-csi-controller-sa"},
-		},
-	} {
-		// EKS Auto Mode's StorageConfig.BlockStorage replaces the EBS CSI
-		// driver addon entirely; installing it alongside would be redundant.
-		// EFS has no Auto Mode equivalent and is still installed.
-		if state.Autopilot && d.addonName == addonEBSCSIDriver {
-			continue
-		}
-		trust := irsaTrustPolicy(providerARN, state.OIDCIssuer, d.comp)
-		roleARN, err := p.ensureRole(ctx, d.roleName, trust, []string{d.policy})
-		if err != nil {
-			return fmt.Errorf("ensuring role for %s: %w", d.addonName, err)
-		}
-
-		installed, err := p.ensureAddon(ctx, spec, d.addonName, roleARN)
-		if err != nil {
+	if !state.Autopilot {
+		if err := p.ensureNodeGroups(ctx, spec, change); err != nil {
 			return err
 		}
-		if installed {
-			record(change, fmt.Sprintf("install addon %s", d.addonName))
-		}
 	}
-	return nil
-}
-
-// ensureAddon requests the named EKS-managed addon if absent, or converges
-// its IRSA role if it already exists and drifted. It reports whether it
-// created the addon, so callers collecting a Change only see something real.
-func (p *ClusterProvisioner) ensureAddon(
-	ctx context.Context, spec core.ClusterSpec, addonName, roleARN string,
-) (bool, error) {
-	clusterName := names{spec}.cluster()
-
-	desc, err := p.c.eks.DescribeAddon(ctx, &eks.DescribeAddonInput{
-		ClusterName: aws.String(clusterName),
-		AddonName:   aws.String(addonName),
-	})
-	if err == nil {
-		if desc.Addon != nil && aws.ToString(desc.Addon.ServiceAccountRoleArn) != roleARN {
-			if _, err := p.c.eks.UpdateAddon(ctx, &eks.UpdateAddonInput{
-				ClusterName:           aws.String(clusterName),
-				AddonName:             aws.String(addonName),
-				ServiceAccountRoleArn: aws.String(roleARN),
-				ResolveConflicts:      ekstypes.ResolveConflictsOverwrite,
-			}); err != nil {
-				return false, fmt.Errorf("updating addon %s role for %s: %w", addonName, spec.ID, err)
-			}
-			p.c.logger.Info("updated EKS addon role", "cluster", spec.ID, "addon", addonName)
-		}
-		return false, nil
+	if err := p.ensureManagedAddons(ctx, spec, workloadAddons(spec), state.Autopilot, change); err != nil {
+		return err
 	}
-
-	var missing *ekstypes.ResourceNotFoundException
-	if !errors.As(err, &missing) {
-		return false, fmt.Errorf("describing addon %s for %s: %w", addonName, spec.ID, err)
+	if state.Autopilot {
+		return nil
 	}
-
-	if _, err := p.c.eks.CreateAddon(ctx, &eks.CreateAddonInput{
-		ClusterName:           aws.String(clusterName),
-		AddonName:             aws.String(addonName),
-		ServiceAccountRoleArn: aws.String(roleARN),
-		ResolveConflicts:      ekstypes.ResolveConflictsOverwrite,
-		Tags:                  tags(spec),
-	}); err != nil {
-		var exists *ekstypes.ResourceInUseException
-		if errors.As(err, &exists) {
-			return false, nil
-		}
-		return false, fmt.Errorf("creating addon %s for %s: %w", addonName, spec.ID, err)
-	}
-	p.c.logger.Info("installed EKS addon", "cluster", spec.ID, "addon", addonName)
-	return true, nil
+	return p.ensureClusterAutoscalerIdentity(ctx, spec, change)
 }
 
 func (p *ClusterProvisioner) reconcileAccess(
@@ -430,7 +335,7 @@ func (p *ClusterProvisioner) reconcileAccess(
 	if err != nil {
 		return provisioner.Change{}, fmt.Errorf("updating access mode for %s: %w", spec.ID, err)
 	}
-	p.c.logger.Info("updated cluster access mode", "cluster", spec.ID, "from", state.Access, "to", spec.Access)
+	p.c.logger.Info("Updated Access Mode", "cluster", spec.ID, "from", state.Access, "to", spec.Access)
 
 	return provisioner.Change{
 		Changed: true,
@@ -462,7 +367,7 @@ func (p *ClusterProvisioner) ensureNodeGroups(
 			if err := p.createNodeGroup(ctx, spec, want, nodeRoleARN); err != nil {
 				return err
 			}
-			p.c.logger.Info("created node pool", "cluster", spec.ID, "pool", want.Name)
+			p.c.logger.Info("Created Node Pool", "cluster", spec.ID, "pool", want.Name)
 			record(change, fmt.Sprintf("create node pool %s", want.Name))
 			continue
 		}
@@ -484,7 +389,7 @@ func (p *ClusterProvisioner) ensureNodeGroups(
 		if err != nil {
 			return fmt.Errorf("resizing node pool %s: %w", want.Name, err)
 		}
-		p.c.logger.Info("resized node pool", "cluster", spec.ID, "pool", want.Name,
+		p.c.logger.Info("Resized Node Pool", "cluster", spec.ID, "pool", want.Name,
 			"min", want.MinSize, "desired", want.DesiredSize, "max", want.MaxSize)
 		record(change, fmt.Sprintf("resize node pool %s to %d/%d/%d",
 			want.Name, want.MinSize, want.DesiredSize, want.MaxSize))
@@ -496,12 +401,21 @@ func (p *ClusterProvisioner) ensureNodeGroups(
 func (p *ClusterProvisioner) createNodeGroup(
 	ctx context.Context, spec core.ClusterSpec, pool core.NodePool, nodeRoleARN string,
 ) error {
+	instanceTypes := []string{pool.InstanceType}
+	if pool.InstanceType == core.InstanceTypeAuto {
+		resolved, err := p.resolveAutoInstanceTypes(ctx, spec)
+		if err != nil {
+			return fmt.Errorf("choosing instance types for node pool %s: %w", pool.Name, err)
+		}
+		instanceTypes = resolved
+	}
+
 	input := &eks.CreateNodegroupInput{
 		ClusterName:   aws.String(names{spec}.cluster()),
 		NodegroupName: aws.String(names{spec}.nodeGroup(pool.Name)),
 		NodeRole:      aws.String(nodeRoleARN),
 		Subnets:       spec.Subnets,
-		InstanceTypes: []string{pool.InstanceType},
+		InstanceTypes: instanceTypes,
 		ScalingConfig: &ekstypes.NodegroupScalingConfig{
 			MinSize:     aws.Int32(pool.MinSize),
 			MaxSize:     aws.Int32(pool.MaxSize),
@@ -515,8 +429,9 @@ func (p *ClusterProvisioner) createNodeGroup(
 	}
 	if pool.CapacityType == core.CapacityTypeSpot {
 		// EKS spot node groups draw from the Spot pools of every listed
-		// instance type; a single type (as kubespin passes today) still
-		// works, it just has less allocation flexibility than a list would.
+		// instance type using price-capacity-optimized allocation, so with
+		// core.InstanceTypeAuto's list of the cheapest types each launch
+		// lands on the lowest-priced pool that still has capacity.
 		input.CapacityType = ekstypes.CapacityTypesSpot
 	}
 	_, err := p.c.eks.CreateNodegroup(ctx, input)
@@ -537,12 +452,12 @@ func (p *ClusterProvisioner) createNodeGroup(
 // cluster already tearing down is convergence rather than an error, so a
 // retried teardown resumes instead of failing on ResourceInUseException.
 // Delete tears down the cluster and everything Create provisioned around it:
-// node groups, the cluster itself, the clusterRole/nodeRole IAM roles
-// ensureRole created, and the IAM OIDC provider ensureOIDCProvider
-// registered. None of those IAM resources are cleaned up by EKS on its
-// own — DeleteCluster removes only the cluster resource — so skipping this
-// left every deleted cluster's roles and OIDC provider behind indefinitely
-// before this existed.
+// node groups, the cluster itself, and the IAM roles ensureRole created
+// (cluster, node, and each add-on's Pod Identity role). EKS removes a
+// cluster's Pod Identity associations with it, but none of the IAM roles —
+// DeleteCluster removes only the cluster resource. A cluster created by an
+// older, IRSA-based kubespin also has an IAM OIDC provider, removed here
+// too.
 //
 // The role/OIDC cleanup at the end runs unconditionally, including on the
 // early-return paths below, so a retried delete against a cluster already
@@ -573,7 +488,7 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 		}
 
 		if listed != nil && len(listed.Nodegroups) > 0 {
-			p.c.logger.Info("deleting node groups before cluster", "cluster", spec.ID, "count", len(listed.Nodegroups))
+			p.c.logger.Info("Deleting Node Groups", "cluster", spec.ID, "count", len(listed.Nodegroups))
 
 			// Node groups must go first: EKS refuses to delete a cluster that
 			// still has any attached.
@@ -613,7 +528,7 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 				return fmt.Errorf("deleting EKS cluster %s: %w", spec.ID, err)
 			}
 		} else {
-			p.c.logger.Info("requested EKS cluster deletion", "cluster", spec.ID)
+			p.c.logger.Info("Requested EKS Cluster Deletion", "cluster", spec.ID)
 		}
 	}
 
@@ -623,11 +538,10 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 	if err := p.deleteRole(ctx, names{spec}.autoNodeRole()); err != nil {
 		return err
 	}
-	if err := p.deleteRole(ctx, names{spec}.ebsCSIRole()); err != nil {
-		return err
-	}
-	if err := p.deleteRole(ctx, names{spec}.efsCSIRole()); err != nil {
-		return err
+	for _, role := range append(identityRoles(spec), names{spec}.clusterAutoscalerRole()) {
+		if err := p.deleteRole(ctx, role); err != nil {
+			return err
+		}
 	}
 	if state.OIDCIssuer != "" {
 		if err := p.deleteOIDCProvider(ctx, state.OIDCIssuer); err != nil {
@@ -637,7 +551,7 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 	return nil
 }
 
-// deleteRole detaches every attached policy and removes the role from every
+// deleteRole detaches every attached policy, deletes every inline one, and removes the role from every
 // instance profile it belongs to, then deletes the role. IAM refuses to
 // delete a role that still has policies attached or is still in an instance
 // profile, so an orphaned role would survive teardown if either step were
@@ -663,6 +577,19 @@ func (p *ClusterProvisioner) deleteRole(ctx context.Context, name string) error 
 			PolicyArn: policy.PolicyArn,
 		}); err != nil {
 			return fmt.Errorf("detaching %s from %s: %w", aws.ToString(policy.PolicyArn), name, err)
+		}
+	}
+
+	inline, err := p.c.iam.ListRolePolicies(ctx, &iam.ListRolePoliciesInput{RoleName: aws.String(name)})
+	if err != nil {
+		return fmt.Errorf("listing inline policies on %s: %w", name, err)
+	}
+	for _, policy := range inline.PolicyNames {
+		if _, err := p.c.iam.DeleteRolePolicy(ctx, &iam.DeleteRolePolicyInput{
+			RoleName:   aws.String(name),
+			PolicyName: aws.String(policy),
+		}); err != nil {
+			return fmt.Errorf("deleting inline policy %s from %s: %w", policy, name, err)
 		}
 	}
 
@@ -692,14 +619,14 @@ func (p *ClusterProvisioner) deleteRole(ctx context.Context, name string) error 
 		}
 		return fmt.Errorf("deleting role %s: %w", name, err)
 	}
-	p.c.logger.Info("deleted IAM role", "role", name)
+	p.c.logger.Info("Deleted IAM Role", "role", name)
 	return nil
 }
 
-// deleteOIDCProvider removes the cluster's IAM OIDC provider, found the same
-// way ensureOIDCProvider looked it up: by issuer host, since IAM has no
-// lookup-by-ARN-we-remember (nothing about this package persists the ARN
-// ensureOIDCProvider returned at creation time).
+// deleteOIDCProvider removes the IAM OIDC provider an older, IRSA-based
+// kubespin registered for the cluster, found by issuer host (nothing
+// persisted its ARN). Clusters created since the move to Pod Identity have
+// none, which makes this a no-op.
 func (p *ClusterProvisioner) deleteOIDCProvider(ctx context.Context, issuer string) error {
 	host := strings.TrimPrefix(issuer, "https://")
 
@@ -734,7 +661,7 @@ func (p *ClusterProvisioner) deleteOIDCProvider(ctx context.Context, issuer stri
 			}
 			return fmt.Errorf("deleting OIDC provider %s: %w", arn, err)
 		}
-		p.c.logger.Info("deleted OIDC provider", "issuer", issuer)
+		p.c.logger.Info("Deleted OIDC Provider", "issuer", issuer)
 		return nil
 	}
 	return nil
@@ -812,7 +739,7 @@ func (p *ClusterProvisioner) ensureRole(
 	if err != nil {
 		return "", fmt.Errorf("creating role %s: %w", name, err)
 	}
-	p.c.logger.Info("created IAM role", "role", name)
+	p.c.logger.Info("Created IAM Role", "role", name)
 	if err := p.attachPolicies(ctx, name, policies); err != nil {
 		return "", err
 	}

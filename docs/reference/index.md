@@ -22,7 +22,7 @@ method-level reference.
 
 | Package | Covers |
 |---|---|
-| [internal/provisioner (shared) + internal/provisioner/aws](provisioner-aws.md) | `ClusterProvisioner`/`NetworkProvisioner` interfaces; EKS, IRSA, VPC auto-creation |
+| [internal/provisioner (shared) + internal/provisioner/aws](provisioner-aws.md) | `ClusterProvisioner`/`NetworkProvisioner` interfaces; EKS, EKS add-ons with Pod Identity, VPC auto-creation |
 | [internal/provisioner/gcp](provisioner-gcp.md) | GKE, Workload Identity, VPC/subnetwork, Cloud Router + NAT |
 | [internal/provisioner/azure](provisioner-azure.md) | AKS, federated credential + managed identity, resource group/VNet/subnet |
 

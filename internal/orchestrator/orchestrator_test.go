@@ -319,6 +319,66 @@ func TestApply_RefusesDecommissioningClusters(t *testing.T) {
 	}
 }
 
+func TestApply_ReregistersADecommissionedCluster(t *testing.T) {
+	reg := registry.NewMemory()
+	spec := testSpec()
+
+	created, err := reg.Create(t.Context(), registry.NewRecord(spec, time.Now()))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	decommissioning, err := reg.UpdatePhase(t.Context(), created, core.PhaseDecommissioning)
+	if err != nil {
+		t.Fatalf("UpdatePhase: %v", err)
+	}
+	if _, err := reg.UpdatePhase(t.Context(), decommissioning, core.PhaseDecommissioned); err != nil {
+		t.Fatalf("UpdatePhase: %v", err)
+	}
+
+	rec := newRecorder()
+	got, err := newOrchestrator(t, reg, rec.steps()).Apply(t.Context(), spec)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got.Phase != core.PhaseReady {
+		t.Errorf("Phase = %s, want ready", got.Phase)
+	}
+	if ran := rec.ran(); len(ran) != len(DefaultSteps())-1 {
+		t.Errorf("steps ran = %v, want the full provisioning path from pending", ran)
+	}
+}
+
+func TestApply_ReregisterDefersToAHeldLease(t *testing.T) {
+	reg := registry.NewMemory()
+	spec := testSpec()
+
+	created, err := reg.Create(t.Context(), registry.NewRecord(spec, time.Now()))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	decommissioning, err := reg.UpdatePhase(t.Context(), created, core.PhaseDecommissioning)
+	if err != nil {
+		t.Fatalf("UpdatePhase: %v", err)
+	}
+	if _, err := reg.UpdatePhase(t.Context(), decommissioning, core.PhaseDecommissioned); err != nil {
+		t.Fatalf("UpdatePhase: %v", err)
+	}
+	if _, err := reg.AcquireLease(t.Context(), spec.ID, "someone-else", time.Hour); err != nil {
+		t.Fatalf("AcquireLease: %v", err)
+	}
+
+	if _, err := newOrchestrator(t, reg, newRecorder().steps()).Apply(t.Context(), spec); !errors.Is(err, ErrBusy) {
+		t.Fatalf("error = %v, want one wrapping ErrBusy", err)
+	}
+	stored, err := reg.Get(t.Context(), spec.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.Phase != core.PhaseDecommissioned {
+		t.Errorf("Phase = %s, want the record left decommissioned", stored.Phase)
+	}
+}
+
 func TestApply_RejectsAnInvalidSpec(t *testing.T) {
 	reg := registry.NewMemory()
 	spec := testSpec()
@@ -485,4 +545,19 @@ func stepDiff(got, want []string) string {
 		return ""
 	}
 	return fmt.Sprintf("got %v, want %v", got, want)
+}
+
+func TestStepProgress(t *testing.T) {
+	for phase, want := range map[core.Phase]string{
+		core.PhasePending:         " 1/4",
+		core.PhaseClusterCreated:  " 2/4",
+		core.PhaseIdentityBound:   " 2/4",
+		core.PhaseRepoPushed:      " 3/4",
+		core.PhaseArgoCDInstalled: " 4/4",
+		core.PhaseReady:           "",
+	} {
+		if got := stepProgress(phase); got != want {
+			t.Errorf("stepProgress(%s) = %q, want %q", phase, got, want)
+		}
+	}
 }

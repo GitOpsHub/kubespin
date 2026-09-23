@@ -25,7 +25,7 @@ make
 | `make docs` | Regenerates `docs/cli` from the command tree |
 | `make changelog VERSION=vX.Y.Z` | Previews a `CHANGELOG.md` section locally; the release workflow runs this for real — see [Releases](#releases) |
 | `make fmt` | `go fmt` plus `go mod tidy` |
-| `make spot` | Spins up a `--spot` dev cluster on AWS, GCP, and Azure in parallel — see [Low-cost dev clusters: make spot](low-cost-dev-clusters.md#make-spot-all-three-clouds-at-once) |
+| `make spot [aws] [gcp] [azure]` | Spins up a `--spot` dev cluster on the named clouds (all three by default) in parallel. `make autopilot` and `make destroy[-spot\|-autopilot]` take the same cloud goals. See [Low-cost dev clusters: make spot](low-cost-dev-clusters.md#make-spot-all-three-clouds-at-once) |
 
 `INSTALL_DIR` defaults to `~/.local/bin`, which is on `PATH` on macOS and
 writable without `sudo`. Point it elsewhere with

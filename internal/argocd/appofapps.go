@@ -89,12 +89,12 @@ func RenderAddonApplications(profile core.Profile, opts ...Option) (map[string][
 			return nil, err
 		}
 		out[AppsDir+"/"+addon.Name+".yaml"] = rendered
-		o.logger.Debug("rendered addon Application",
+		o.logger.Debug("Rendered Addon Application",
 			"addon", addon.Name, "chart", addon.Chart, "version", addon.Version,
 			"namespace", addon.Namespace)
 	}
 
-	o.logger.Info("rendered app-of-apps addon Applications",
+	o.logger.Debug("Rendered Addon Applications",
 		"profile", profile.Name, "addons", len(out))
 	return out, nil
 }

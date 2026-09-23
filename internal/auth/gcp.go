@@ -33,10 +33,10 @@ func (p *GCPProvider) log() *slog.Logger { return loggerOr(p.logger) }
 // credentials file exists — a revoked or expired token fails this the same
 // way it would fail a real GCP SDK call, which is the point.
 func (p *GCPProvider) IsAuthenticated(ctx context.Context) (bool, StatusDetail, error) {
-	p.log().Debug("checking gcp session", "provider", "gcp")
+	p.log().Debug("Checking Session", "provider", "gcp")
 
 	if _, err := p.out(ctx, "gcloud", "auth", "application-default", "print-access-token"); err != nil {
-		p.log().Debug("gcp application default credentials are not usable",
+		p.log().Debug("Session Not Usable",
 			"provider", "gcp", "error", err)
 		return false, StatusDetail{}, nil
 	}
@@ -57,11 +57,11 @@ func (p *GCPProvider) Login(ctx context.Context) error {
 	if err := checkBinary("gcloud", gcpInstallHint); err != nil {
 		return err
 	}
-	p.log().Debug("shelling out to gcloud auth login", "provider", "gcp")
+	p.log().Debug("Running Login Command", "command", "gcloud auth login", "provider", "gcp")
 	if err := p.run(ctx, "gcloud", "auth", "login"); err != nil {
 		return err
 	}
-	p.log().Debug("shelling out to gcloud auth application-default login", "provider", "gcp")
+	p.log().Debug("Running Login Command", "command", "gcloud auth application-default login", "provider", "gcp")
 	return p.run(ctx, "gcloud", "auth", "application-default", "login")
 }
 
@@ -71,7 +71,7 @@ func (p *GCPProvider) Logout(ctx context.Context) error {
 	if err := checkBinary("gcloud", gcpInstallHint); err != nil {
 		return err
 	}
-	p.log().Debug("shelling out to gcloud auth revoke", "provider", "gcp")
+	p.log().Debug("Running Logout Command", "command", "gcloud auth revoke", "provider", "gcp")
 	if err := p.run(ctx, "gcloud", "auth", "application-default", "revoke", "--quiet"); err != nil {
 		return err
 	}

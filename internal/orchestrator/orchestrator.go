@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/GitOpsHub/kubespin/internal/core"
@@ -31,10 +32,11 @@ import (
 // ErrBusy is returned when another run holds the cluster's lease.
 var ErrBusy = errors.New("cluster is being provisioned by another run")
 
-// ErrDecommissioning is returned when apply is called on a cluster that is
-// being or has been torn down. Reviving one is not a phase transition; it is a
-// new cluster.
-var ErrDecommissioning = errors.New("cluster is decommissioning or decommissioned")
+// ErrDecommissioning is returned when apply is called on a cluster whose
+// teardown has started but not finished. A fully decommissioned cluster is not
+// refused: reviving one is not a phase transition, so Apply re-registers the ID
+// as a new cluster instead (see ensureRecord).
+var ErrDecommissioning = errors.New("cluster is decommissioning")
 
 // DefaultLeaseTTL bounds how long a crashed run can block a cluster. The
 // orchestrator renews it before each step, so this only has to outlast the
@@ -221,6 +223,9 @@ func (o *Orchestrator) Apply(ctx context.Context, spec core.ClusterSpec) (regist
 func (o *Orchestrator) ensureRecord(ctx context.Context, spec core.ClusterSpec) (registry.Record, error) {
 	rec, err := o.registry.Get(ctx, spec.ID)
 	if err == nil {
+		if rec.Phase == core.PhaseDecommissioned {
+			return o.reregister(ctx, spec)
+		}
 		return rec, nil
 	}
 	if !errors.Is(err, registry.ErrNotFound) {
@@ -229,7 +234,7 @@ func (o *Orchestrator) ensureRecord(ctx context.Context, spec core.ClusterSpec) 
 
 	rec, err = o.registry.Create(ctx, registry.NewRecord(spec, o.now()))
 	if err == nil {
-		o.logger.Info("registered cluster", "cluster", spec.ID, "phase", core.PhasePending)
+		o.logger.Info("Registered Cluster", "cluster", spec.ID, "phase", core.PhasePending)
 		return rec, nil
 	}
 
@@ -245,24 +250,74 @@ func (o *Orchestrator) ensureRecord(ctx context.Context, spec core.ClusterSpec) 
 	return registry.Record{}, fmt.Errorf("registering %s: %w", spec.ID, err)
 }
 
-// run walks the state machine from rec's current phase to ready.
-func (o *Orchestrator) run(ctx context.Context, spec core.ClusterSpec, rec registry.Record) (registry.Record, error) {
-	if rec.Phase == core.PhaseDecommissioning || rec.Phase == core.PhaseDecommissioned {
-		return rec, fmt.Errorf("%w: %s is at phase %s", ErrDecommissioning, spec.ID, rec.Phase)
+// reregister replaces a decommissioned record with a fresh pending one, so a
+// deleted cluster's ID can be applied again. Teardown already removed
+// everything the old cluster owned — cloud resources, network, repository — so
+// the old row is only a tombstone, and the new cluster starts from scratch.
+//
+// The swap runs under the lease: two applies racing to revive the same ID must
+// not both delete, or the slower one would wipe the row the faster one has
+// already started provisioning from. Deleting the row drops the lease with it,
+// so Apply's own AcquireLease afterwards is a fresh claim, not a renewal.
+func (o *Orchestrator) reregister(ctx context.Context, spec core.ClusterSpec) (registry.Record, error) {
+	if _, err := o.registry.AcquireLease(ctx, spec.ID, o.holder, o.leaseTTL); err != nil {
+		if errors.Is(err, registry.ErrLeaseHeld) {
+			return registry.Record{}, fmt.Errorf("%w: %s", ErrBusy, spec.ID)
+		}
+		return registry.Record{}, fmt.Errorf("acquiring lease on %s: %w", spec.ID, err)
 	}
 
-	if rec.Phase == core.PhaseReady {
-		o.logger.Info("cluster is already ready", "cluster", spec.ID)
+	rec, err := o.registry.Get(ctx, spec.ID)
+	if err != nil {
+		o.release(ctx, spec.ID)
+		return registry.Record{}, fmt.Errorf("reading %s: %w", spec.ID, err)
+	}
+	if rec.Phase != core.PhaseDecommissioned {
+		// Another run revived it first; resume from wherever that left it.
+		o.release(ctx, spec.ID)
 		return rec, nil
 	}
 
-	o.logger.Info("provisioning cluster",
-		"cluster", spec.ID, "resuming_from", rec.Phase, "provider", rec.Provider)
+	if err := o.registry.Delete(ctx, spec.ID); err != nil {
+		o.release(ctx, spec.ID)
+		return registry.Record{}, fmt.Errorf("clearing decommissioned record for %s: %w", spec.ID, err)
+	}
+	rec, err = o.registry.Create(ctx, registry.NewRecord(spec, o.now()))
+	if err != nil {
+		return registry.Record{}, fmt.Errorf("re-registering %s: %w", spec.ID, err)
+	}
+	o.logger.Info("Re-Registered Decommissioned Cluster", "cluster", spec.ID, "phase", core.PhasePending)
+	return rec, nil
+}
+
+// run walks the state machine from rec's current phase to ready.
+func (o *Orchestrator) run(ctx context.Context, spec core.ClusterSpec, rec registry.Record) (registry.Record, error) {
+	if rec.Phase == core.PhaseDecommissioning {
+		// A teardown that failed part-way. Provisioning over it would race a
+		// half-deleted cluster; finishing the delete is the only way forward.
+		return rec, fmt.Errorf("%w: %s is at phase %s; run `kubespin delete` to finish its teardown, then apply again",
+			ErrDecommissioning, spec.ID, rec.Phase)
+	}
+	if rec.Phase == core.PhaseDecommissioned {
+		// Only reachable if a delete finished between ensureRecord and the
+		// re-read under the lease.
+		return rec, fmt.Errorf("%w: %s was decommissioned while this apply waited; apply again", ErrDecommissioning, spec.ID)
+	}
+
+	if rec.Phase == core.PhaseReady {
+		o.logger.Info("Cluster Already Ready", "cluster", spec.ID)
+		return rec, nil
+	}
+
+	o.logger.Info("Provisioning Cluster",
+		"cluster", spec.ID, "provider", rec.Provider, "resumingFrom", rec.Phase)
+	started := o.now()
 
 	// Bounded by the length of the state machine: a step that failed to advance
 	// the phase must surface as an error rather than spin.
 	for range len(core.PhaseOrder) {
 		if rec.Phase == core.PhaseReady {
+			o.logger.Info("Cluster Ready", "cluster", spec.ID, "took", o.now().Sub(started))
 			return rec, nil
 		}
 
@@ -297,11 +352,16 @@ func (o *Orchestrator) advance(
 		return rec, fmt.Errorf("renewing lease on %s: %w", spec.ID, err)
 	}
 
-	o.logger.Info("running step", "cluster", spec.ID, "step", step.Name(), "phase", rec.Phase)
+	progress := stepProgress(rec.Phase)
+	o.logger.Info("Starting Step"+progress, "cluster", spec.ID, "step", step.Name())
+	started := o.now()
 
 	if err := step.Run(ctx, spec, rec); err != nil {
 		// The phase is deliberately not advanced: the next run resumes here and
 		// re-executes this step.
+		o.logger.Error("Step Failed"+progress,
+			"cluster", spec.ID, "step", step.Name(), "resumeFrom", rec.Phase,
+			"took", o.now().Sub(started), "error", err)
 		return rec, fmt.Errorf("%s: %w", step.Name(), err)
 	}
 
@@ -310,8 +370,30 @@ func (o *Orchestrator) advance(
 		return rec, fmt.Errorf("recording phase %s for %s: %w", next, spec.ID, err)
 	}
 
-	o.logger.Info("phase complete", "cluster", spec.ID, "phase", next)
+	o.logger.Info("Completed Step"+progress,
+		"cluster", spec.ID, "step", step.Name(), "phase", next, "took", o.now().Sub(started))
 	return updated, nil
+}
+
+// provisioningPath is the happy path apply walks, one step per phase, for
+// numbering steps in the log ("Starting Step 2/4").
+var provisioningPath = []core.Phase{
+	core.PhasePending, core.PhaseClusterCreated, core.PhaseRepoPushed, core.PhaseArgoCDInstalled,
+}
+
+// stepProgress renders the step for phase as " n/total" (leading space, so it
+// appends straight onto a message), or "" for a phase off the path. The legacy
+// core.PhaseIdentityBound sits between cluster-created and repo-pushed, so it
+// shares cluster-created's number rather than inflating the total.
+func stepProgress(phase core.Phase) string {
+	if phase == core.PhaseIdentityBound {
+		phase = core.PhaseClusterCreated
+	}
+	n := slices.Index(provisioningPath, phase) + 1
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" %d/%d", n, len(provisioningPath))
 }
 
 // release drops the lease, logging rather than failing: the run's outcome is
@@ -330,7 +412,7 @@ func (o *Orchestrator) release(ctx context.Context, id core.ClusterID) {
 		// registry is already unreachable — a moment the run is reporting a
 		// real failure of its own. Warning about the cleanup of a failure
 		// buries the failure.
-		o.logger.Debug("could not release lease; it will expire on its own",
-			"cluster", id, "holder", o.holder, "error", err)
+		o.logger.Debug("Lease Not Released",
+			"cluster", id, "holder", o.holder, "note", "it will expire on its own", "error", err)
 	}
 }

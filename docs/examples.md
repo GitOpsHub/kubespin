@@ -77,8 +77,8 @@ export KUBESPIN_REGISTRY_DSN=postgres://user:pass@host:5432/dbname?sslmode=requi
 Both commands build and validate a full `ClusterSpec`. `--size` picks the
 cluster's addon footprint from the builtin catalog — `small`, `medium`, or
 `large` — and defaults to `small` when omitted, so no flag is required for
-the common case. Argo CD and a cloud-appropriate autoscaler (Karpenter on
-AWS, cluster-autoscaler on GCP/Azure) ship at every size; `medium` adds
+the common case. Argo CD and `cluster-autoscaler` (configured for each
+cloud) ship at every size; `medium` adds
 Velero + Falco, `large` adds strict Kyverno policies + audit logging + OTel.
 
 ### GitHub, on everything that touches a cluster repository
@@ -339,8 +339,8 @@ This is the mechanism for "extra Helm deployments this one cluster needs" —
 it lives in the cluster's own `cluster.yaml`, survives every subsequent
 `apply` (which re-renders `addons.yaml` from size + overrides
 on every run), and requires no external repository. Naming an addon the
-cluster's size doesn't carry (e.g. `karpenter` on a GCP cluster, which only
-ever gets `cluster-autoscaler`) fails validation with `ErrUnknownOverride`.
+cluster's size doesn't carry (e.g. `velero` on a `small` cluster, which only
+`medium` and up include) fails validation with `ErrUnknownOverride`.
 
 ### Preview before applying
 

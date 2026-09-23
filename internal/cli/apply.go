@@ -91,7 +91,7 @@ addons that silently never sync.`,
 	fs.String("provider", "", "cloud provider: aws, gcp, or azure")
 	fs.String("region", "", "cloud region")
 	fs.String("access", string(core.AccessPrivate), "API server exposure: private or public")
-	fs.String("size", "small", "cluster size: small, medium, or large — determines the default addon set. Argo CD and an autoscaler (Karpenter on AWS, cluster-autoscaler on GCP/Azure) ship at every size; medium adds Velero+Falco, large adds strict Kyverno policies + audit logging + OTel")
+	fs.String("size", "small", "cluster size: small, medium, or large — determines the default addon set. Argo CD and cluster-autoscaler ship at every size; medium adds Velero+Falco, large adds strict Kyverno policies + audit logging + OTel")
 	fs.String("kubernetes-version", "", "Kubernetes minor version, e.g. 1.34")
 	fs.StringSlice("subnets", nil, "existing subnets to place the cluster in")
 	fs.StringSlice("authorized-cidrs", nil, "CIDR blocks allowed to reach the API server when --access public (GCP: required to reach the endpoint at all, since GKE enables master-authorized-networks with an empty allowlist by default; AWS/Azure: public endpoints are open to 0.0.0.0/0 unless this is set)")
@@ -104,12 +104,12 @@ addons that silently never sync.`,
 	fs.String("github-base-url", "", "GitHub Enterprise API base URL (leave empty for github.com)")
 	fs.String("github-upload-url", "", "GitHub Enterprise upload URL (leave empty for github.com)")
 
-	fs.String("instance-type", "m6i.large", "instance type for the default node pool (defaults to a cloud-appropriate value per --provider when unset: m6i.large on aws, e2-standard-4 on gcp, Standard_D4s_v7 on azure; --spot picks a smaller cloud-appropriate default instead, see --spot)")
+	fs.String("instance-type", "m6i.large", "instance type for the default node pool (defaults to a cloud-appropriate value per --provider when unset: m6i.large on aws, e2-standard-4 on gcp, Standard_D4s_v7 on azure; --spot picks a smaller cloud-appropriate default instead, see --spot; auto on aws with --spot picks the cheapest spot types by live price)")
 	fs.Int32("min-size", 1, "minimum size of the default node pool (--spot defaults this lower, see --spot)")
 	fs.Int32("max-size", 5, "maximum size of the default node pool (--spot defaults this lower, see --spot)")
 	fs.Int32("desired-size", 2, "desired size of the default node pool (--spot defaults this lower, see --spot)")
 	fs.Int32("disk-size", 0, "boot disk size in GB for the default node pool's nodes (0 = cloud default; GKE regional clusters multiply this by the number of zones, so it is worth setting explicitly on quota-constrained projects; --spot picks a smaller default, see --spot)")
-	fs.Bool("spot", false, "one flag for the cheapest dev/learning cluster on any cloud: spot/preemptible instances (AWS/GCP; AKS's default pool must stay on-demand, so this part is a no-op on --provider azure), plus a smaller default --instance-type/--min-size/--max-size/--desired-size/--disk-size sized to still run the default (--size small) addon set (t3.medium/e2-medium/Standard_B2s, 1/2/1 nodes) — pass any of those flags explicitly to override just that piece. On GCP this also switches to a zonal cluster (eligible for GCP's free zonal-cluster tier) and gives nodes public IPs instead of provisioning Cloud NAT, unless --zone/--gcp-public-nodes override it.")
+	fs.Bool("spot", false, "one flag for the cheapest dev/learning cluster on any cloud: spot/preemptible instances (AWS/GCP; AKS's default pool must stay on-demand, so this part is a no-op on --provider azure), plus a smaller default --instance-type/--min-size/--max-size/--desired-size/--disk-size sized to still run the default (--size small) addon set (1/2/1 nodes; on AWS --instance-type becomes \"auto\": the cheapest 2 vCPU/4 GiB+ spot types by live spot price, e.g. t3.medium/t3a.medium/c6i.large, so EKS always launches the lowest-cost pool with capacity; e2-medium on GCP, Standard_B2s on Azure) — pass any of those flags explicitly to override just that piece. On GCP this also switches to a zonal cluster (eligible for GCP's free zonal-cluster tier) and gives nodes public IPs instead of provisioning Cloud NAT, unless --zone/--gcp-public-nodes override it.")
 	fs.String("zone", "", "GCP zone (e.g. us-central1-a) requesting a zonal GKE cluster instead of the default regional one (GCP only). --spot already sets this; only needed to pick a specific zone, or to go zonal without spot.")
 	fs.Bool("gcp-public-nodes", false, "give GKE nodes public IPs instead of provisioning a Cloud Router + Cloud NAT for them (GCP only). --spot already enables this; only needed to use it without spot.")
 	fs.Bool("autopilot", false, "use each provider's fully-managed node mode instead of standard node pools: GKE Autopilot (GCP) or EKS Auto Mode (AWS). No Azure equivalent. --instance-type/--min-size/--max-size/--desired-size/--disk-size/--spot are rejected when set explicitly alongside this, since the provider manages compute itself.")
@@ -214,7 +214,7 @@ func updateLocalKubeconfig(ctx context.Context, cmd *cobra.Command, logger *slog
 		AzureSubscription: azureSub,
 	})
 	if err != nil {
-		logger.Warn("could not update local kubeconfig", "cluster", spec.ID, "error", err)
+		logger.Warn("Kubeconfig Update Failed", "cluster", spec.ID, "error", err)
 		return ""
 	}
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "updated kubeconfig context for %s\n", spec.ID)
@@ -245,41 +245,41 @@ func captureAndRecordArgoCDAccess(
 ) {
 	restConfigProv, ok := cloud.Cluster.(provisioner.RESTConfigProvisioner)
 	if !ok {
-		logger.Warn("skipping argocd access capture; provider cannot build a cluster REST config",
-			"cluster", spec.ID, "provider", cloud.Cluster.Provider())
+		logger.Warn("Skipped Argo CD Access Capture",
+			"cluster", spec.ID, "provider", cloud.Cluster.Provider(), "reason", "provider cannot build a cluster REST config")
 		return
 	}
 	restConfig, err := restConfigProv.RESTConfig(ctx, spec)
 	if err != nil {
-		logger.Warn("skipping argocd access capture; could not build cluster REST config",
-			"cluster", spec.ID, "error", err)
+		logger.Warn("Skipped Argo CD Access Capture",
+			"cluster", spec.ID, "reason", "could not build cluster REST config", "error", err)
 		return
 	}
 
 	clientset, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
-		logger.Warn("skipping argocd access capture; could not build Kubernetes client",
-			"cluster", spec.ID, "error", err)
+		logger.Warn("Skipped Argo CD Access Capture",
+			"cluster", spec.ID, "reason", "could not build Kubernetes client", "error", err)
 		return
 	}
 
 	endpoint, err := waitForArgoCDEndpoint(ctx, clientset)
 	if err != nil {
-		logger.Warn("skipping argocd access capture; argocd-server LoadBalancer endpoint not ready",
-			"cluster", spec.ID, "error", err)
+		logger.Warn("Skipped Argo CD Access Capture",
+			"cluster", spec.ID, "reason", "argocd-server LoadBalancer endpoint not ready", "error", err)
 		return
 	}
 
 	secret, err := clientset.CoreV1().Secrets(argocd.Namespace).
 		Get(ctx, argoCDAdminSecretName, metav1.GetOptions{})
 	if err != nil {
-		logger.Warn("skipping argocd access capture; could not read admin secret",
-			"cluster", spec.ID, "error", err)
+		logger.Warn("Skipped Argo CD Access Capture",
+			"cluster", spec.ID, "reason", "could not read admin secret", "error", err)
 		return
 	}
 	password := string(secret.Data["password"])
 	if password == "" {
-		logger.Warn("skipping argocd access capture; admin secret has no password", "cluster", spec.ID)
+		logger.Warn("Skipped Argo CD Access Capture", "cluster", spec.ID, "reason", "admin secret has no password")
 		return
 	}
 
@@ -292,10 +292,10 @@ func captureAndRecordArgoCDAccess(
 		Password:    password,
 	}
 	if err := reg.RecordArgoCDAccess(ctx, spec.ID, access); err != nil {
-		logger.Warn("could not record argocd access details", "cluster", spec.ID, "error", err)
+		logger.Warn("Argo CD Access Not Recorded", "cluster", spec.ID, "error", err)
 		return
 	}
-	logger.Info("recorded argocd access details", "cluster", spec.ID, "endpoint", endpoint)
+	logger.Info("Recorded Argo CD Access", "cluster", spec.ID, "endpoint", endpoint)
 }
 
 // waitForArgoCDEndpoint polls the argocd-server Service for a LoadBalancer
@@ -495,13 +495,13 @@ func newDeleteCommand() *cobra.Command {
 		Use:   "delete",
 		Short: "Decommission a cluster and its supporting resources",
 		Long: `delete performs the teardown in reverse order: mark the cluster
-decommissioning in the cluster registry, delete the cluster, archive its
-repository, and record it decommissioned.
+decommissioning in the cluster registry, delete the cluster, its network and
+its repository, then remove the cluster's registry record.
 
-Repositories are archived, never deleted: history is retained.
+Once the record is removed, the cluster ID is free: a later apply with the
+same ID provisions a brand-new cluster.
 
-delete is idempotent and resumable exactly like apply: a cluster already
-decommissioned is a no-op, and a failed teardown resumes from
+delete is resumable exactly like apply: a failed teardown resumes from
 decommissioning on retry rather than needing to be reasoned about by hand.
 
 The spec identifies which cluster and cloud to tear down. It may come from a

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -37,6 +38,8 @@ type fakeAWS struct {
 	instanceProfiles  map[string][]string // role name -> instance profile names it belongs to
 	oidc              map[string]string   // arn -> url host
 	sgRules           []ec2types.SecurityGroupRule
+	inlinePolicies    map[string]map[string]string // role -> policy name -> URL-encoded document
+	podIdentities     []ekstypes.PodIdentityAssociation
 
 	// nodeGroupDeletePolls models the real asynchrony of DeleteNodegroup: how
 	// many ListNodegroups calls a deleted node group survives before it is
@@ -50,6 +53,13 @@ type fakeAWS struct {
 	routeTables    map[string]*ec2types.RouteTable
 	securityGroups map[string]*ec2types.SecurityGroup
 	nextResource   int
+
+	// instanceTypes, offerings, and spotPrices back core.InstanceTypeAuto
+	// resolution. instanceTypes is returned as-is, as if EC2 had already
+	// applied the request's server-side filters.
+	instanceTypes []ec2types.InstanceTypeInfo
+	offerings     []ec2types.InstanceTypeOffering
+	spotPrices    []ec2types.SpotPrice
 
 	// deleteVPCDependencyErrors makes the next N DeleteVpc calls fail with
 	// DependencyViolation before succeeding, modeling an ENI that has not
@@ -95,7 +105,8 @@ var mutatingCalls = []string{
 	"CreateRole", "DeleteRole", "AttachRolePolicy", "DetachRolePolicy",
 	"RemoveRoleFromInstanceProfile",
 	"UpdateAssumeRolePolicy", "CreateOpenIDConnectProvider",
-	"CreateAddon", "UpdateAddon",
+	"CreateAddon", "UpdateAddon", "CreatePodIdentityAssociation",
+	"PutRolePolicy", "DeleteRolePolicy",
 	"AuthorizeSecurityGroupEgress",
 	"CreateVpc", "ModifyVpcAttribute", "CreateSubnet", "ModifySubnetAttribute",
 	"CreateInternetGateway", "AttachInternetGateway",
@@ -246,6 +257,13 @@ func (f *fakeAWS) CreateAddon(_ context.Context, in *eks.CreateAddonInput, _ ...
 	a := &ekstypes.Addon{
 		AddonName:             in.AddonName,
 		ServiceAccountRoleArn: in.ServiceAccountRoleArn,
+		ConfigurationValues:   in.ConfigurationValues,
+	}
+	for _, pi := range in.PodIdentityAssociations {
+		a.PodIdentityAssociations = append(a.PodIdentityAssociations, "association/"+aws.ToString(pi.ServiceAccount))
+		f.podIdentities = append(f.podIdentities, ekstypes.PodIdentityAssociation{
+			Namespace: aws.String("kube-system"), ServiceAccount: pi.ServiceAccount, RoleArn: pi.RoleArn,
+		})
 	}
 	f.addons[name] = a
 	return &eks.CreateAddonOutput{Addon: a}, nil
@@ -258,7 +276,16 @@ func (f *fakeAWS) UpdateAddon(_ context.Context, in *eks.UpdateAddonInput, _ ...
 	if !ok {
 		return nil, &ekstypes.ResourceNotFoundException{}
 	}
-	a.ServiceAccountRoleArn = in.ServiceAccountRoleArn
+	// Like EKS, an update leaves any field it does not name as it was.
+	if in.ServiceAccountRoleArn != nil {
+		a.ServiceAccountRoleArn = in.ServiceAccountRoleArn
+	}
+	if in.ConfigurationValues != nil {
+		a.ConfigurationValues = in.ConfigurationValues
+	}
+	for _, pi := range in.PodIdentityAssociations {
+		a.PodIdentityAssociations = append(a.PodIdentityAssociations, "association/"+aws.ToString(pi.ServiceAccount))
+	}
 	return &eks.UpdateAddonOutput{}, nil
 }
 
@@ -509,7 +536,10 @@ func (f *fakeAWS) DescribeAvailabilityZones(context.Context, *ec2.DescribeAvaila
 func (f *fakeAWS) DescribeSubnets(_ context.Context, in *ec2.DescribeSubnetsInput, _ ...func(*ec2.Options)) (*ec2.DescribeSubnetsOutput, error) {
 	f.record("DescribeSubnets")
 	var out []ec2types.Subnet
-	for _, s := range f.subnets {
+	for id, s := range f.subnets {
+		if len(in.SubnetIds) > 0 && !slices.Contains(in.SubnetIds, id) {
+			continue
+		}
 		if tagsMatch(s.Tags, in.Filters) {
 			out = append(out, *s)
 		}
@@ -739,4 +769,96 @@ func (f *fakeAWS) withNodePool(spec core.ClusterSpec, pool core.NodePool) {
 			DesiredSize: aws.Int32(pool.DesiredSize),
 		},
 	}
+}
+
+func (f *fakeAWS) DescribeInstanceTypes(context.Context, *ec2.DescribeInstanceTypesInput, ...func(*ec2.Options)) (*ec2.DescribeInstanceTypesOutput, error) {
+	f.record("DescribeInstanceTypes")
+	return &ec2.DescribeInstanceTypesOutput{InstanceTypes: f.instanceTypes}, nil
+}
+
+func (f *fakeAWS) DescribeInstanceTypeOfferings(_ context.Context, in *ec2.DescribeInstanceTypeOfferingsInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstanceTypeOfferingsOutput, error) {
+	f.record("DescribeInstanceTypeOfferings")
+	var locations, types []string
+	for _, flt := range in.Filters {
+		switch aws.ToString(flt.Name) {
+		case "location":
+			locations = flt.Values
+		case "instance-type":
+			types = flt.Values
+		}
+	}
+	var out []ec2types.InstanceTypeOffering
+	for _, o := range f.offerings {
+		if slices.Contains(locations, aws.ToString(o.Location)) && slices.Contains(types, string(o.InstanceType)) {
+			out = append(out, o)
+		}
+	}
+	return &ec2.DescribeInstanceTypeOfferingsOutput{InstanceTypeOfferings: out}, nil
+}
+
+func (f *fakeAWS) DescribeSpotPriceHistory(_ context.Context, in *ec2.DescribeSpotPriceHistoryInput, _ ...func(*ec2.Options)) (*ec2.DescribeSpotPriceHistoryOutput, error) {
+	f.record("DescribeSpotPriceHistory")
+	var out []ec2types.SpotPrice
+	for _, sp := range f.spotPrices {
+		if slices.Contains(in.InstanceTypes, sp.InstanceType) {
+			out = append(out, sp)
+		}
+	}
+	return &ec2.DescribeSpotPriceHistoryOutput{SpotPriceHistory: out}, nil
+}
+
+func (f *fakeAWS) ListPodIdentityAssociations(_ context.Context, in *eks.ListPodIdentityAssociationsInput, _ ...func(*eks.Options)) (*eks.ListPodIdentityAssociationsOutput, error) {
+	f.record("ListPodIdentityAssociations")
+	var out []ekstypes.PodIdentityAssociationSummary
+	for _, a := range f.podIdentities {
+		if aws.ToString(a.Namespace) == aws.ToString(in.Namespace) && aws.ToString(a.ServiceAccount) == aws.ToString(in.ServiceAccount) {
+			out = append(out, ekstypes.PodIdentityAssociationSummary{Namespace: a.Namespace, ServiceAccount: a.ServiceAccount})
+		}
+	}
+	return &eks.ListPodIdentityAssociationsOutput{Associations: out}, nil
+}
+
+func (f *fakeAWS) CreatePodIdentityAssociation(_ context.Context, in *eks.CreatePodIdentityAssociationInput, _ ...func(*eks.Options)) (*eks.CreatePodIdentityAssociationOutput, error) {
+	f.record("CreatePodIdentityAssociation")
+	a := ekstypes.PodIdentityAssociation{Namespace: in.Namespace, ServiceAccount: in.ServiceAccount, RoleArn: in.RoleArn}
+	f.podIdentities = append(f.podIdentities, a)
+	return &eks.CreatePodIdentityAssociationOutput{Association: &a}, nil
+}
+
+func (f *fakeAWS) GetRolePolicy(_ context.Context, in *iam.GetRolePolicyInput, _ ...func(*iam.Options)) (*iam.GetRolePolicyOutput, error) {
+	f.record("GetRolePolicy")
+	doc, ok := f.inlinePolicies[aws.ToString(in.RoleName)][aws.ToString(in.PolicyName)]
+	if !ok {
+		return nil, &iamtypes.NoSuchEntityException{}
+	}
+	return &iam.GetRolePolicyOutput{RoleName: in.RoleName, PolicyName: in.PolicyName, PolicyDocument: aws.String(doc)}, nil
+}
+
+// PutRolePolicy stores the document URL-encoded, the way IAM returns it.
+func (f *fakeAWS) PutRolePolicy(_ context.Context, in *iam.PutRolePolicyInput, _ ...func(*iam.Options)) (*iam.PutRolePolicyOutput, error) {
+	f.record("PutRolePolicy")
+	role := aws.ToString(in.RoleName)
+	if f.inlinePolicies == nil {
+		f.inlinePolicies = map[string]map[string]string{}
+	}
+	if f.inlinePolicies[role] == nil {
+		f.inlinePolicies[role] = map[string]string{}
+	}
+	f.inlinePolicies[role][aws.ToString(in.PolicyName)] = url.QueryEscape(aws.ToString(in.PolicyDocument))
+	return &iam.PutRolePolicyOutput{}, nil
+}
+
+func (f *fakeAWS) ListRolePolicies(_ context.Context, in *iam.ListRolePoliciesInput, _ ...func(*iam.Options)) (*iam.ListRolePoliciesOutput, error) {
+	f.record("ListRolePolicies")
+	var names []string
+	for name := range f.inlinePolicies[aws.ToString(in.RoleName)] {
+		names = append(names, name)
+	}
+	return &iam.ListRolePoliciesOutput{PolicyNames: names}, nil
+}
+
+func (f *fakeAWS) DeleteRolePolicy(_ context.Context, in *iam.DeleteRolePolicyInput, _ ...func(*iam.Options)) (*iam.DeleteRolePolicyOutput, error) {
+	f.record("DeleteRolePolicy")
+	delete(f.inlinePolicies[aws.ToString(in.RoleName)], aws.ToString(in.PolicyName))
+	return &iam.DeleteRolePolicyOutput{}, nil
 }

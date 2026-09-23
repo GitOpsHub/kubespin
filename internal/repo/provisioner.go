@@ -159,7 +159,7 @@ func (p *githubProvisioner) Create(ctx context.Context, spec core.ClusterSpec) e
 			return fmt.Errorf("creating repository %s: %w", n.repoName(), err)
 		}
 		branch = created.GetDefaultBranch()
-		p.logger.Info("created cluster repository",
+		p.logger.Info("Created Repository",
 			"cluster", spec.ID, "repo", n.repoName(), "branch", branch)
 	} else {
 		repository, _, err := p.c.repo.Get(ctx, p.c.org, n.repoName())
@@ -167,7 +167,7 @@ func (p *githubProvisioner) Create(ctx context.Context, spec core.ClusterSpec) e
 			return fmt.Errorf("reading repository %s: %w", n.repoName(), err)
 		}
 		branch = repository.GetDefaultBranch()
-		p.logger.Info("cluster repository already exists",
+		p.logger.Info("Repository Already Exists",
 			"cluster", spec.ID, "repo", n.repoName(), "branch", branch)
 	}
 
@@ -194,8 +194,8 @@ func (p *githubProvisioner) protectBranch(ctx context.Context, n names, branch s
 		// or a transient failure, and retrying or failing the whole apply over
 		// it would leave the cluster half-provisioned for something no retry
 		// can fix. Converge without protection and say so loudly instead.
-		p.logger.Warn("branch protection unavailable on this GitHub plan; repository left unprotected",
-			"repo", n.repoName(), "branch", branch, "error", err)
+		p.logger.Warn("Branch Protection Unavailable",
+			"repo", n.repoName(), "branch", branch, "reason", "not supported on this GitHub plan; repository left unprotected", "error", err)
 		return nil
 	default:
 		return fmt.Errorf("protecting %s branch %s: %w", n.repoName(), branch, err)
@@ -425,7 +425,7 @@ func (p *githubProvisioner) Push(
 			return false, fmt.Errorf("advancing %s branch %s: %w", n.repoName(), checkout.branch, err)
 		}
 
-		p.logger.Warn("branch advanced since it was read; re-reading and retrying",
+		p.logger.Warn("Branch Advanced, Retrying Push",
 			"repo", n.repoName(), "branch", checkout.branch, "attempt", attempt)
 		time.Sleep(pushRetryBackoff * time.Duration(attempt))
 
@@ -436,7 +436,7 @@ func (p *githubProvisioner) Push(
 		checkout.baseCommitSHA = ref.GetObject().GetSHA()
 	}
 
-	p.logger.Info("pushed commit to cluster repository",
+	p.logger.Info("Pushed Commit",
 		"cluster", checkout.spec.ID, "repo", n.repoName(), "branch", checkout.branch,
 		"commit", commitSHA, "files", len(entries), "message", message)
 
@@ -471,7 +471,7 @@ func (p *githubProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) e
 		return fmt.Errorf("deleting repository %s: %w", n.repoName(), err)
 	}
 
-	p.logger.Info("deleted cluster repository", "cluster", spec.ID, "repo", n.repoName())
+	p.logger.Info("Deleted Repository", "cluster", spec.ID, "repo", n.repoName())
 	return nil
 }
 

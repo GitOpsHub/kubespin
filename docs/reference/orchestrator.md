@@ -52,7 +52,7 @@ below, not a phase step.
 ### Delete (`Teardown`, steps.go + delete.go)
 
 `Orchestrator.Delete` marks the registry `decommissioning`, runs the supplied
-`TeardownFunc`, then marks it `decommissioned`. `Teardown` (steps.go) builds
+`TeardownFunc`, then removes the cluster's registry record. `Teardown` (steps.go) builds
 that function, deliberately in the reverse order of `apply` (identity, load
 balancers, cluster, network, then repo) so nothing is deleted while a later
 step might still need it:
@@ -62,7 +62,7 @@ step might still need it:
 | Drain load balancers | `decommissioning` | `drainLoadBalancers` (steps.go) — builds a `k8s.io/client-go/kubernetes` clientset from `restConfigFor` and deletes every `Service` of type `LoadBalancer` across all namespaces, waiting (bounded, `drainLoadBalancersTimeout`) for each to actually disappear before returning. A cluster that cannot be reached (already gone from an earlier interrupted teardown, or never became active) is a no-op, not a failure — there is nothing to drain. Exists because deleting the cluster does not clean up the cloud load balancer a `Service type=LoadBalancer` (e.g. Argo CD's own exposure) owns; without this it survives the cluster, billing indefinitely, and blocks the network-delete step below with a dependency violation. |
 | Delete cluster | `decommissioning` | `internal/provisioner` — `cloud.Cluster.Delete`, then blocks on `provisioner.WaitUntilGone` so the phase is only recorded once the cloud confirms the cluster is actually gone (node pools drain first; this can take several minutes). |
 | Delete network | `decommissioning` | `internal/provisioner` — `cloud.Network.DeleteNetwork`, reversing `EnsureNetwork`. Identifies what to delete by the same deterministic name `EnsureNetwork` used, not by `spec.Subnets`, so it is safe even when `delete` was not given the same `--subnets` an earlier `apply` was; an operator-supplied network (or one already gone) is a no-op. |
-| Archive repository | `decommissioning` → `decommissioned` | `internal/repo` — `repoProv.Archive`; the repo is archived, never deleted, per the cluster-repo contract. |
+| Delete repository | `decommissioning` → record removed | `internal/repo` — `repoProv.Delete`, which frees the name for a future apply of the same cluster ID. The registry record is then deleted, not left at `decommissioned`. |
 
 Every sub-step is idempotent (deprovisioning/deleting/archiving something
 already gone converges rather than erroring), so a retried `delete` re-runs
@@ -194,7 +194,7 @@ type Option func(*Orchestrator)
 
 ```go
 var ErrBusy = errors.New("cluster is being provisioned by another run")
-var ErrDecommissioning = errors.New("cluster is decommissioning or decommissioned")
+var ErrDecommissioning = errors.New("cluster is decommissioning")
 
 const DefaultLeaseTTL = 15 * time.Minute
 ```
@@ -202,8 +202,10 @@ const DefaultLeaseTTL = 15 * time.Minute
 - **`ErrBusy`**: another run holds the cluster's lease (`AcquireLease`
   returned `registry.ErrLeaseHeld`).
 - **`ErrDecommissioning`**: `Apply` was called on a cluster whose phase is
-  `decommissioning` or `decommissioned`; reviving one is not a phase
-  transition, it is a new cluster.
+  `decommissioning`, meaning a teardown that has not finished. Finish it with
+  `kubespin delete`. A legacy `decommissioned` record is not refused: `Apply`
+  replaces it with a fresh `pending` record, because reviving a cluster is not
+  a phase transition but a new cluster.
 - **`DefaultLeaseTTL`**: bounds how long a crashed run can block a
   cluster; the orchestrator renews it before each step and on a timer
   during long steps, so this only has to outlast the longest single
@@ -403,7 +405,7 @@ func Teardown(cloud Cloud, repoProv repo.Provisioner, logger *slog.Logger) Teard
 ## delete.go
 
 `Orchestrator.Delete` marks the registry `decommissioning`, runs the supplied
-`TeardownFunc`, then marks it `decommissioned` — see the
+`TeardownFunc`, then removes the cluster's registry record — see the
 [Delete step order table](#delete-teardown-stepsgo--deletego) for what the
 teardown itself does.
 
@@ -433,10 +435,13 @@ type TeardownFunc func(ctx context.Context, spec core.ClusterSpec, rec registry.
 func (o *Orchestrator) Delete(ctx context.Context, spec core.ClusterSpec, teardown TeardownFunc) (registry.Record, error)
 ```
 
-- **Behavior**: reads the cluster's record; no-ops if already
-  `decommissioned`. Otherwise acquires the lease, re-reads under it,
-  marks `PhaseDecommissioning` if not already there, runs `teardown`,
-  then marks `PhaseDecommissioned`.
+- **Behavior**: reads the cluster's record, acquires the lease and
+  re-reads under it. It marks `PhaseDecommissioning` if the record is not
+  already there, runs `teardown`, then deletes the registry record. The
+  returned record reports `PhaseDecommissioned`, but that phase is never
+  persisted. A legacy `decommissioned` record is deleted without running
+  teardown. Once the record is gone, a further delete returns
+  `registry.ErrNotFound`.
 - **Invariant**: on teardown failure the phase is deliberately left at
   `decommissioning` so a retried `delete` resumes teardown rather than
   believing the cluster is still live.

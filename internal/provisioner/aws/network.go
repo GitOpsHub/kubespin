@@ -147,7 +147,7 @@ func (p *NetworkProvisioner) ensureVPC(
 		return "", fmt.Errorf("enabling DNS hostnames on %s: %w", vpcID, err)
 	}
 
-	p.c.logger.Info("created VPC", "vpc", vpcID, "cidr", cidr)
+	p.c.logger.Info("Created VPC", "vpc", vpcID, "cidr", cidr)
 	change.Changed = true
 	change.Details = append(change.Details, fmt.Sprintf("created VPC %s (%s)", vpcID, cidr))
 	return vpcID, nil
@@ -208,7 +208,7 @@ func (p *NetworkProvisioner) ensureSubnet(
 		return "", fmt.Errorf("enabling auto-assign public IP for subnet %s: %w", name, err)
 	}
 
-	p.c.logger.Info("created subnet", "subnet", name, "cidr", cidr)
+	p.c.logger.Info("Created Subnet", "subnet", name, "cidr", cidr)
 	change.Changed = true
 	change.Details = append(change.Details, fmt.Sprintf("created subnet %s (%s)", name, cidr))
 	return subnetID, nil
@@ -244,7 +244,7 @@ func (p *NetworkProvisioner) ensureInternetGateway(
 		return "", fmt.Errorf("attaching internet gateway %s to %s: %w", igwID, vpcID, err)
 	}
 
-	p.c.logger.Info("created internet gateway", "gateway", igwID)
+	p.c.logger.Info("Created Internet Gateway", "gateway", igwID)
 	change.Changed = true
 	change.Details = append(change.Details, fmt.Sprintf("created internet gateway %s", igwID))
 	return igwID, nil
@@ -297,7 +297,7 @@ func (p *NetworkProvisioner) ensureRouteTable(
 		}
 	}
 
-	p.c.logger.Info("created route table", "table", rtID, "gateway", igwID)
+	p.c.logger.Info("Created Route Table", "table", rtID, "gateway", igwID)
 	change.Changed = true
 	change.Details = append(change.Details,
 		fmt.Sprintf("created route table %s with default route via %s", rtID, igwID))
@@ -381,7 +381,7 @@ func (p *NetworkProvisioner) deleteSecurityGroups(ctx context.Context, vpcID str
 		}); err != nil {
 			return fmt.Errorf("deleting security group %s: %w", groupID, err)
 		}
-		p.c.logger.Info("deleted security group", "group", groupID)
+		p.c.logger.Info("Deleted Security Group", "group", groupID)
 	}
 	return nil
 }
@@ -406,7 +406,7 @@ func (p *NetworkProvisioner) deleteInternetGateways(ctx context.Context, vpcID s
 		}); err != nil {
 			return fmt.Errorf("deleting internet gateway %s: %w", igwID, err)
 		}
-		p.c.logger.Info("deleted internet gateway", "gateway", igwID)
+		p.c.logger.Info("Deleted Internet Gateway", "gateway", igwID)
 	}
 	return nil
 }
@@ -423,7 +423,7 @@ func (p *NetworkProvisioner) deleteSubnets(ctx context.Context, vpcID string) er
 		if _, err := p.c.ec2.DeleteSubnet(ctx, &ec2.DeleteSubnetInput{SubnetId: aws.String(subnetID)}); err != nil {
 			return fmt.Errorf("deleting subnet %s: %w", subnetID, err)
 		}
-		p.c.logger.Info("deleted subnet", "subnet", subnetID)
+		p.c.logger.Info("Deleted Subnet", "subnet", subnetID)
 	}
 	return nil
 }
@@ -445,7 +445,7 @@ func (p *NetworkProvisioner) deleteRouteTables(ctx context.Context, vpcID string
 		if _, err := p.c.ec2.DeleteRouteTable(ctx, &ec2.DeleteRouteTableInput{RouteTableId: aws.String(rtID)}); err != nil {
 			return fmt.Errorf("deleting route table %s: %w", rtID, err)
 		}
-		p.c.logger.Info("deleted route table", "table", rtID)
+		p.c.logger.Info("Deleted Route Table", "table", rtID)
 	}
 	return nil
 }
@@ -467,7 +467,7 @@ func (p *NetworkProvisioner) deleteVPC(ctx context.Context, vpcID string) error 
 	for attempt := 0; attempt < deleteVPCRetries; attempt++ {
 		_, err := p.c.ec2.DeleteVpc(ctx, &ec2.DeleteVpcInput{VpcId: aws.String(vpcID)})
 		if err == nil {
-			p.c.logger.Info("deleted VPC", "vpc", vpcID)
+			p.c.logger.Info("Deleted VPC", "vpc", vpcID)
 			return nil
 		}
 		if !isAWSErrorCode(err, "DependencyViolation") {

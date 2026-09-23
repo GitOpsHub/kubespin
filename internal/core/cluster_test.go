@@ -212,3 +212,34 @@ func TestProviderAndAccessValid(t *testing.T) {
 		t.Error("unknown access mode reported valid")
 	}
 }
+
+func TestValidate_InstanceTypeAutoIsAWSSpotOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		provider Provider
+		capacity CapacityType
+		wantErr  bool
+	}{
+		{"aws spot", ProviderAWS, CapacityTypeSpot, false},
+		{"aws on-demand", ProviderAWS, CapacityTypeOnDemand, true},
+		{"gcp spot", ProviderGCP, CapacityTypeSpot, true},
+		{"azure spot", ProviderAzure, CapacityTypeSpot, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := ClusterSpec{
+				ID: "team-alpha", Provider: tc.provider, Region: "us-east-1", Access: AccessPrivate, Size: SizeSmall,
+				NodePools: []NodePool{{
+					Name: "default", InstanceType: InstanceTypeAuto, MinSize: 1, MaxSize: 2, DesiredSize: 1,
+					CapacityType: tc.capacity,
+				}},
+			}
+			err := spec.Validate()
+			if tc.wantErr && err == nil {
+				t.Error("Validate accepted instanceType auto, want an error")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("Validate: %v", err)
+			}
+		})
+	}
+}

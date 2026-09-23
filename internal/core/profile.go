@@ -11,6 +11,15 @@ import (
 // both surface as Argo CD Application names.
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,61}[a-z0-9]$`)
 
+// The namespace and service account the catalog's cluster-autoscaler addon
+// runs as. Shared by the catalog, which names it in the chart's values, and
+// any provisioner that binds cloud permissions to it (AWS's Pod Identity
+// association), so the two cannot drift apart.
+const (
+	ClusterAutoscalerNamespace      = "kube-system"
+	ClusterAutoscalerServiceAccount = "cluster-autoscaler"
+)
+
 // AddonRef is one Helm chart delivered to a cluster. Each addon becomes its own
 // Argo CD Application, so addons sync and fail independently of one another.
 type AddonRef struct {
@@ -21,9 +30,9 @@ type AddonRef struct {
 	Namespace  string         `yaml:"namespace" json:"namespace"`
 	Values     map[string]any `yaml:"values,omitempty" json:"values,omitempty"`
 
-	// Providers restricts this addon to the named clouds, e.g. Karpenter
-	// (EKS-only). Empty means every provider — most addons in the catalog are
-	// cloud-agnostic and leave this unset. Profile.ForProvider is what acts on
+	// Providers restricts this addon to the named clouds, e.g. the
+	// AWS-configured cluster-autoscaler entry. Empty means every provider —
+	// most addons in the catalog are cloud-agnostic and leave this unset. Profile.ForProvider is what acts on
 	// it; a profile resolved without going through ForProvider still carries
 	// every addon regardless of this field.
 	Providers []Provider `yaml:"providers,omitempty" json:"providers,omitempty"`
@@ -103,8 +112,8 @@ type Profile struct {
 // ForProvider returns a copy of p with every addon that does not support
 // provider dropped (see AddonRef.SupportsProvider). Callers resolve a profile
 // for a specific cluster's provider through this before applying override
-// patches, so an addon like Karpenter (EKS-only) never renders into a GCP or
-// Azure cluster's addons.yaml, and an override naming it on those clouds
+// patches, so an addon configured for one cloud never renders into another
+// cloud's addons.yaml, and an override naming it on those clouds
 // correctly fails as unknown rather than silently applying.
 func (p Profile) ForProvider(provider Provider) Profile {
 	out := p
@@ -144,7 +153,10 @@ func (p Profile) Addon(name string) (AddonRef, bool) {
 }
 
 // Validate checks the profile and every addon it carries, rejecting duplicate
-// addon names — two Argo CD Applications cannot share a name.
+// addon names — two Argo CD Applications cannot share a name. Two entries
+// may share a name only when their Providers gates are disjoint (one
+// configured per cloud): ForProvider then keeps at most one of them for any
+// cluster, so no cluster ever renders both.
 func (p Profile) Validate() error {
 	var errs []error
 	if p.Name == "" {
@@ -153,15 +165,32 @@ func (p Profile) Validate() error {
 	if len(p.Addons) == 0 {
 		errs = append(errs, fmt.Errorf("%w: profile %q: at least one addon is required", ErrInvalidSpec, p.Name))
 	}
-	seen := make(map[string]struct{}, len(p.Addons))
+	seen := make(map[string][]AddonRef, len(p.Addons))
 	for _, a := range p.Addons {
 		if err := a.Validate(); err != nil {
 			errs = append(errs, err)
 		}
-		if _, dup := seen[a.Name]; dup && a.Name != "" {
-			errs = append(errs, fmt.Errorf("%w: profile %q: duplicate addon name %q", ErrInvalidSpec, p.Name, a.Name))
+		for _, prev := range seen[a.Name] {
+			if a.Name != "" && prev.sharesProviderWith(a) {
+				errs = append(errs, fmt.Errorf("%w: profile %q: duplicate addon name %q", ErrInvalidSpec, p.Name, a.Name))
+				break
+			}
 		}
-		seen[a.Name] = struct{}{}
+		seen[a.Name] = append(seen[a.Name], a)
 	}
 	return errors.Join(errs...)
+}
+
+// sharesProviderWith reports whether some provider would keep both a and b
+// through ForProvider. An empty Providers list means every provider.
+func (a AddonRef) sharesProviderWith(b AddonRef) bool {
+	if len(a.Providers) == 0 || len(b.Providers) == 0 {
+		return true
+	}
+	for _, p := range a.Providers {
+		if slices.Contains(b.Providers, p) {
+			return true
+		}
+	}
+	return false
 }

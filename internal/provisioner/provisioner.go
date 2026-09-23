@@ -305,7 +305,7 @@ func describeFailure(
 		return fmt.Errorf("describing %s: %d consecutive failures: %w", spec.ID, *failures, err)
 	}
 
-	opts.Logger.Warn("could not read cluster state; retrying",
+	opts.Logger.Warn("Cluster State Unreadable, Retrying",
 		"cluster", spec.ID, "failures", *failures, "tolerated", opts.MaxDescribeErrors, "error", err)
 	return nil
 }

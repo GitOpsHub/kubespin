@@ -19,14 +19,34 @@ kubespin apply \
 
 No `--instance-type`/`--min-size`/`--max-size`/`--desired-size`/`--disk-size`
 needed — `--spot` picks smaller defaults for all five, sized to still run
-kubespin's default (`--size small`) addon set (cilium, kube-prometheus-stack,
-ingress-nginx, kyverno, and the rest) without failing to schedule:
+kubespin's default (`--size small`) addon set (kube-prometheus-stack, ingress-nginx,
+kyverno, and the rest) without failing to schedule:
 
 | Cloud | Instance type | min/max/desired | Disk |
 |---|---|---|---|
-| AWS | `t3.medium` | 1/2/1 | 20 GB |
+| AWS | `auto` (cheapest spot types, see below) | 1/2/1 | 20 GB |
 | GCP | `e2-medium` | 1/2/1 | 30 GB |
 | Azure | `Standard_B2s` | 1/2/1 | 30 GB |
+
+On AWS the instance type is `auto`, not a fixed type. When kubespin creates
+the node group, it looks up the current spot price of every current-generation
+x86_64 type with 2 vCPUs and at least 4 GiB of memory that is offered in all
+of the cluster's subnet zones. It then gives EKS the six cheapest, ranked by
+each type's highest price across those zones. Typical picks are `t3.medium`,
+`t3a.medium`, and `c6i.large`. EKS's spot allocation (`price-capacity-optimized`)
+then launches each node from the cheapest of those pools that has capacity,
+so a reclaimed or empty pool falls back to the next-cheapest type instead of
+failing to launch. The list is chosen once, when the node group is created;
+EKS can't change a node group's instance types afterward. To pick up newer
+prices, delete and recreate the node pool. `auto` only works for AWS spot
+pools, because a GKE node pool or an AKS agent pool takes a single machine
+size.
+
+On AWS, kubespin also turns on VPC CNI prefix delegation (see
+`docs/reference/provisioner-aws.md`). That lets each node run up to 110 pods
+instead of the 17 a `t3.medium` gets by default, so a node fills up on CPU
+and memory rather than on pod slots. The cluster then needs fewer nodes,
+which is what keeps a spot cluster at its minimum size.
 
 These are not each cloud's absolute cheapest instance (a free-tier
 `t3.micro`/`e2-micro`/`B1S`, at ~1 vCPU/1GB, is too small to run this addon
@@ -164,11 +184,23 @@ and `aks-spot-dev`/`eastus`, each overridable, e.g.:
 make spot AWS_REGION=us-west-2 AWS_CLUSTER_ID=my-aws-dev
 ```
 
+To run on only some clouds, name them as extra goals. Only the env vars
+those clouds need are checked, so `make spot aws` needs no `GCP_PROJECT` or
+`AZURE_SUBSCRIPTION_ID`:
+
+```bash
+make spot aws              # just the EKS spot cluster
+make spot gcp azure        # GKE + AKS
+make destroy-spot aws      # tear the EKS one down again
+```
+
+`make autopilot` and `make destroy` accept the same cloud goals.
+
 ## Manual multi-cloud smoke test
 
 `make spot` is the one-shot version. Running the same idea by hand — one
 `apply` per cloud, then tearing both down — is useful
-when you want to watch each step, or only need two of the three clouds. See
+when you want to watch each step. See
 [Examples: smoke test](examples.md#smoke-test-create-and-destroy-a-throwaway-cluster)
 for the full walkthrough (it already uses `--spot`); the only difference here
 is which cluster IDs and clouds you pick.

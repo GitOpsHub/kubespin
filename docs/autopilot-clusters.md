@@ -3,7 +3,7 @@
 One flag, `--autopilot`, swaps standard node-pool provisioning for each
 provider's fully-managed compute mode: **GKE Autopilot** on GCP and **EKS
 Auto Mode** on AWS. It is opt-in — omitting it leaves `apply`'s default
-behavior (manually-sized node pools, `cluster-autoscaler`/Karpenter as an
+behavior (manually-sized node pools, `cluster-autoscaler` as an
 addon) unchanged. **Azure has no equivalent today** (AKS's "Automatic"/Node
 Autoprovisioning mode requires an unreleased beta SDK); `--autopilot` is
 simply unsupported on `--provider azure`.
@@ -91,7 +91,7 @@ still installed, since EFS has no Auto Mode equivalent.
   so kubespin treats silently discarding one of these as more likely to
   surprise an operator than erroring outright.
 - **Only Argo CD in `addons.yaml`.** Every catalog Helm addon (cert-manager,
-  monitoring, ingress, Kyverno, `cluster-autoscaler`/`karpenter`, and so on)
+  monitoring, ingress, Kyverno, `cluster-autoscaler`, and so on)
   is dropped for an Autopilot/Auto Mode cluster — Argo CD is installed and
   the cluster registers, but nothing else syncs from the cluster repo unless
   a per-cluster override patch adds it back.
@@ -126,27 +126,14 @@ kubespin delete --provider aws --region us-east-1 --cluster-id eks-auto-01
 
 ## Reusing a `--cluster-id` after delete
 
-`kubespin delete` marks a cluster's registry record `decommissioned`
-rather than removing it, and `apply` refuses to reuse a cluster ID that is
-`decommissioning` or `decommissioned` ("reviving one is not a phase
-transition; it is a new cluster"). This is not specific to Autopilot/Auto
-Mode, but it is easy to hit while iterating on a throwaway Autopilot cluster
-with the same `--cluster-id`:
+`kubespin delete` removes the cluster's registry record once teardown
+finishes, so the same `--cluster-id` can be applied again straight away. A
+record an older kubespin binary left at `decommissioned` is also reusable:
+`apply` replaces it with a fresh `pending` record.
 
-```text
-kubespin: applying gke-autopilot-01: cluster is decommissioning or decommissioned: gke-autopilot-01 is at phase decommissioned
-```
-
-There is currently no CLI command to purge a decommissioned record. Options:
-
-- **Pick a different `--cluster-id`** (e.g. append `-02`) — the simplest fix
-  for repeated test runs.
-- **Delete the registry rows directly**, if you have `KUBESPIN_REGISTRY_DSN`
-  access and specifically want the same ID back:
-  ```sql
-  DELETE FROM cluster_argocd_details WHERE cluster_id = 'gke-autopilot-01';
-  DELETE FROM fleet_registry WHERE cluster_id = 'gke-autopilot-01';
-  ```
+A cluster left at `decommissioning` is different. Its teardown failed part-way,
+so `apply` refuses it until you run `kubespin delete` again to finish the
+teardown.
 
 ## Azure
 

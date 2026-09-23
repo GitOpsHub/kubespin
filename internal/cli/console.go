@@ -24,7 +24,13 @@ import (
 // This handler prints the same record as fixed-width columns, so the eye can
 // run down the message and the cluster instead of parsing each line:
 //
-//	11:32:55 INFO  running step          eks-auto-dev  step="create and seed repository" phase=cluster-created
+//	11:32:55 INFO  Starting Step 2/4              eks-auto-dev         step="create and seed repository"
+//	11:33:08 INFO  Completed Step 2/4             eks-auto-dev         step="create and seed repository" phase=repo-pushed took=13.2s
+//
+// Messages are short Title Case labels; everything variable lives in the
+// attributes. An error attribute is always moved to the end of the line and
+// coloured, and a warning's or error's message takes its level's colour, so
+// a failure in a long run is findable by eye rather than by grep.
 //
 // Colour is applied only when the output is a terminal, because the common
 // way to watch a multi-cloud run is `make autopilot`, which pipes every
@@ -42,15 +48,17 @@ type consoleHandler struct {
 	groups []string
 }
 
-// Column widths. The message column is wide enough for the longest message
-// this codebase actually logs ("installing argocd and waiting for it to
-// become ready; this takes a few minutes" is longer, and simply runs over —
+// Column widths. The message column fits every Info-or-above message this
+// codebase logs; a longer one (a few Debug messages) simply runs over —
 // overflow shifts one line's attributes right rather than truncating
-// anything, since a truncated log is worse than a ragged one).
+// anything, since a truncated log is worse than a ragged one.
 const (
-	consoleMessageWidth = 34
+	consoleMessageWidth = 30
 	consoleClusterWidth = 20
 )
+
+// consoleErrorKey is the attribute moved to the end of the line and coloured.
+const consoleErrorKey = "error"
 
 // ANSI colours, kept to the 8 basic ones so they survive whatever theme the
 // operator's terminal uses.
@@ -125,16 +133,23 @@ func (h *consoleHandler) Handle(_ context.Context, r slog.Record) error {
 	// three interleaved provisions apart.
 	cluster, attrs := splitCluster(r)
 
-	line.WriteString(pad(r.Message, consoleMessageWidth))
+	line.WriteString(h.paint(pad(r.Message, consoleMessageWidth), messageColor(r.Level)))
 	line.WriteByte(' ')
 	line.WriteString(h.paint(pad(cluster, consoleClusterWidth), ansiBold))
 
-	var rest strings.Builder
-	rest.WriteString(h.attrs)
+	line.WriteString(h.attrs)
+	var errAttr *slog.Attr
 	for _, a := range attrs {
-		h.appendAttr(&rest, h.groups, a)
+		if a.Key == consoleErrorKey && len(h.groups) == 0 {
+			errAttr = &a
+			continue
+		}
+		h.appendAttr(&line, h.groups, a)
 	}
-	line.WriteString(rest.String())
+	if errAttr != nil {
+		line.WriteByte(' ')
+		line.WriteString(h.paint(consoleErrorKey+"="+quoteIfNeeded(formatValue(errAttr.Value.Resolve())), ansiRed))
+	}
 
 	line.WriteByte('\n')
 
@@ -161,6 +176,19 @@ func splitCluster(r slog.Record) (cluster string, rest []slog.Attr) {
 		return true
 	})
 	return cluster, rest
+}
+
+// messageColor highlights the message of a record worth noticing: routine
+// progress stays plain, so the eye lands on what went wrong.
+func messageColor(level slog.Level) string {
+	switch {
+	case level >= slog.LevelError:
+		return ansiBold + ansiRed
+	case level >= slog.LevelWarn:
+		return ansiYellow
+	default:
+		return ""
+	}
 }
 
 // level5 renders the level in a fixed five-column field, coloured by
@@ -210,7 +238,32 @@ func (h *consoleHandler) appendAttr(b *strings.Builder, groups []string, a slog.
 
 	b.WriteByte(' ')
 	b.WriteString(h.paint(key+"=", ansiDim))
-	b.WriteString(quoteIfNeeded(a.Value.String()))
+	b.WriteString(quoteIfNeeded(formatValue(a.Value)))
+}
+
+// formatValue renders a resolved value for a human: durations rounded to a
+// readable precision (a step's "took=12m3.481920317s" is noise past the
+// second) and times to the second, without the monotonic clock suffix.
+func formatValue(v slog.Value) string {
+	switch v.Kind() {
+	case slog.KindDuration:
+		return roundDuration(v.Duration()).String()
+	case slog.KindTime:
+		return v.Time().Format(time.RFC3339)
+	default:
+		return v.String()
+	}
+}
+
+func roundDuration(d time.Duration) time.Duration {
+	switch {
+	case d >= time.Minute:
+		return d.Round(time.Second)
+	case d >= time.Second:
+		return d.Round(100 * time.Millisecond)
+	default:
+		return d.Round(time.Millisecond)
+	}
 }
 
 // quoteIfNeeded quotes a value containing whitespace or a quote, so a
@@ -239,7 +292,7 @@ func pad(s string, width int) string {
 // applied by the caller before painting, so the escape sequences never count
 // towards a column's width.
 func (h *consoleHandler) paint(s, color string) string {
-	if !h.color || s == "" {
+	if !h.color || s == "" || color == "" {
 		return s
 	}
 	return color + s + ansiReset

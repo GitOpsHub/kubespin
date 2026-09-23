@@ -67,7 +67,7 @@ func (o *Orchestrator) keepLeaseAlive(ctx context.Context, id core.ClusterID) (c
 			lease, err := o.registry.RenewLease(runCtx, id, o.holder, o.leaseTTL)
 			switch {
 			case err == nil:
-				o.logger.Debug("renewed lease", "cluster", id, "holder", o.holder, "expires_at", lease.ExpiresAt)
+				o.logger.Debug("Renewed Lease", "cluster", id, "holder", o.holder, "expiresAt", lease.ExpiresAt)
 
 			case runCtx.Err() != nil:
 				// The run finished or the operator interrupted it; the
@@ -95,7 +95,7 @@ func (o *Orchestrator) keepLeaseAlive(ctx context.Context, id core.ClusterID) (c
 				// expiry we could not refresh destroyed work to prevent a
 				// race that could not happen. See registry.RenewLease, which
 				// reclaims an expired lease that still names this holder.
-				o.logger.Warn("could not renew lease; will keep retrying",
+				o.logger.Warn("Lease Renewal Failed, Retrying",
 					"cluster", id, "holder", o.holder, "error", err)
 			}
 		}

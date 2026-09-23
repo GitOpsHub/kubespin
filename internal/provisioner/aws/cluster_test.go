@@ -219,8 +219,8 @@ func TestReconcile_NoDriftMakesNoCalls(t *testing.T) {
 	f.roles[names{spec}.nodeRole()] = "arn:aws:iam::123456789012:role/" + names{spec}.nodeRole()
 	f.attached[names{spec}.nodeRole()] = []string{policyEKSWorkerNode, policyEKSCNI, policyECRReadOnly}
 
-	oidcArn := "arn:aws:iam::123456789012:oidc-provider/" + strings.TrimPrefix(testIssuer, "https://")
-	f.oidc[oidcArn] = strings.TrimPrefix(testIssuer, "https://")
+	// The CSI drivers here were bound through IRSA by an older kubespin;
+	// Pod Identity must not churn them on every apply.
 	for _, d := range []struct {
 		role, policy, addon string
 	}{
@@ -234,6 +234,18 @@ func TestReconcile_NoDriftMakesNoCalls(t *testing.T) {
 			AddonName:             aws.String(d.addon),
 			ServiceAccountRoleArn: aws.String(roleARN),
 		}
+	}
+	f.addons[addonVPCCNI] = &ekstypes.Addon{
+		AddonName: aws.String(addonVPCCNI),
+		// Same settings, different key order and spacing: still no drift.
+		ConfigurationValues: aws.String(`{"env": {"WARM_PREFIX_TARGET": "1", "ENABLE_PREFIX_DELEGATION": "true"}}`),
+	}
+	// A first pass installs everything else, the way the apply that created
+	// the cluster would have; the reconcile below must then find every add-on,
+	// role, Pod Identity binding, and inline policy (read back URL-encoded,
+	// as IAM returns it) unchanged.
+	if _, err := NewClusterProvisioner(f.clients()).Reconcile(t.Context(), spec); err != nil {
+		t.Fatalf("first Reconcile: %v", err)
 	}
 	f.calls = nil
 
@@ -448,9 +460,9 @@ func TestDelete(t *testing.T) {
 	})
 
 	// Neither EKS's DeleteCluster nor DeleteNodegroup clean up the IAM
-	// resources ensureRole/ensureOIDCProvider created — without this, every
-	// deleted cluster left its clusterRole, nodeRole, and OIDC provider
-	// behind indefinitely.
+	// resources ensureRole created, or the OIDC provider an IRSA-era cluster
+	// has — without this, every deleted cluster left its clusterRole,
+	// nodeRole, and OIDC provider behind indefinitely.
 	t.Run("deletes the cluster/node IAM roles and the OIDC provider", func(t *testing.T) {
 		f := newFakeAWS()
 		spec := testSpec()

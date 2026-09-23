@@ -170,7 +170,7 @@ func (p *Postgres) Get(ctx context.Context, id core.ClusterID) (Record, error) {
 		}
 		return Record{}, fmt.Errorf("getting cluster %s: %w", id, err)
 	}
-	p.log().Debug("read registry record", "cluster", id, "phase", rec.Phase, "version", rec.Version)
+	p.log().Debug("Read Registry Record", "cluster", id, "phase", rec.Phase, "version", rec.Version)
 	return rec, nil
 }
 
@@ -212,12 +212,12 @@ func (p *Postgres) Create(ctx context.Context, rec Record) (Record, error) {
 		// the row is read back: ours if it still carries exactly what this
 		// call wrote.
 		if attempts > 1 && p.matchesOurInsert(ctx, rec) {
-			p.log().Debug("create landed on an earlier attempt", "cluster", rec.ClusterID)
+			p.log().Debug("Create Landed On Earlier Attempt", "cluster", rec.ClusterID)
 			return rec, nil
 		}
 		return Record{}, fmt.Errorf("%w: %s", ErrAlreadyExists, rec.ClusterID)
 	}
-	p.log().Debug("created registry record", "cluster", rec.ClusterID, "phase", rec.Phase, "provider", rec.Provider)
+	p.log().Debug("Created Registry Record", "cluster", rec.ClusterID, "phase", rec.Phase, "provider", rec.Provider)
 	return rec, nil
 }
 
@@ -264,7 +264,7 @@ func (p *Postgres) UpdatePhase(ctx context.Context, rec Record, to core.Phase) (
 			if attempts > 1 {
 				if current, getErr := p.Get(ctx, rec.ClusterID); getErr == nil &&
 					current.Phase == to && current.Version == rec.Version+1 {
-					p.log().Debug("phase transition landed on an earlier attempt",
+					p.log().Debug("Phase Transition Landed On Earlier Attempt",
 						"cluster", rec.ClusterID, "to", to, "version", current.Version)
 					return current, nil
 				}
@@ -280,7 +280,7 @@ func (p *Postgres) UpdatePhase(ctx context.Context, rec Record, to core.Phase) (
 		}
 		return Record{}, fmt.Errorf("updating phase for %s: %w", rec.ClusterID, err)
 	}
-	p.log().Debug("recorded phase transition",
+	p.log().Debug("Recorded Phase Transition",
 		"cluster", rec.ClusterID, "from", rec.Phase, "to", to, "version", updated.Version)
 	return updated, nil
 }
@@ -322,7 +322,7 @@ func (p *Postgres) RecordArgoCDAccess(ctx context.Context, id core.ClusterID, ac
 	if n, err := res.RowsAffected(); err != nil || n == 0 {
 		return fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
-	p.log().Debug("recorded argocd access", "cluster", id, "endpoint", access.Endpoint)
+	p.log().Debug("Recorded Argo CD Access", "cluster", id, "endpoint", access.Endpoint)
 	return nil
 }
 
@@ -377,7 +377,7 @@ func (p *Postgres) Delete(ctx context.Context, id core.ClusterID) error {
 	}); err != nil {
 		return err
 	}
-	p.log().Debug("deleted registry record", "cluster", id)
+	p.log().Debug("Deleted Registry Record", "cluster", id)
 	return nil
 }
 
@@ -461,11 +461,11 @@ func (p *Postgres) AcquireLease(ctx context.Context, id core.ClusterID, holder s
 		if errors.Is(conflict, ErrLeaseHeld) {
 			// The exact race the lease exists to catch: another apply is
 			// already provisioning this cluster.
-			p.log().Warn("lease acquisition conflicted with another run", "cluster", id, "holder", holder)
+			p.log().Warn("Lease Held By Another Run", "cluster", id, "holder", holder)
 		}
 		return Lease{}, conflict
 	}
-	p.log().Debug("acquired lease", "cluster", id, "holder", holder, "expires_at", lease.ExpiresAt)
+	p.log().Debug("Acquired Lease", "cluster", id, "holder", holder, "expiresAt", lease.ExpiresAt)
 	return lease, nil
 }
 
@@ -502,7 +502,7 @@ func (p *Postgres) RenewLease(ctx context.Context, id core.ClusterID, holder str
 	if n == 0 {
 		return Lease{}, p.leaseConflict(ctx, id, ErrLeaseLost)
 	}
-	p.log().Debug("renewed lease", "cluster", id, "holder", holder, "expires_at", lease.ExpiresAt)
+	p.log().Debug("Renewed Lease", "cluster", id, "holder", holder, "expiresAt", lease.ExpiresAt)
 	return lease, nil
 }
 
@@ -528,7 +528,7 @@ func (p *Postgres) ReleaseLease(ctx context.Context, id core.ClusterID, holder s
 	if n == 0 {
 		return p.leaseConflict(ctx, id, ErrLeaseLost)
 	}
-	p.log().Debug("released lease", "cluster", id, "holder", holder)
+	p.log().Debug("Released Lease", "cluster", id, "holder", holder)
 	return nil
 }
 

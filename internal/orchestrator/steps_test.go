@@ -318,8 +318,8 @@ func TestProvisioningSteps_InstallsArgoCDAndAppliesAppOfApps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
-	if _, ok := checkout.File(argocd.AppsDir + "/cert-manager.yaml"); !ok {
-		t.Error("expected an app-of-apps Application to have been committed for cert-manager")
+	if _, ok := checkout.File(argocd.AppsDir + "/kyverno.yaml"); !ok {
+		t.Error("expected an app-of-apps Application to have been committed for kyverno")
 	}
 }
 
@@ -382,7 +382,7 @@ func TestProvisioningSteps_SeedsRepository_AppliesOverrides(t *testing.T) {
 	steps := provisioningSteps(newFakeCloud().cloud(), repoProv, catalog.NewBuiltinResolver(), registry.NewMemory(), quietLogger())
 
 	spec := testSpec()
-	spec.Overrides = []core.AddonOverride{{Name: "cert-manager", Version: "1.16.0"}}
+	spec.Overrides = []core.AddonOverride{{Name: "kyverno", Version: "3.2.7"}}
 
 	step, ok := steps[core.PhaseClusterCreated]
 	if !ok {
@@ -400,7 +400,7 @@ func TestProvisioningSteps_SeedsRepository_AppliesOverrides(t *testing.T) {
 	if !ok {
 		t.Fatal("expected addons.yaml to have been seeded")
 	}
-	if !strings.Contains(string(addonsYAML), "1.16.0") {
+	if !strings.Contains(string(addonsYAML), "3.2.7") {
 		t.Errorf("addons.yaml does not reflect the override: %s", addonsYAML)
 	}
 }
@@ -440,7 +440,7 @@ func TestReadyReconcile_ReconvergesArgoCDRelease(t *testing.T) {
 }
 
 // ReadyReconcile must also re-commit apps/*.yaml, not just addons.yaml: an
-// override on a regular Argo-CD-synced addon (here cilium) has to reach the
+// override on a regular Argo-CD-synced addon (here kyverno) has to reach the
 // Application manifest Argo CD's app-of-apps actually watches, or it never
 // syncs — addons.yaml alone is just the informational record.
 func TestReadyReconcile_ReconvergesAppOfApps(t *testing.T) {
@@ -462,8 +462,8 @@ func TestReadyReconcile_ReconvergesAppOfApps(t *testing.T) {
 	// Simulate a cluster.yaml edit adding an override after the cluster is
 	// already ready, the same way an operator would push a fix.
 	spec.Overrides = []core.AddonOverride{{
-		Name:   "cilium",
-		Values: map[string]any{"cgroup": map[string]any{"autoMount": map[string]any{"enabled": false}}},
+		Name:   "kyverno",
+		Values: map[string]any{"admissionController": map[string]any{"replicas": 1}},
 	}}
 
 	reconcile := ReadyReconcile(f.cloud(), installer, repoProv, resolver, quietLogger())
@@ -475,12 +475,12 @@ func TestReadyReconcile_ReconvergesAppOfApps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
-	ciliumApp, ok := checkout.File(argocd.AppsDir + "/cilium.yaml")
+	kyvernoApp, ok := checkout.File(argocd.AppsDir + "/kyverno.yaml")
 	if !ok {
-		t.Fatal("expected apps/cilium.yaml to exist")
+		t.Fatal("expected apps/kyverno.yaml to exist")
 	}
-	if !strings.Contains(string(ciliumApp), "autoMount") {
-		t.Errorf("apps/cilium.yaml does not reflect the override: %s", ciliumApp)
+	if !strings.Contains(string(kyvernoApp), "admissionController") {
+		t.Errorf("apps/kyverno.yaml does not reflect the override: %s", kyvernoApp)
 	}
 }
 

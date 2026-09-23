@@ -45,6 +45,6 @@ func (p *NetworkProvisioner) DeleteNetwork(ctx context.Context, spec core.Cluste
 	if err := p.c.resourceGroups.DeleteResourceGroup(ctx, n.resourceGroup()); err != nil {
 		return fmt.Errorf("deleting resource group %s: %w", n.resourceGroup(), err)
 	}
-	p.c.logger.Info("deleted resource group", "group", n.resourceGroup())
+	p.c.logger.Info("Deleted Resource Group", "group", n.resourceGroup())
 	return nil
 }

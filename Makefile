@@ -106,162 +106,161 @@ fmt:
 bootstrap:
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 
-## Spins up a --spot dev cluster on all three clouds in parallel, using the
-## cheapest-per-cloud recipe from docs/low-cost-dev-clusters.md#putting-it-together.
-## --access public + --authorized-cidrs (pinned to the caller's own IP, so the
-## Argo CD install step below can reach each API server without a VPN/bastion)
-## rather than the doc's --access private default, since a bare `make spot`
-## has no such reachability to assume.
+## ---------------------------------------------------------------------------
+## Dev clusters: spot, autopilot, destroy
 ##
-## Requires GITHUB_TOKEN (env, for repo creation), GITHUB_ORG, GCP_PROJECT, and
-## AZURE_SUBSCRIPTION_ID; cluster IDs/regions are overridable, e.g.:
-##   make spot AWS_REGION=us-west-2 AWS_CLUSTER_ID=my-aws-dev
-## Requires `kubespin login` to have already authenticated all three clouds,
-## and KUBESPIN_REGISTRY_DSN to be set (env/.env), same as any real apply.
-AWS_REGION        ?= us-east-1
-AWS_CLUSTER_ID     ?= eks-spot-dev
-GCP_REGION         ?= us-central1
-GCP_CLUSTER_ID     ?= gke-spot-dev
-AZURE_REGION       ?= eastus
-AZURE_CLUSTER_ID   ?= aks-spot-dev
-## Addon set for the spot clusters. `apply` takes --size (small|medium|large);
-## the profile flag this used to pass no longer exists on the command.
-SPOT_SIZE          ?= small
-
-.PHONY: spot
-spot: build
-	@org="$$GITHUB_ORG"; \
-	proj="$$GCP_PROJECT"; \
-	test -n "$$proj" || proj="$$(gcloud config get-value project 2>/dev/null | grep -v '^(unset)$$' || true)"; \
-	sub="$$AZURE_SUBSCRIPTION_ID"; \
-	test -n "$$sub" || sub="$$(az account show --query id -o tsv 2>/dev/null || true)"; \
-	test -n "$$org" || { echo "GITHUB_ORG must be set (GitHub org cluster repos are created in) — add it to .env or export it" >&2; exit 1; }; \
-	test -n "$$proj" || { echo "GCP_PROJECT must be set (GCP project hosting the GKE cluster) — add it to .env, export it, or set a default with 'gcloud config set project'" >&2; exit 1; }; \
-	test -n "$$sub" || { echo "AZURE_SUBSCRIPTION_ID must be set (Azure subscription hosting the AKS cluster) — add it to .env, export it, or run 'az login'" >&2; exit 1; }; \
-	ip="$$(curl -s https://checkip.amazonaws.com)"; \
-	test -n "$$ip" || { echo "could not determine this machine's public IP for --authorized-cidrs" >&2; exit 1; }; \
-	echo "==> spinning up spot clusters on aws, gcp, azure (authorized for $$ip/32)"; \
-	( kubespin apply --provider aws --region $(AWS_REGION) --cluster-id $(AWS_CLUSTER_ID) \
-	    --access public --authorized-cidrs "$$ip/32" --spot \
-	    --size $(SPOT_SIZE) --github-org "$$org" 2>&1 | sed 's/^/[aws]   /' ) & \
-	( kubespin apply --provider gcp --gcp-project "$$proj" --region $(GCP_REGION) --cluster-id $(GCP_CLUSTER_ID) \
-	    --access public --authorized-cidrs "$$ip/32" --spot \
-	    --size $(SPOT_SIZE) --github-org "$$org" 2>&1 | sed 's/^/[gcp]   /' ) & \
-	( kubespin apply --provider azure --azure-subscription "$$sub" --region $(AZURE_REGION) --cluster-id $(AZURE_CLUSTER_ID) \
-	    --access public --authorized-cidrs "$$ip/32" --spot \
-	    --size $(SPOT_SIZE) --github-org "$$org" 2>&1 | sed 's/^/[azure] /' ) & \
-	wait
-
-## Spins up a fully-managed "autopilot" cluster on each cloud that has one —
-## EKS Auto Mode on AWS, GKE Autopilot on GCP — in parallel. See
-## docs/autopilot-clusters.md. Azure is deliberately absent: AKS's equivalent
-## needs an unreleased beta SDK, so --autopilot is unsupported there.
+## Every target below takes the clouds to act on as extra goals; with none
+## named, it acts on every cloud it supports:
+##   make spot                    # aws, gcp and azure
+##   make spot aws                # just the EKS spot cluster
+##   make autopilot gcp           # just GKE Autopilot
+##   make destroy-spot aws gcp    # tear down the EKS + GKE spot clusters
+##   make destroy aws             # every aws cluster from both sets
 ##
-## Like `make spot`, this uses --access public + --authorized-cidrs pinned to
-## the caller's own IP rather than the doc's --access private default: the
-## Argo CD install step connects to each API server from this machine, and a
-## bare `make autopilot` has no VPN/bastion reachability to assume.
+## Each one needs `kubespin login` to have authenticated the selected clouds,
+## plus GITHUB_TOKEN, GITHUB_ORG and KUBESPIN_REGISTRY_DSN (.env is loaded
+## automatically, see DOTENV above). Selecting gcp also needs GCP_PROJECT,
+## which falls back to `gcloud config get-value project`. Selecting azure also
+## needs AZURE_SUBSCRIPTION_ID, which falls back to `az account show`.
 ##
-## No --size/--spot/node-pool flags: the provider manages compute itself (those
-## flags are rejected alongside --autopilot), and an Autopilot cluster's addon
-## set is only Argo CD regardless of size.
+## Clusters use --access public with --authorized-cidrs pinned to the caller's
+## own IP, not the --access private default from the docs. The Argo CD install
+## step connects to each API server from this machine, and a bare `make` run
+## has no VPN or bastion reachability to assume. `kubespin delete` requires
+## --access to match, so the destroy targets pass it too.
 ##
-## Requires GITHUB_TOKEN (for repo creation) plus GITHUB_ORG and GCP_PROJECT
-## — .env is loaded automatically (see DOTENV above), and GCP_PROJECT falls
-## back to `gcloud config get-value project`.
-## Cluster IDs/regions are overridable, e.g.:
-##   make autopilot AWS_REGION=us-west-2 AWS_AUTOPILOT_CLUSTER_ID=my-aws-auto
-## Requires `kubespin login` to have already authenticated aws and gcp, and
-## KUBESPIN_REGISTRY_DSN to be set (env/.env), same as any real apply.
+## Cluster IDs and regions can be overridden, e.g.:
+##   make spot aws AWS_REGION=us-west-2 AWS_CLUSTER_ID=my-aws-dev
+## ---------------------------------------------------------------------------
+AWS_REGION               ?= us-east-1
+GCP_REGION               ?= us-central1
+AZURE_REGION             ?= eastus
+AWS_CLUSTER_ID           ?= eks-spot-dev
+GCP_CLUSTER_ID           ?= gke-spot-dev
+AZURE_CLUSTER_ID         ?= aks-spot-dev
 AWS_AUTOPILOT_CLUSTER_ID ?= eks-auto-dev
 GCP_AUTOPILOT_CLUSTER_ID ?= gke-autopilot-dev
+## Addon set for the spot clusters: --size small|medium|large.
+SPOT_SIZE                ?= small
+## Set YES=1 to skip the destroy confirmation prompt.
+YES                      ?=
 
-.PHONY: autopilot
-autopilot: build
-	@org="$$GITHUB_ORG"; \
-	proj="$$GCP_PROJECT"; \
-	test -n "$$proj" || proj="$$(gcloud config get-value project 2>/dev/null | grep -v '^(unset)$$' || true)"; \
-	test -n "$$org" || { echo "GITHUB_ORG must be set (GitHub org cluster repos are created in) — add it to .env or export it" >&2; exit 1; }; \
-	test -n "$$proj" || { echo "GCP_PROJECT must be set (GCP project hosting the GKE Autopilot cluster) — add it to .env, export it, or set a default with 'gcloud config set project'" >&2; exit 1; }; \
-	ip="$$(curl -s https://checkip.amazonaws.com)"; \
-	test -n "$$ip" || { echo "could not determine this machine's public IP for --authorized-cidrs" >&2; exit 1; }; \
-	echo "==> spinning up autopilot clusters on aws, gcp (authorized for $$ip/32); azure has no equivalent"; \
-	( kubespin apply --provider aws --region $(AWS_REGION) --cluster-id $(AWS_AUTOPILOT_CLUSTER_ID) \
-	    --access public --authorized-cidrs "$$ip/32" --autopilot \
-	    --github-org "$$org" 2>&1 | sed 's/^/[aws]   /' ) & \
-	( kubespin apply --provider gcp --gcp-project "$$proj" --region $(GCP_REGION) --cluster-id $(GCP_AUTOPILOT_CLUSTER_ID) \
-	    --access public --authorized-cidrs "$$ip/32" --autopilot \
-	    --github-org "$$org" 2>&1 | sed 's/^/[gcp]   /' ) & \
-	wait
+## Clouds named as goals. They exist as targets only so that `make spot aws`
+## parses; on their own they do nothing.
+CLOUDS := $(filter aws gcp azure,$(MAKECMDGOALS))
+.PHONY: aws gcp azure
+aws gcp azure:
+	@:
 
-## Tears down everything `make spot` and `make autopilot` create. Deletes are
-## idempotent — a cluster that was never created, or is already decommissioned,
-## is a no-op — so destroying both sets is safe even if you only spun one up.
-## Each cluster's GitHub repository is deleted along with it, so the cluster ID
-## is free to use again; that history is not recoverable.
-##
-## Prompts once for confirmation. YES=1 skips it (the per-cluster `kubespin
-## delete` prompt is always skipped, since five interleaved prompts across
-## backgrounded deletes cannot be answered sensibly).
-##
-##   make destroy                 # both sets, one prompt
-##   make destroy-autopilot       # just the EKS Auto Mode + GKE Autopilot pair
-##   make destroy-spot YES=1      # just the three spot clusters, unattended
-##
-## --access public matches what both targets apply with; `kubespin delete`
-## requires it to match the cluster's spec.
-YES ?=
+## Autopilot has no Azure equivalent: AKS Automatic needs a beta SDK that
+## kubespin does not depend on, so --autopilot is unsupported there.
+SPOT_CLOUDS      := $(or $(CLOUDS),aws gcp azure)
+AUTOPILOT_CLOUDS := $(or $(filter aws gcp,$(CLOUDS)),$(if $(CLOUDS),,aws gcp))
+
+## Resolves and validates what the clouds in $(1) need, into $$org, $$proj and
+## $$sub.
+define prereq_common
+org="$$GITHUB_ORG"; \
+test -n "$$org" || { echo "GITHUB_ORG must be set (GitHub org the cluster repos live in); add it to .env or export it" >&2; exit 1; };
+endef
+define prereq_gcp
+proj="$$GCP_PROJECT"; \
+test -n "$$proj" || proj="$$(gcloud config get-value project 2>/dev/null | grep -v '^(unset)$$' || true)"; \
+test -n "$$proj" || { echo "GCP_PROJECT must be set (GCP project hosting the GKE cluster); add it to .env, export it, or run 'gcloud config set project'" >&2; exit 1; };
+endef
+define prereq_azure
+sub="$$AZURE_SUBSCRIPTION_ID"; \
+test -n "$$sub" || sub="$$(az account show --query id -o tsv 2>/dev/null || true)"; \
+test -n "$$sub" || { echo "AZURE_SUBSCRIPTION_ID must be set (Azure subscription hosting the AKS cluster); add it to .env, export it, or run 'az login'" >&2; exit 1; };
+endef
+prereqs = $(prereq_common) $(if $(filter gcp,$(1)),$(prereq_gcp)) $(if $(filter azure,$(1)),$(prereq_azure))
+
+define caller_ip
+ip="$$(curl -s https://checkip.amazonaws.com)"; \
+test -n "$$ip" || { echo "could not determine this machine's public IP for --authorized-cidrs" >&2; exit 1; };
+endef
+
+## Per-cloud flags that pick the cluster's location.
+where_aws   = --provider aws --region $(AWS_REGION)
+where_gcp   = --provider gcp --gcp-project "$$proj" --region $(GCP_REGION)
+where_azure = --provider azure --azure-subscription "$$sub" --region $(AZURE_REGION)
+
+spot_id_aws        = $(AWS_CLUSTER_ID)
+spot_id_gcp        = $(GCP_CLUSTER_ID)
+spot_id_azure      = $(AZURE_CLUSTER_ID)
+autopilot_id_aws   = $(AWS_AUTOPILOT_CLUSTER_ID)
+autopilot_id_gcp   = $(GCP_AUTOPILOT_CLUSTER_ID)
+
+## The kubespin invocation for each (set, action, cloud).
+spot_apply_flags      = --access public --authorized-cidrs "$$ip/32" --spot --size $(SPOT_SIZE) --github-org "$$org"
+autopilot_apply_flags = --access public --authorized-cidrs "$$ip/32" --autopilot --github-org "$$org"
+delete_flags          = --access public --github-org "$$org" --yes
+apply_cmd  = kubespin apply $(where_$(2)) --cluster-id $($(1)_id_$(2)) $($(1)_apply_flags)
+delete_cmd = kubespin delete $(where_$(2)) --cluster-id $($(1)_id_$(2)) $(delete_flags)
+
+## Runs $(1)_cmd for set $(2) on every cloud in $(3) in parallel, prefixing
+## each line of output with its cloud, and fails listing the clouds that did.
+define run_parallel
+fail="$$(mktemp -d)"; \
+$(foreach c,$(3),( ( $(call $(1)_cmd,$(2),$(c)) 2>&1 || touch "$$fail/$(c)" ) | sed "s/^/$$(printf '%-8s' '[$(c)]')/" ) & ) \
+wait; \
+bad="$$(ls "$$fail")"; rm -rf "$$fail"; \
+test -z "$$bad" || { echo "==> $(1) failed on:" $$bad "(rerun to resume)" >&2; exit 1; }
+endef
 
 confirm_destroy = test -n "$(YES)" || { \
 	printf '==> about to delete clusters: %s\n    their GitHub repositories are deleted too, irreversibly\n    type yes to continue: ' '$(1)'; \
 	read ans; test "$$ans" = yes || { echo "aborted" >&2; exit 1; }; }
 
+## Spins up a --spot dev cluster on each selected cloud, using the
+## cheapest-per-cloud recipe from docs/low-cost-dev-clusters.md#putting-it-together.
+.PHONY: spot
+spot: build
+	@$(call prereqs,$(SPOT_CLOUDS)) \
+	$(caller_ip) \
+	echo "==> spinning up spot clusters on $(SPOT_CLOUDS) (authorized for $$ip/32)"; \
+	$(call run_parallel,apply,spot,$(SPOT_CLOUDS))
+
+## Spins up a fully managed cluster on each selected cloud that has one: EKS
+## Auto Mode on AWS and GKE Autopilot on GCP (see docs/autopilot-clusters.md).
+## It takes no --size or --spot flags because the provider manages compute
+## itself, and the addon set is Argo CD alone.
+.PHONY: autopilot
+autopilot: build
+	@test -n "$(AUTOPILOT_CLOUDS)" || { echo "autopilot supports aws and gcp only" >&2; exit 1; }; \
+	$(call prereqs,$(AUTOPILOT_CLOUDS)) \
+	$(caller_ip) \
+	echo "==> spinning up autopilot clusters on $(AUTOPILOT_CLOUDS) (authorized for $$ip/32)"; \
+	$(call run_parallel,apply,autopilot,$(AUTOPILOT_CLOUDS))
+
+## Tears down what `make spot` and `make autopilot` created. Each cluster's
+## registry record and GitHub repository are deleted with it, so the cluster ID
+## is free to reuse, and that history cannot be recovered. A failed delete
+## resumes when rerun.
+##
+## `destroy` asks for confirmation once. The per-cluster `kubespin delete`
+## prompt is always skipped, because interleaved prompts from parallel deletes
+## cannot be answered sensibly.
 .PHONY: destroy
 destroy:
-	@$(call confirm_destroy,$(AWS_AUTOPILOT_CLUSTER_ID) $(GCP_AUTOPILOT_CLUSTER_ID) $(AWS_CLUSTER_ID) $(GCP_CLUSTER_ID) $(AZURE_CLUSTER_ID))
-	@$(MAKE) --no-print-directory destroy-autopilot YES=1
-	@$(MAKE) --no-print-directory destroy-spot YES=1
-
-.PHONY: destroy-autopilot
-destroy-autopilot: build
-	@org="$$GITHUB_ORG"; \
-	proj="$$GCP_PROJECT"; \
-	test -n "$$proj" || proj="$$(gcloud config get-value project 2>/dev/null | grep -v '^(unset)$$' || true)"; \
-	test -n "$$org" || { echo "GITHUB_ORG must be set (GitHub org the cluster repos live in) — add it to .env or export it" >&2; exit 1; }; \
-	test -n "$$proj" || { echo "GCP_PROJECT must be set (GCP project hosting the GKE cluster) — add it to .env, export it, or set a default with 'gcloud config set project'" >&2; exit 1; }; \
-	$(call confirm_destroy,$(AWS_AUTOPILOT_CLUSTER_ID) $(GCP_AUTOPILOT_CLUSTER_ID)); \
-	fail="$$(mktemp -d)"; \
-	echo "==> deleting autopilot clusters on aws, gcp"; \
-	( ( kubespin delete --provider aws --region $(AWS_REGION) --cluster-id $(AWS_AUTOPILOT_CLUSTER_ID) \
-	      --access public --github-org "$$org" --yes 2>&1 || touch "$$fail/aws" ) | sed 's/^/[aws]   /' ) & \
-	( ( kubespin delete --provider gcp --gcp-project "$$proj" --region $(GCP_REGION) --cluster-id $(GCP_AUTOPILOT_CLUSTER_ID) \
-	      --access public --github-org "$$org" --yes 2>&1 || touch "$$fail/gcp" ) | sed 's/^/[gcp]   /' ) & \
-	wait; \
-	bad="$$(ls "$$fail")"; rm -rf "$$fail"; \
-	test -z "$$bad" || { echo "==> delete failed on: $$bad (rerun to resume; delete is idempotent)" >&2; exit 1; }
+	@$(call confirm_destroy,$(strip $(foreach c,$(AUTOPILOT_CLOUDS),$(autopilot_id_$(c))) $(foreach c,$(SPOT_CLOUDS),$(spot_id_$(c)))))
+	@$(if $(AUTOPILOT_CLOUDS),$(MAKE) --no-print-directory destroy-autopilot $(CLOUDS) YES=1,:)
+	@$(MAKE) --no-print-directory destroy-spot $(CLOUDS) YES=1
 
 .PHONY: destroy-spot
 destroy-spot: build
-	@org="$$GITHUB_ORG"; \
-	proj="$$GCP_PROJECT"; \
-	test -n "$$proj" || proj="$$(gcloud config get-value project 2>/dev/null | grep -v '^(unset)$$' || true)"; \
-	sub="$$AZURE_SUBSCRIPTION_ID"; \
-	test -n "$$sub" || sub="$$(az account show --query id -o tsv 2>/dev/null || true)"; \
-	test -n "$$org" || { echo "GITHUB_ORG must be set (GitHub org the cluster repos live in) — add it to .env or export it" >&2; exit 1; }; \
-	test -n "$$proj" || { echo "GCP_PROJECT must be set (GCP project hosting the GKE cluster) — add it to .env, export it, or set a default with 'gcloud config set project'" >&2; exit 1; }; \
-	test -n "$$sub" || { echo "AZURE_SUBSCRIPTION_ID must be set (Azure subscription hosting the AKS cluster) — add it to .env, export it, or run 'az login'" >&2; exit 1; }; \
-	$(call confirm_destroy,$(AWS_CLUSTER_ID) $(GCP_CLUSTER_ID) $(AZURE_CLUSTER_ID)); \
-	fail="$$(mktemp -d)"; \
-	echo "==> deleting spot clusters on aws, gcp, azure"; \
-	( ( kubespin delete --provider aws --region $(AWS_REGION) --cluster-id $(AWS_CLUSTER_ID) \
-	      --access public --github-org "$$org" --yes 2>&1 || touch "$$fail/aws" ) | sed 's/^/[aws]   /' ) & \
-	( ( kubespin delete --provider gcp --gcp-project "$$proj" --region $(GCP_REGION) --cluster-id $(GCP_CLUSTER_ID) \
-	      --access public --github-org "$$org" --yes 2>&1 || touch "$$fail/gcp" ) | sed 's/^/[gcp]   /' ) & \
-	( ( kubespin delete --provider azure --azure-subscription "$$sub" --region $(AZURE_REGION) --cluster-id $(AZURE_CLUSTER_ID) \
-	      --access public --github-org "$$org" --yes 2>&1 || touch "$$fail/azure" ) | sed 's/^/[azure] /' ) & \
-	wait; \
-	bad="$$(ls "$$fail")"; rm -rf "$$fail"; \
-	test -z "$$bad" || { echo "==> delete failed on: $$bad (rerun to resume; delete is idempotent)" >&2; exit 1; }
+	@$(call prereqs,$(SPOT_CLOUDS)) \
+	$(call confirm_destroy,$(foreach c,$(SPOT_CLOUDS),$(spot_id_$(c)))); \
+	echo "==> deleting spot clusters on $(SPOT_CLOUDS)"; \
+	$(call run_parallel,delete,spot,$(SPOT_CLOUDS))
+
+.PHONY: destroy-autopilot
+destroy-autopilot: build
+	@test -n "$(AUTOPILOT_CLOUDS)" || { echo "autopilot supports aws and gcp only" >&2; exit 1; }; \
+	$(call prereqs,$(AUTOPILOT_CLOUDS)) \
+	$(call confirm_destroy,$(foreach c,$(AUTOPILOT_CLOUDS),$(autopilot_id_$(c)))); \
+	echo "==> deleting autopilot clusters on $(AUTOPILOT_CLOUDS)"; \
+	$(call run_parallel,delete,autopilot,$(AUTOPILOT_CLOUDS))
 
 .PHONY: clean
 clean:

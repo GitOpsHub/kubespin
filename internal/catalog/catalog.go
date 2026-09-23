@@ -56,34 +56,32 @@ func (r *BuiltinResolver) Resolve(_ context.Context, size core.ClusterSize) (cor
 // Argo CD and the autoscaler are unconditional here rather than added by a
 // higher tier: every cluster gets Argo CD (catalog.ResolveForCluster also
 // defends this via withArgoCDAddon, in case a future size ever omits it),
-// and every cluster gets a node autoscaler appropriate to its cloud —
-// Karpenter on AWS (EKS-only technology, no GCP/Azure port exists) and
-// cluster-autoscaler on GCP/Azure. Profile.ForProvider is what makes the two
-// mutually exclusive per cluster: each carries a Providers gate naming the
-// clouds it applies to, so a given cluster only ever renders one of them.
+// and every cluster gets cluster-autoscaler. It appears twice — once
+// configured for AWS, once for GCP/Azure — and Profile.ForProvider keeps
+// exactly one per cluster, since each carries a Providers gate naming the
+// clouds it applies to.
 var baseAddons = []core.AddonRef{
 	{
-		// Cloud-default CNI is Cilium here; a cloud whose managed CNI
-		// (e.g. EKS's default VPC CNI) is preferred over Cilium can
-		// disable this addon via a per-cluster override (core.AddonOverride)
-		// without any catalog change.
-		Name:       "cilium",
-		Chart:      "cilium",
-		Repository: "https://helm.cilium.io",
-		Version:    "1.16.3",
-		Namespace:  "kube-system",
-	},
-	{
+		// No CNI addon: every cloud's managed CNI (EKS's VPC CNI, GKE's,
+		// AKS's) is already running when Argo CD first syncs. Layering a
+		// second CNI on top (chart-default Cilium did, with an overlay pod
+		// CIDR of 10.0.0.0/8 over the VPC's own range) hijacks node routing
+		// and takes every node NotReady.
+		// GCP/Azure only: on AWS the EKS add-on of the same name replaces
+		// this chart (internal/provisioner/aws/addons.go), installed and
+		// upgraded by EKS rather than Argo CD.
 		Name:       "cert-manager",
 		Chart:      "cert-manager",
 		Repository: "https://charts.jetstack.io",
 		Version:    "1.15.3",
 		Namespace:  "cert-manager",
+		Providers:  []core.Provider{core.ProviderGCP, core.ProviderAzure},
 	},
 	{
 		// Gateway API's CRDs are cloud-agnostic, but the controller that
-		// implements them is not (e.g. GKE Gateway controller vs. Cilium's
-		// own Gateway API support). This carries no per-provider gate yet —
+		// implements them is not (e.g. GKE Gateway controller vs. an
+		// ingress controller's own Gateway API support). This carries no
+		// per-provider gate yet —
 		// core.AddonRef has no provider constraint — so picking the
 		// per-cloud implementation this addon stands in for is still open.
 		Name:       "gateway-api",
@@ -100,26 +98,51 @@ var baseAddons = []core.AddonRef{
 		Namespace:  "external-secrets",
 	},
 	{
-		// GCP/Azure only: Karpenter (below) covers AWS. Without this gate the
-		// two autoscalers would fight over the same nodes on an AWS cluster.
+		// GCP/Azure: the same chart as the AWS entry below. The two share a
+		// name, and their Providers gates never overlap, so
+		// core.Profile.ForProvider leaves exactly one per cluster and an
+		// override naming "cluster-autoscaler" works on every cloud.
 		Name:       "cluster-autoscaler",
 		Chart:      "cluster-autoscaler",
 		Repository: "https://kubernetes.github.io/autoscaler",
 		Version:    "9.43.0",
-		Namespace:  "kube-system",
+		Namespace:  core.ClusterAutoscalerNamespace,
 		Providers:  []core.Provider{core.ProviderGCP, core.ProviderAzure},
 	},
 	{
-		// AWS only: Karpenter is EKS-specific technology, with no GCP/Azure
-		// equivalent — cluster-autoscaler (above) is what those clouds get
-		// instead. core.Profile.ForProvider drops whichever one does not
-		// apply before an override patch or Argo CD ever sees it.
-		Name:       "karpenter",
-		Chart:      "karpenter",
-		Repository: "oci://public.ecr.aws/karpenter/karpenter",
-		Version:    "1.0.6",
-		Namespace:  "karpenter",
+		// AWS: resizes the EKS managed node groups kubespin creates, found by
+		// the k8s.io/cluster-autoscaler/<cluster> tag EKS puts on every
+		// managed node group's Auto Scaling group. Its AWS permissions come
+		// from a role the AWS provisioner binds to this service account
+		// through EKS Pod Identity, so the values carry no role ARN.
+		//
+		// The extraArgs lean toward the lowest cost: least-waste packs pods
+		// onto the fewest nodes, and scale-down may remove a node running
+		// kube-system or emptyDir pods after 5 idle minutes rather than
+		// keeping it forever.
+		Name:       "cluster-autoscaler",
+		Chart:      "cluster-autoscaler",
+		Repository: "https://kubernetes.github.io/autoscaler",
+		Version:    "9.43.0",
+		Namespace:  core.ClusterAutoscalerNamespace,
 		Providers:  []core.Provider{core.ProviderAWS},
+		Values: map[string]any{
+			"cloudProvider": "aws",
+			"awsRegion":     RegionPlaceholder,
+			"autoDiscovery": map[string]any{"clusterName": ClusterIDPlaceholder},
+			"rbac": map[string]any{"serviceAccount": map[string]any{
+				"create": true,
+				"name":   core.ClusterAutoscalerServiceAccount,
+			}},
+			"extraArgs": map[string]any{
+				"expander":                      "least-waste",
+				"balance-similar-node-groups":   true,
+				"skip-nodes-with-system-pods":   false,
+				"skip-nodes-with-local-storage": false,
+				"scale-down-unneeded-time":      "5m",
+				"scale-down-delay-after-add":    "5m",
+			},
+		},
 	},
 	{
 		Name:       "kube-prometheus-stack",
@@ -129,11 +152,15 @@ var baseAddons = []core.AddonRef{
 		Namespace:  "monitoring",
 	},
 	{
+		// GCP/Azure only: on AWS the EKS add-on of the same name replaces
+		// this chart (internal/provisioner/aws/addons.go), installed and
+		// upgraded by EKS rather than Argo CD.
 		Name:       "fluent-bit",
 		Chart:      "fluent-bit",
 		Repository: "https://fluent.github.io/helm-charts",
 		Version:    "0.47.10",
 		Namespace:  "logging",
+		Providers:  []core.Provider{core.ProviderGCP, core.ProviderAzure},
 	},
 	{
 		Name:       "opencost",
@@ -143,11 +170,15 @@ var baseAddons = []core.AddonRef{
 		Namespace:  "opencost",
 	},
 	{
+		// GCP/Azure only: on AWS the EKS add-on of the same name replaces
+		// this chart (internal/provisioner/aws/addons.go), installed and
+		// upgraded by EKS rather than Argo CD.
 		Name:       "external-dns",
 		Chart:      "external-dns",
 		Repository: "https://kubernetes-sigs.github.io/external-dns",
 		Version:    "1.15.0",
 		Namespace:  "external-dns",
+		Providers:  []core.Provider{core.ProviderGCP, core.ProviderAzure},
 	},
 	{
 		Name:       "ingress-nginx",

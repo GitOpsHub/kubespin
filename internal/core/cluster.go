@@ -103,6 +103,14 @@ func (c CapacityType) Valid() bool {
 
 func (c CapacityType) String() string { return string(c) }
 
+// InstanceTypeAuto is the node pool instanceType that defers the choice to the
+// provisioner at node-pool creation: it picks the cheapest few instance types
+// currently on offer rather than one fixed type, so the pool always lands on
+// the lowest price the cloud has right now. AWS spot pools only — an EKS node
+// group can draw from a list of types, while a GKE node pool and an AKS agent
+// pool each take exactly one machine size.
+const InstanceTypeAuto = "auto"
+
 // NodePool is a homogeneous group of worker nodes. Sizing changes here are
 // infra diffs: they resolve to a cloud SDK reconcile, never to a git commit.
 type NodePool struct {
@@ -288,6 +296,11 @@ func (s ClusterSpec) Validate() error {
 	for _, np := range s.NodePools {
 		if err := np.Validate(); err != nil {
 			errs = append(errs, err)
+		}
+		if np.InstanceType == InstanceTypeAuto &&
+			(s.Provider != ProviderAWS || np.CapacityType != CapacityTypeSpot) {
+			errs = append(errs, fmt.Errorf("%w: node pool %q: instanceType %q is supported only for provider aws with capacityType spot",
+				ErrInvalidSpec, np.Name, InstanceTypeAuto))
 		}
 		if _, dup := seen[np.Name]; dup && np.Name != "" {
 			errs = append(errs, fmt.Errorf("%w: duplicate node pool name %q", ErrInvalidSpec, np.Name))

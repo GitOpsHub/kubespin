@@ -97,7 +97,7 @@ func (a *DynamicApplier) Apply(ctx context.Context, restConfig *rest.Config, man
 		return fmt.Errorf("applying %s %s/%s: %w", obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
 	}
 
-	a.logger.Info("applied manifest", "kind", obj.GetKind(), "namespace", obj.GetNamespace(), "name", obj.GetName())
+	a.logger.Debug("Applied Manifest", "kind", obj.GetKind(), "namespace", obj.GetNamespace(), "name", obj.GetName())
 	return nil
 }
 
@@ -156,8 +156,8 @@ func (a *DynamicApplier) restMapping(
 				obj.GetKind(), obj.GetNamespace(), obj.GetName(), gvk.GroupVersion(), timeout, err)
 		}
 
-		a.logger.Info("waiting for the cluster to serve a just-installed resource type",
-			"kind", obj.GetKind(), "group_version", gvk.GroupVersion().String())
+		a.logger.Info("Waiting For Resource Type",
+			"kind", obj.GetKind(), "groupVersion", gvk.GroupVersion().String())
 		mapper.Reset()
 
 		select {

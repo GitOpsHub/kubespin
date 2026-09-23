@@ -35,8 +35,8 @@ func TestBuiltinResolver_ResolvesEverySize(t *testing.T) {
 func TestSizeSmall_CarriesTheFullNamedAddonSet(t *testing.T) {
 	small := addonNames(sizeSmall)
 	for _, want := range []string{
-		"cilium", "cert-manager", "gateway-api", "external-secrets",
-		"kyverno", "kyverno-policies", "cluster-autoscaler", "karpenter", "argocd",
+		"cert-manager", "gateway-api", "external-secrets",
+		"kyverno", "kyverno-policies", "cluster-autoscaler", "argocd",
 		"kube-prometheus-stack", "fluent-bit", "opencost", "external-dns",
 		"ingress-nginx",
 	} {
@@ -104,9 +104,10 @@ func TestSizeLarge_StrictPolicySetReplacesBaseline(t *testing.T) {
 	t.Fatal("size large has no kyverno-policies addon")
 }
 
-// Every size ships Argo CD and exactly one cloud-appropriate autoscaler —
-// Karpenter on AWS (EKS-only technology), cluster-autoscaler on GCP/Azure —
-// never both, so the two never compete over the same nodes.
+// Every size ships Argo CD and exactly one cluster-autoscaler per cloud —
+// the catalog carries an AWS-configured entry and a GCP/Azure one under the
+// same name, so two copies must never survive ForProvider together — and
+// Karpenter on no cloud.
 func TestEverySize_ArgoCDAndAutoscalerPerProvider(t *testing.T) {
 	for _, size := range []core.Profile{sizeSmall, sizeMedium, sizeLarge} {
 		t.Run(size.Name, func(t *testing.T) {
@@ -118,19 +119,21 @@ func TestEverySize_ArgoCDAndAutoscalerPerProvider(t *testing.T) {
 					t.Errorf("%s/%s: missing argocd", size.Name, provider)
 				}
 
-				hasKarpenter := names["karpenter"]
-				hasClusterAutoscaler := names["cluster-autoscaler"]
-				switch provider {
-				case core.ProviderAWS:
-					if !hasKarpenter || hasClusterAutoscaler {
-						t.Errorf("%s/%s: karpenter=%v cluster-autoscaler=%v, want karpenter only",
-							size.Name, provider, hasKarpenter, hasClusterAutoscaler)
+				if names["karpenter"] {
+					t.Errorf("%s/%s: carries karpenter", size.Name, provider)
+				}
+				var autoscalers []core.AddonRef
+				for _, a := range resolved.Addons {
+					if a.Name == "cluster-autoscaler" {
+						autoscalers = append(autoscalers, a)
 					}
-				case core.ProviderGCP, core.ProviderAzure:
-					if hasKarpenter || !hasClusterAutoscaler {
-						t.Errorf("%s/%s: karpenter=%v cluster-autoscaler=%v, want cluster-autoscaler only",
-							size.Name, provider, hasKarpenter, hasClusterAutoscaler)
-					}
+				}
+				if len(autoscalers) != 1 {
+					t.Fatalf("%s/%s: %d cluster-autoscaler entries, want exactly 1", size.Name, provider, len(autoscalers))
+				}
+				isAWSConfigured := autoscalers[0].Values["cloudProvider"] == "aws"
+				if isAWSConfigured != (provider == core.ProviderAWS) {
+					t.Errorf("%s/%s: cluster-autoscaler cloudProvider = %v", size.Name, provider, autoscalers[0].Values["cloudProvider"])
 				}
 			}
 		})
