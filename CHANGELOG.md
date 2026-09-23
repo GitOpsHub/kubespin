@@ -12,6 +12,15 @@ Do not hand-edit past entries.
 
 ## [Unreleased]
 
+## [v1.4.1] - 2026-09-23
+### Fixed
+- Make every catalog addon sync on a fresh cluster
+
+### Changed
+- Add support for cluster autoscaler and instance type resolution in AWS provisioner
+- Remove outdated sections on repository state and package layout from CLAUDE.md
+
+
 ## [v1.4.0] - 2026-09-22
 ### Added
 - Update log format options to include console and improve logging output
