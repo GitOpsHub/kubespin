@@ -40,15 +40,33 @@ func hashApps(apps map[string][]byte) string {
 // rendered set differs from what .state.yaml last recorded, so a no-change
 // apply makes no commit here either.
 //
-// It never touches the root Application — that one is applied straight to
-// the cluster (internal/argocd.KubeApplier), not committed to the repository
-// it manages.
+// The root Application is applied straight to the cluster
+// (internal/argocd.KubeApplier); a copy is committed at RootApplicationFile,
+// outside argocd.AppsDir, so the repository holds every piece of the
+// cluster's Argo CD configuration without the root ever syncing itself. The
+// repo-creds Secret is the one piece deliberately never committed: it
+// carries the operator's GitHub token.
 func ReconcileAppOfApps(ctx context.Context, rp Provisioner, spec core.ClusterSpec, profile core.Profile) (bool, error) {
 	apps, err := argocd.RenderAddonApplications(profile)
 	if err != nil {
 		return false, fmt.Errorf("rendering app-of-apps for %s: %w", spec.ID, err)
 	}
-	desiredHash := hashApps(apps)
+
+	repoURL, err := rp.RepoURL(ctx, spec)
+	if err != nil {
+		return false, fmt.Errorf("resolving repository URL for %s: %w", spec.ID, err)
+	}
+	rootApp, err := argocd.RenderRootApplication(repoURL)
+	if err != nil {
+		return false, fmt.Errorf("rendering root Application for %s: %w", spec.ID, err)
+	}
+
+	desired := make(map[string][]byte, len(apps)+1)
+	for path, content := range apps {
+		desired[path] = content
+	}
+	desired[RootApplicationFile] = rootApp
+	desiredHash := hashApps(desired)
 
 	checkout, err := rp.Clone(ctx, spec)
 	if err != nil {
@@ -69,8 +87,8 @@ func ReconcileAppOfApps(ctx context.Context, rp Provisioner, spec core.ClusterSp
 		return false, fmt.Errorf("rendering %s: %w", StateFile, err)
 	}
 
-	files := make(map[string][]byte, len(apps)+1)
-	for path, content := range apps {
+	files := make(map[string][]byte, len(desired)+1)
+	for path, content := range desired {
 		files[path] = content
 	}
 	// Mark any apps that existed in the repository but are absent from the

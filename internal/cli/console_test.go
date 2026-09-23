@@ -212,3 +212,72 @@ func TestConsoleHandler_RoundsDurations(t *testing.T) {
 		}
 	}
 }
+
+// A cluster given to With lands in the cluster column, not as an attribute:
+// the cloud provisioners log through a cluster-scoped logger.
+func TestConsoleHandler_ClusterFromWith(t *testing.T) {
+	var buf bytes.Buffer
+	consoleLogger(&buf, slog.LevelInfo).With("cluster", "eks-spot").Info("Created IAM Role", "role", "r")
+
+	got := buf.String()
+	if strings.Contains(got, "cluster=") {
+		t.Errorf("scoped cluster printed as an attribute: %q", got)
+	}
+	var want bytes.Buffer
+	consoleLogger(&want, slog.LevelInfo).Info("Created IAM Role", "cluster", "eks-spot", "role", "r")
+	if got[9:] != want.String()[9:] { // skip the timestamp
+		t.Errorf("scoped line = %q, want the same layout as %q", got, want.String())
+	}
+}
+
+// A step start renders as a header rule naming the step, with the cluster
+// after it, and no "Starting" or section=true noise.
+func TestConsoleHandler_SectionHeader(t *testing.T) {
+	var buf bytes.Buffer
+	consoleLogger(&buf, slog.LevelInfo).Info("Starting Step 1/4",
+		"cluster", "eks-spot", "step", "create cluster", consoleSectionKey, true)
+
+	got := buf.String()
+	if !strings.HasPrefix(got, "\n") {
+		t.Errorf("section header is not set apart by a blank line: %q", got)
+	}
+	for _, want := range []string{"━━ Step 1/4 · create cluster ━", "eks-spot"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("header %q missing %q", got, want)
+		}
+	}
+	for _, unwanted := range []string{"Starting", "section=", "step="} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("header %q contains %q", got, unwanted)
+		}
+	}
+}
+
+// A list of sentences prints one bullet per line under its record; a list of
+// single words stays inline.
+func TestConsoleHandler_SentenceListsAreBulleted(t *testing.T) {
+	var buf bytes.Buffer
+	l := consoleLogger(&buf, slog.LevelInfo)
+	l.Info("Provisioned Network", "cluster", "eks-spot",
+		"changes", []string{"created VPC vpc-1 (10.0.0.0/16)", "attached internet gateway igw-1"})
+	l.Info("Selected Spot Instance Types", "cluster", "eks-spot", "types", []string{"m5.large", "m6i.large"})
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("got %d lines, want 4: %q", len(lines), buf.String())
+	}
+	if strings.Contains(lines[0], "changes=") {
+		t.Errorf("sentence list stayed inline: %q", lines[0])
+	}
+	for i, want := range []string{"• created VPC vpc-1 (10.0.0.0/16)", "• attached internet gateway igw-1"} {
+		if strings.TrimSpace(lines[i+1]) != want {
+			t.Errorf("bullet %d = %q, want %q", i, lines[i+1], want)
+		}
+		if !strings.HasPrefix(lines[i+1], consoleListIndent) {
+			t.Errorf("bullet %d is not indented under the message column: %q", i, lines[i+1])
+		}
+	}
+	if !strings.Contains(lines[3], "types=") {
+		t.Errorf("word list was not kept inline: %q", lines[3])
+	}
+}

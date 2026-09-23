@@ -141,7 +141,7 @@ func TestApplyIngressDefaults_DoesNotMutateInput(t *testing.T) {
 
 func loadBalancerAddon(exposure string) core.AddonRef {
 	return core.AddonRef{
-		Name: "opencost", Chart: "opencost", Repository: "https://example", Version: "1.0.0", Namespace: "opencost",
+		Name: "web-ui", Chart: "web-ui", Repository: "https://example", Version: "1.0.0", Namespace: "web-ui",
 		Values: map[string]any{
 			"ingress": map[string]any{"exposure": exposure},
 			"service": map[string]any{"type": "LoadBalancer", "annotations": map[string]any{"keep": "me"}},
@@ -198,5 +198,36 @@ func TestApplyIngressDefaults_PublicLoadBalancerWithoutCIDRsHasNoSourceRanges(t 
 	service, _ := patched.Values["service"].(map[string]any)
 	if _, ok := service["loadBalancerSourceRanges"]; ok {
 		t.Error("source ranges were set with no authorized CIDRs to take them from")
+	}
+}
+
+// argocd-server (server.service) and ingress-nginx's controller
+// (controller.service) stay internet-facing on every cluster, private
+// included, with no source-range limit: operator UIs depend on reaching them.
+// Access-mode templating must leave both Services exactly as declared.
+func TestApplyProfileIngressDefaults_ArgoCDAndIngressNginxStayPublic(t *testing.T) {
+	for _, access := range []core.Access{core.AccessPrivate, core.AccessPublic} {
+		profile := core.Profile{Name: "small", Addons: []core.AddonRef{
+			DefaultAddon,
+			{
+				Name: "ingress-nginx", Chart: "ingress-nginx",
+				Values: map[string]any{"ingress": map[string]any{"exposure": "internal"}},
+			},
+		}}
+
+		patched := ApplyProfileIngressDefaults(access, profile, WithAuthorizedCIDRs([]string{"203.0.113.0/24"}))
+
+		argo := patched.Addons[0].Values
+		if _, ok := argo["ingress"]; ok {
+			t.Errorf("%s: argo-cd gained a top-level ingress block its chart does not read", access)
+		}
+		server, _ := argo["server"].(map[string]any)
+		service, _ := server["service"].(map[string]any)
+		if len(service) != 1 || service["type"] != "LoadBalancer" {
+			t.Errorf("%s: server.service = %v, want only type LoadBalancer", access, service)
+		}
+		if _, ok := patched.Addons[1].Values["controller"]; ok {
+			t.Errorf("%s: ingress-nginx controller values were patched: %v", access, patched.Addons[1].Values["controller"])
+		}
 	}
 }

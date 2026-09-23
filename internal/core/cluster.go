@@ -227,7 +227,7 @@ type ClusterSpec struct {
 
 	// Autopilot requests each provider's fully-managed node mode instead of
 	// standard node-pool provisioning: GKE Autopilot on GCP, EKS Auto Mode on
-	// AWS. Azure has no equivalent and ignores this field. When true,
+	// AWS. Azure has no equivalent, so Validate rejects it there. When true,
 	// NodePools is not required and is ignored if supplied — the provider
 	// manages compute itself.
 	Autopilot bool `yaml:"autopilot,omitempty" json:"autopilot,omitempty"`
@@ -263,6 +263,19 @@ func (s ClusterSpec) Validate() error {
 	}
 	if s.Access == AccessPrivate && len(s.AuthorizedCIDRs) > 0 {
 		errs = append(errs, fmt.Errorf("%w: authorizedCIDRs is meaningless for a private cluster", ErrInvalidSpec))
+	}
+	// Caught here, before the lease is taken, rather than deep inside a cloud
+	// API call — a bare IP (no /32) is the usual mistake.
+	for _, cidr := range s.AuthorizedCIDRs {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			errs = append(errs, fmt.Errorf("%w: authorizedCIDRs entry %q is not a valid CIDR", ErrInvalidSpec, cidr))
+		}
+	}
+	// Azure has no managed node mode for kubespin to request: accepting
+	// autopilot there built no default node pool and asked AKS for a cluster
+	// with none, which it rejects.
+	if s.Autopilot && s.Provider == ProviderAzure {
+		errs = append(errs, fmt.Errorf("%w: autopilot is supported only for providers aws and gcp", ErrInvalidSpec))
 	}
 	if s.Provider != ProviderGCP && s.Zone != "" {
 		errs = append(errs, fmt.Errorf("%w: zone is meaningful only for provider gcp", ErrInvalidSpec))

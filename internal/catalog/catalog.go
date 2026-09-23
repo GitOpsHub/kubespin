@@ -51,15 +51,13 @@ func (r *BuiltinResolver) Resolve(_ context.Context, size core.ClusterSize) (cor
 
 // baseAddons is the addon set every size carries, regardless of cloud:
 // CNI, cert-manager, Gateway API, ESO, Kyverno baseline, an autoscaler,
-// kube-prometheus-stack, Fluent Bit, OpenCost, ExternalDNS, and Argo CD.
+// kube-prometheus-stack, Fluent Bit, ExternalDNS, and Argo CD.
 //
 // Argo CD and the autoscaler are unconditional here rather than added by a
 // higher tier: every cluster gets Argo CD (catalog.ResolveForCluster also
 // defends this via withArgoCDAddon, in case a future size ever omits it),
-// and every cluster gets cluster-autoscaler. It appears twice — once
-// configured for AWS, once for GCP/Azure — and Profile.ForProvider keeps
-// exactly one per cluster, since each carries a Providers gate naming the
-// clouds it applies to.
+// and every EKS cluster gets cluster-autoscaler. GKE and AKS get no chart
+// for it: their node pools autoscale natively.
 var baseAddons = []core.AddonRef{
 	{
 		// No CNI addon: every cloud's managed CNI (EKS's VPC CNI, GKE's,
@@ -104,18 +102,10 @@ var baseAddons = []core.AddonRef{
 		// Kubernetes versions kubespin creates; the autoscaler is meant to
 		// track the cluster's minor version.
 		//
-		// GCP/Azure: the same chart as the AWS entry below. The two share a
-		// name, and their Providers gates never overlap, so
-		// core.Profile.ForProvider leaves exactly one per cluster and an
-		// override naming "cluster-autoscaler" works on every cloud.
-		Name:       "cluster-autoscaler",
-		Chart:      "cluster-autoscaler",
-		Repository: "https://kubernetes.github.io/autoscaler",
-		Version:    "9.59.0",
-		Namespace:  core.ClusterAutoscalerNamespace,
-		Providers:  []core.Provider{core.ProviderGCP, core.ProviderAzure},
-	},
-	{
+		// AWS only: GKE and AKS node pools autoscale natively (kubespin
+		// enables it on every pool it creates), and this chart has no
+		// credentials to drive either cloud's instance groups anyway.
+		//
 		// AWS: resizes the EKS managed node groups kubespin creates, found by
 		// the k8s.io/cluster-autoscaler/<cluster> tag EKS puts on every
 		// managed node group's Auto Scaling group. Its AWS permissions come
@@ -151,11 +141,20 @@ var baseAddons = []core.AddonRef{
 		},
 	},
 	{
+		// Prometheus and Grafana are each served from an internet-facing
+		// LoadBalancer on every cluster, private included, like argocd-server:
+		// operator UIs depend on reaching them. Access-mode templating
+		// (internal/argocd.ApplyIngressDefaults) only reshapes a top-level
+		// service, so it leaves both as declared here.
 		Name:       "kube-prometheus-stack",
 		Chart:      "kube-prometheus-stack",
 		Repository: "https://prometheus-community.github.io/helm-charts",
 		Version:    "62.7.0",
 		Namespace:  "monitoring",
+		Values: map[string]any{
+			"prometheus": map[string]any{"service": map[string]any{"type": "LoadBalancer"}},
+			"grafana":    map[string]any{"service": map[string]any{"type": "LoadBalancer"}},
+		},
 	},
 	{
 		// GCP/Azure only: on AWS the EKS add-on of the same name replaces
@@ -167,38 +166,6 @@ var baseAddons = []core.AddonRef{
 		Version:    "0.47.10",
 		Namespace:  "logging",
 		Providers:  []core.Provider{core.ProviderGCP, core.ProviderAzure},
-	},
-	{
-		// The cost UI is served from a LoadBalancer Service. It asks for
-		// external exposure, which access-mode templating
-		// (internal/argocd.ApplyIngressDefaults) grants only on a public
-		// cluster, and then only to the cluster's authorizedCIDRs; a
-		// private cluster gets an internal load balancer instead. OpenCost
-		// has no authentication of its own, which is why the source ranges
-		// matter, and why its MCP server is off rather than exposed with it.
-		//
-		// It reads cluster metrics from kube-prometheus-stack's Prometheus
-		// (release kube-prometheus-stack in monitoring), not the chart's
-		// default prometheus-server in prometheus-system, which kubespin
-		// never installs.
-		Name:       "opencost",
-		Chart:      "opencost",
-		Repository: "https://opencost.github.io/opencost-helm-chart",
-		Version:    "2.5.32",
-		Namespace:  "opencost",
-		Values: map[string]any{
-			"ingress": map[string]any{"exposure": "external"},
-			"service": map[string]any{"type": "LoadBalancer"},
-			"opencost": map[string]any{
-				"mcp": map[string]any{"enabled": false},
-				"prometheus": map[string]any{"internal": map[string]any{
-					"enabled":       true,
-					"serviceName":   "kube-prometheus-stack-prometheus",
-					"namespaceName": "monitoring",
-					"port":          9090,
-				}},
-			},
-		},
 	},
 	{
 		// GCP/Azure only: on AWS the EKS add-on of the same name replaces

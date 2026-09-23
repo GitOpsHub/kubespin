@@ -75,7 +75,7 @@ always private, which requires an always-on Cloud Router + Cloud NAT
 
 Passing `--spot` with `--provider gcp` defaults to also:
 
-- **Zonal cluster** (`--zone` implied as `<region>-a`): a single-zone control
+- **Zonal cluster** (`--zone` implied as the region's first available zone): a single-zone control
   plane instead of a 3-zone regional one. This is what makes the cluster
   eligible for GCP's one-free-zonal-cluster-per-billing-account tier.
   Trade-off: no HA control plane — fine for a dev cluster, wrong for

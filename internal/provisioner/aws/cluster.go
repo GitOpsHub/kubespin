@@ -119,12 +119,12 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 		// Another run got there first; that is convergence, not failure.
 		var exists *ekstypes.ResourceInUseException
 		if errors.As(err, &exists) {
-			p.c.logger.Debug("EKS Cluster Already Exists", "cluster", spec.ID)
+			p.c.logger.Debug("EKS Cluster Already Exists")
 			return nil
 		}
 		return fmt.Errorf("creating EKS cluster %s: %w", spec.ID, err)
 	}
-	p.c.logger.Info("Requested EKS Cluster", "cluster", spec.ID, "region", spec.Region)
+	p.c.logger.Info("Requested EKS Cluster", "region", spec.Region)
 	return nil
 }
 
@@ -147,6 +147,15 @@ func vpcConfig(spec core.ClusterSpec) *ekstypes.VpcConfigRequest {
 
 // Describe reports the cluster's current state.
 func (p *ClusterProvisioner) Describe(ctx context.Context, spec core.ClusterSpec) (provisioner.ClusterState, error) {
+	state, _, err := p.describe(ctx, spec)
+	return state, err
+}
+
+// describe is Describe that also returns the raw EKS cluster (nil when
+// absent), for callers that need fields ClusterState does not carry.
+func (p *ClusterProvisioner) describe(
+	ctx context.Context, spec core.ClusterSpec,
+) (provisioner.ClusterState, *ekstypes.Cluster, error) {
 	out, err := p.c.eks.DescribeCluster(ctx, &eks.DescribeClusterInput{
 		Name: aws.String(names{spec}.cluster()),
 	})
@@ -154,14 +163,14 @@ func (p *ClusterProvisioner) Describe(ctx context.Context, spec core.ClusterSpec
 		var missing *ekstypes.ResourceNotFoundException
 		if errors.As(err, &missing) {
 			// Absent is a normal answer while polling, not an error.
-			return provisioner.ClusterState{Status: provisioner.StatusAbsent}, nil
+			return provisioner.ClusterState{Status: provisioner.StatusAbsent}, nil, nil
 		}
-		return provisioner.ClusterState{}, fmt.Errorf("describing EKS cluster %s: %w", spec.ID, err)
+		return provisioner.ClusterState{}, nil, fmt.Errorf("describing EKS cluster %s: %w", spec.ID, err)
 	}
 
 	cluster := out.Cluster
 	if cluster == nil {
-		return provisioner.ClusterState{Status: provisioner.StatusAbsent}, nil
+		return provisioner.ClusterState{Status: provisioner.StatusAbsent}, nil, nil
 	}
 
 	state := provisioner.ClusterState{
@@ -186,12 +195,12 @@ func (p *ClusterProvisioner) Describe(ctx context.Context, spec core.ClusterSpec
 	if state.Status == provisioner.StatusActive {
 		pools, err := p.describeNodePools(ctx, spec)
 		if err != nil {
-			return state, err
+			return state, cluster, err
 		}
 		state.NodePools = pools
 	}
 
-	return state, nil
+	return state, cluster, nil
 }
 
 func normaliseStatus(status ekstypes.ClusterStatus) provisioner.Status {
@@ -276,12 +285,20 @@ func poolNameFromNodeGroup(spec core.ClusterSpec, nodeGroup string) string {
 func (p *ClusterProvisioner) Reconcile(ctx context.Context, spec core.ClusterSpec) (provisioner.Change, error) {
 	var change provisioner.Change
 
-	state, err := p.Describe(ctx, spec)
+	state, cluster, err := p.describe(ctx, spec)
 	if err != nil {
 		return change, err
 	}
 	if state.Status == provisioner.StatusAbsent {
 		return change, fmt.Errorf("%w: %s", provisioner.ErrNotFound, spec.ID)
+	}
+
+	// On a ready cluster the orchestrator never runs EnsureNetwork, so a
+	// kubespin-managed network arrives here with no subnets. A node group
+	// added now must land in the subnets the cluster already uses, and
+	// those are what EKS reports, whoever created the network.
+	if len(spec.Subnets) == 0 && cluster.ResourcesVpcConfig != nil {
+		spec.Subnets = cluster.ResourcesVpcConfig.SubnetIds
 	}
 
 	accessChange, err := p.reconcileAccess(ctx, spec, state)
@@ -335,7 +352,7 @@ func (p *ClusterProvisioner) reconcileAccess(
 	if err != nil {
 		return provisioner.Change{}, fmt.Errorf("updating access mode for %s: %w", spec.ID, err)
 	}
-	p.c.logger.Info("Updated Access Mode", "cluster", spec.ID, "from", state.Access, "to", spec.Access)
+	p.c.logger.Info("Updated Access Mode", "from", state.Access, "to", spec.Access)
 
 	return provisioner.Change{
 		Changed: true,
@@ -367,32 +384,36 @@ func (p *ClusterProvisioner) ensureNodeGroups(
 			if err := p.createNodeGroup(ctx, spec, want, nodeRoleARN); err != nil {
 				return err
 			}
-			p.c.logger.Info("Created Node Pool", "cluster", spec.ID, "pool", want.Name)
+			p.c.logger.Info("Created Node Pool", "pool", want.Name)
 			record(change, fmt.Sprintf("create node pool %s", want.Name))
 			continue
 		}
 
-		if current.MinSize == want.MinSize && current.MaxSize == want.MaxSize &&
-			current.DesiredSize == want.DesiredSize {
+		// Only the bounds are drift. cluster-autoscaler moves the desired
+		// size all day; resetting it to the spec on every apply would evict
+		// pods and report a change on every run. The spec's desired size is
+		// the initial size only.
+		if current.MinSize == want.MinSize && current.MaxSize == want.MaxSize {
 			continue
 		}
 
+		desired := min(max(current.DesiredSize, want.MinSize), want.MaxSize)
 		_, err := p.c.eks.UpdateNodegroupConfig(ctx, &eks.UpdateNodegroupConfigInput{
 			ClusterName:   aws.String(names{spec}.cluster()),
 			NodegroupName: aws.String(names{spec}.nodeGroup(want.Name)),
 			ScalingConfig: &ekstypes.NodegroupScalingConfig{
 				MinSize:     aws.Int32(want.MinSize),
 				MaxSize:     aws.Int32(want.MaxSize),
-				DesiredSize: aws.Int32(want.DesiredSize),
+				DesiredSize: aws.Int32(desired),
 			},
 		})
 		if err != nil {
 			return fmt.Errorf("resizing node pool %s: %w", want.Name, err)
 		}
-		p.c.logger.Info("Resized Node Pool", "cluster", spec.ID, "pool", want.Name,
-			"min", want.MinSize, "desired", want.DesiredSize, "max", want.MaxSize)
+		p.c.logger.Info("Resized Node Pool", "pool", want.Name,
+			"min", want.MinSize, "desired", desired, "max", want.MaxSize)
 		record(change, fmt.Sprintf("resize node pool %s to %d/%d/%d",
-			want.Name, want.MinSize, want.DesiredSize, want.MaxSize))
+			want.Name, want.MinSize, desired, want.MaxSize))
 	}
 
 	return nil
@@ -488,7 +509,7 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 		}
 
 		if listed != nil && len(listed.Nodegroups) > 0 {
-			p.c.logger.Info("Deleting Node Groups", "cluster", spec.ID, "count", len(listed.Nodegroups))
+			p.c.logger.Info("Deleting Node Groups", "count", len(listed.Nodegroups))
 
 			// Node groups must go first: EKS refuses to delete a cluster that
 			// still has any attached.
@@ -528,7 +549,7 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 				return fmt.Errorf("deleting EKS cluster %s: %w", spec.ID, err)
 			}
 		} else {
-			p.c.logger.Info("Requested EKS Cluster Deletion", "cluster", spec.ID)
+			p.c.logger.Info("Requested EKS Cluster Deletion")
 		}
 	}
 

@@ -41,6 +41,9 @@ type fakeAWS struct {
 	inlinePolicies    map[string]map[string]string // role -> policy name -> URL-encoded document
 	podIdentities     []ekstypes.PodIdentityAssociation
 
+	// onCreateNodegroup, when set, sees every CreateNodegroup request.
+	onCreateNodegroup func(*eks.CreateNodegroupInput)
+
 	// nodeGroupDeletePolls models the real asynchrony of DeleteNodegroup: how
 	// many ListNodegroups calls a deleted node group survives before it is
 	// actually gone. Zero deletes it immediately.
@@ -52,6 +55,7 @@ type fakeAWS struct {
 	igws           map[string]*ec2types.InternetGateway
 	routeTables    map[string]*ec2types.RouteTable
 	securityGroups map[string]*ec2types.SecurityGroup
+	vpcDNS         map[string]*vpcDNS // vpc id -> DNS attributes
 	nextResource   int
 
 	// instanceTypes, offerings, and spotPrices back core.InstanceTypeAuto
@@ -82,8 +86,13 @@ func newFakeAWS() *fakeAWS {
 		igws:               map[string]*ec2types.InternetGateway{},
 		routeTables:        map[string]*ec2types.RouteTable{},
 		securityGroups:     map[string]*ec2types.SecurityGroup{},
+		vpcDNS:             map[string]*vpcDNS{},
 	}
 }
+
+// vpcDNS models the two VPC attributes EKS needs. A new VPC has DNS support
+// on and DNS hostnames off, as in AWS.
+type vpcDNS struct{ support, hostnames bool }
 
 func (f *fakeAWS) record(name string) { f.calls = append(f.calls, name) }
 
@@ -212,6 +221,9 @@ func (f *fakeAWS) DescribeNodegroup(_ context.Context, in *eks.DescribeNodegroup
 
 func (f *fakeAWS) CreateNodegroup(_ context.Context, in *eks.CreateNodegroupInput, _ ...func(*eks.Options)) (*eks.CreateNodegroupOutput, error) {
 	f.record("CreateNodegroup")
+	if f.onCreateNodegroup != nil {
+		f.onCreateNodegroup(in)
+	}
 	f.nodeGroups[aws.ToString(in.NodegroupName)] = &ekstypes.Nodegroup{
 		NodegroupName: in.NodegroupName,
 		InstanceTypes: in.InstanceTypes,
@@ -514,23 +526,64 @@ func (f *fakeAWS) CreateVpc(_ context.Context, in *ec2.CreateVpcInput, _ ...func
 		v.Tags = append(v.Tags, spec.Tags...)
 	}
 	f.vpcs[id] = v
+	f.vpcDNS[id] = &vpcDNS{support: true}
 	return &ec2.CreateVpcOutput{Vpc: v}, nil
 }
 
-func (f *fakeAWS) ModifyVpcAttribute(_ context.Context, _ *ec2.ModifyVpcAttributeInput, _ ...func(*ec2.Options)) (*ec2.ModifyVpcAttributeOutput, error) {
+func (f *fakeAWS) DescribeVpcAttribute(_ context.Context, in *ec2.DescribeVpcAttributeInput, _ ...func(*ec2.Options)) (*ec2.DescribeVpcAttributeOutput, error) {
+	f.record("DescribeVpcAttribute")
+	dns, ok := f.vpcDNS[aws.ToString(in.VpcId)]
+	if !ok {
+		return nil, fmt.Errorf("InvalidVpcID.NotFound: %s", aws.ToString(in.VpcId))
+	}
+	out := &ec2.DescribeVpcAttributeOutput{VpcId: in.VpcId}
+	switch in.Attribute {
+	case ec2types.VpcAttributeNameEnableDnsSupport:
+		out.EnableDnsSupport = &ec2types.AttributeBooleanValue{Value: aws.Bool(dns.support)}
+	case ec2types.VpcAttributeNameEnableDnsHostnames:
+		out.EnableDnsHostnames = &ec2types.AttributeBooleanValue{Value: aws.Bool(dns.hostnames)}
+	}
+	return out, nil
+}
+
+func (f *fakeAWS) ModifyVpcAttribute(_ context.Context, in *ec2.ModifyVpcAttributeInput, _ ...func(*ec2.Options)) (*ec2.ModifyVpcAttributeOutput, error) {
 	f.record("ModifyVpcAttribute")
+	dns, ok := f.vpcDNS[aws.ToString(in.VpcId)]
+	if !ok {
+		return nil, fmt.Errorf("InvalidVpcID.NotFound: %s", aws.ToString(in.VpcId))
+	}
+	if in.EnableDnsSupport != nil {
+		dns.support = aws.ToBool(in.EnableDnsSupport.Value)
+	}
+	if in.EnableDnsHostnames != nil {
+		dns.hostnames = aws.ToBool(in.EnableDnsHostnames.Value)
+	}
 	return &ec2.ModifyVpcAttributeOutput{}, nil
 }
 
-func (f *fakeAWS) DescribeAvailabilityZones(context.Context, *ec2.DescribeAvailabilityZonesInput, ...func(*ec2.Options)) (*ec2.DescribeAvailabilityZonesOutput, error) {
+// DescribeAvailabilityZones lists an opted-in Local Zone alongside the
+// region's own zones, as AWS does, and honours a zone-type filter.
+func (f *fakeAWS) DescribeAvailabilityZones(_ context.Context, in *ec2.DescribeAvailabilityZonesInput, _ ...func(*ec2.Options)) (*ec2.DescribeAvailabilityZonesOutput, error) {
 	f.record("DescribeAvailabilityZones")
-	return &ec2.DescribeAvailabilityZonesOutput{
-		AvailabilityZones: []ec2types.AvailabilityZone{
-			{ZoneName: aws.String("us-east-1a"), State: ec2types.AvailabilityZoneStateAvailable},
-			{ZoneName: aws.String("us-east-1b"), State: ec2types.AvailabilityZoneStateAvailable},
-			{ZoneName: aws.String("us-east-1c"), State: ec2types.AvailabilityZoneStateAvailable},
-		},
-	}, nil
+	all := []ec2types.AvailabilityZone{
+		{ZoneName: aws.String("us-east-1-bos-1a"), ZoneType: aws.String("local-zone"), State: ec2types.AvailabilityZoneStateAvailable},
+		{ZoneName: aws.String("us-east-1a"), ZoneType: aws.String("availability-zone"), State: ec2types.AvailabilityZoneStateAvailable},
+		{ZoneName: aws.String("us-east-1b"), ZoneType: aws.String("availability-zone"), State: ec2types.AvailabilityZoneStateAvailable},
+		{ZoneName: aws.String("us-east-1c"), ZoneType: aws.String("availability-zone"), State: ec2types.AvailabilityZoneStateAvailable},
+	}
+	var out []ec2types.AvailabilityZone
+	for _, az := range all {
+		keep := true
+		for _, filt := range in.Filters {
+			if aws.ToString(filt.Name) == "zone-type" && !slices.Contains(filt.Values, aws.ToString(az.ZoneType)) {
+				keep = false
+			}
+		}
+		if keep {
+			out = append(out, az)
+		}
+	}
+	return &ec2.DescribeAvailabilityZonesOutput{AvailabilityZones: out}, nil
 }
 
 func (f *fakeAWS) DescribeSubnets(_ context.Context, in *ec2.DescribeSubnetsInput, _ ...func(*ec2.Options)) (*ec2.DescribeSubnetsOutput, error) {

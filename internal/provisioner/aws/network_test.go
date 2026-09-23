@@ -179,3 +179,127 @@ func TestDeleteNetwork_RetriesDependencyViolationOnDeleteVpc(t *testing.T) {
 		t.Error("VPC still present after DeleteNetwork retried past DependencyViolation")
 	}
 }
+
+// A run interrupted partway through creating the network leaves resources
+// that exist, found by Name tag, but were never configured. A resumed apply
+// must finish configuring them instead of adopting them as done.
+func TestEnsureNetwork_ConvergesAPartiallyCreatedNetwork(t *testing.T) {
+	tests := map[string]struct {
+		undo  func(f *fakeAWS)
+		check func(t *testing.T, f *fakeAWS)
+	}{
+		"VPC DNS never enabled": {
+			undo: func(f *fakeAWS) {
+				for _, dns := range f.vpcDNS {
+					dns.hostnames = false
+				}
+			},
+			check: func(t *testing.T, f *fakeAWS) {
+				for id, dns := range f.vpcDNS {
+					if !dns.support || !dns.hostnames {
+						t.Errorf("VPC %s DNS = %+v, want both enabled", id, *dns)
+					}
+				}
+			},
+		},
+		"subnet public IP never enabled": {
+			undo: func(f *fakeAWS) {
+				for _, s := range f.subnets {
+					s.MapPublicIpOnLaunch = nil
+				}
+			},
+			check: func(t *testing.T, f *fakeAWS) {
+				for id, s := range f.subnets {
+					if !aws.ToBool(s.MapPublicIpOnLaunch) {
+						t.Errorf("subnet %s does not auto-assign public IPs", id)
+					}
+				}
+			},
+		},
+		"internet gateway never attached": {
+			undo: func(f *fakeAWS) {
+				for _, igw := range f.igws {
+					igw.Attachments = nil
+				}
+			},
+			check: func(t *testing.T, f *fakeAWS) {
+				for id, igw := range f.igws {
+					if len(igw.Attachments) != 1 {
+						t.Errorf("internet gateway %s attachments = %v, want one", id, igw.Attachments)
+					}
+				}
+			},
+		},
+		"route table has no route or associations": {
+			undo: func(f *fakeAWS) {
+				for _, rt := range f.routeTables {
+					rt.Routes = nil
+					rt.Associations = nil
+				}
+			},
+			check: func(t *testing.T, f *fakeAWS) {
+				for id, rt := range f.routeTables {
+					if !hasDefaultRoute(*rt) {
+						t.Errorf("route table %s has no default route", id)
+					}
+					for subnetID := range f.subnets {
+						if !isAssociated(*rt, subnetID) {
+							t.Errorf("route table %s not associated with subnet %s", id, subnetID)
+						}
+					}
+				}
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			f := newFakeAWS()
+			spec := testSpec()
+			spec.Subnets = nil
+			p := NewNetworkProvisioner(f.clients())
+
+			if _, err := p.EnsureNetwork(t.Context(), spec); err != nil {
+				t.Fatalf("first EnsureNetwork: %v", err)
+			}
+			tc.undo(f)
+
+			result, err := p.EnsureNetwork(t.Context(), spec)
+			if err != nil {
+				t.Fatalf("resumed EnsureNetwork: %v", err)
+			}
+			if !result.Change.Changed {
+				t.Error("Changed = false, want the repair reported")
+			}
+			tc.check(t, f)
+
+			// And once repaired, it stays converged with no writes at all.
+			f.calls = nil
+			again, err := p.EnsureNetwork(t.Context(), spec)
+			if err != nil {
+				t.Fatalf("third EnsureNetwork: %v", err)
+			}
+			if again.Change.Changed {
+				t.Errorf("converged network still reports changes: %v", again.Change.Details)
+			}
+			f.assertNoMutations(t)
+		})
+	}
+}
+
+// EKS rejects control plane subnets in a Local Zone, and a Local Zone's name
+// sorts ahead of the region's own zones, so it must be filtered out.
+func TestEnsureNetwork_NeverPicksALocalZone(t *testing.T) {
+	f := newFakeAWS()
+	spec := testSpec()
+	spec.Subnets = nil
+
+	if _, err := NewNetworkProvisioner(f.clients()).EnsureNetwork(t.Context(), spec); err != nil {
+		t.Fatalf("EnsureNetwork: %v", err)
+	}
+	for id, s := range f.subnets {
+		if az := aws.ToString(s.AvailabilityZone); az != "us-east-1a" && az != "us-east-1b" {
+			t.Errorf("subnet %s placed in %s, want us-east-1a or us-east-1b", id, az)
+		}
+	}
+}

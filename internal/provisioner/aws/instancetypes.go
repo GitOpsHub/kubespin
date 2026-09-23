@@ -87,7 +87,7 @@ func (p *ClusterProvisioner) resolveAutoInstanceTypes(ctx context.Context, spec 
 		priced = priced[:autoInstanceTypeCount]
 	}
 
-	p.c.logger.Info("Selected Spot Instance Types", "cluster", spec.ID, "types", priced,
+	p.c.logger.Info("Selected Spot Instance Types", "types", priced,
 		"cheapest", priced[0], "pricePerHour", prices[priced[0]])
 	return priced, nil
 }

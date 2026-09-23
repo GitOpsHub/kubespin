@@ -58,6 +58,21 @@ func TestClusterSpecValidate_Invalid(t *testing.T) {
 			func(s *ClusterSpec) { s.AuthorizedCIDRs = []string{"10.0.0.0/8"} },
 			"meaningless for a private cluster",
 		},
+		"authorized cidr without prefix": {
+			func(s *ClusterSpec) {
+				s.Access = AccessPublic
+				s.AuthorizedCIDRs = []string{"203.0.113.4"}
+			},
+			"not a valid CIDR",
+		},
+		"autopilot on azure": {
+			func(s *ClusterSpec) {
+				s.Provider = ProviderAzure
+				s.Subnets = nil
+				s.Autopilot = true
+			},
+			"autopilot is supported only",
+		},
 		"duplicate node pool": {
 			func(s *ClusterSpec) { s.NodePools = append(s.NodePools, s.NodePools[0]) },
 			"duplicate node pool name",

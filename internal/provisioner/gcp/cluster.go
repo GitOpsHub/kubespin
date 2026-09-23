@@ -50,7 +50,11 @@ func (p *ClusterProvisioner) Create(ctx context.Context, spec core.ClusterSpec) 
 	}
 
 	if state.Status == provisioner.StatusActive && !state.Autopilot {
-		return p.ensureNodePools(ctx, spec, nil)
+		n, err := p.locate(ctx, p.names(spec))
+		if err != nil {
+			return err
+		}
+		return p.ensureNodePools(ctx, n, nil)
 	}
 	return nil
 }
@@ -88,7 +92,11 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 		// The default node pool is not used (InitialNodeCount stays at its
 		// zero value); node pools are created explicitly once the control
 		// plane is active, mirroring the AWS provisioner.
-		cluster.NodePools = []*containerpb.NodePool{placeholderNodePool(spec)}
+		zone, err := p.nodeZone(ctx, n)
+		if err != nil {
+			return err
+		}
+		cluster.NodePools = []*containerpb.NodePool{placeholderNodePool(spec, zone)}
 	}
 
 	_, err := p.c.cluster.CreateCluster(ctx, &containerpb.CreateClusterRequest{
@@ -98,12 +106,12 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 	if err != nil {
 		if status.Code(err) == codes.AlreadyExists {
 			// Another run got there first; that is convergence, not failure.
-			p.c.logger.Debug("GKE Cluster Already Exists", "cluster", spec.ID)
+			p.c.logger.Debug("GKE Cluster Already Exists")
 			return nil
 		}
 		return fmt.Errorf("creating GKE cluster %s: %w", spec.ID, err)
 	}
-	p.c.logger.Info("Requested GKE Cluster", "cluster", spec.ID, "region", spec.Region)
+	p.c.logger.Info("Requested GKE Cluster", "region", spec.Region)
 	return nil
 }
 
@@ -111,7 +119,7 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 // at least one node pool. It uses the first configured pool's shape; the real
 // pools (including this one, if it still needs adjusting) are reconciled by
 // ensureNodePools once the control plane is active.
-func placeholderNodePool(spec core.ClusterSpec) *containerpb.NodePool {
+func placeholderNodePool(spec core.ClusterSpec, zone string) *containerpb.NodePool {
 	if len(spec.NodePools) == 0 {
 		return &containerpb.NodePool{Name: "default", InitialNodeCount: 1}
 	}
@@ -119,13 +127,20 @@ func placeholderNodePool(spec core.ClusterSpec) *containerpb.NodePool {
 	return &containerpb.NodePool{
 		Name:             pool.Name,
 		InitialNodeCount: pool.DesiredSize,
-		Locations:        []string{defaultZone(spec)},
+		Locations:        []string{zone},
 		Config:           nodeConfig(pool),
-		Autoscaling: &containerpb.NodePoolAutoscaling{
-			Enabled:      true,
-			MinNodeCount: pool.MinSize,
-			MaxNodeCount: pool.MaxSize,
-		},
+		Autoscaling:      nodePoolAutoscaling(pool),
+	}
+}
+
+// nodePoolAutoscaling is the GKE autoscaler bounds for pool. DesiredSize is
+// only the pool's starting size: once it exists, GKE's own autoscaler owns
+// the node count.
+func nodePoolAutoscaling(pool core.NodePool) *containerpb.NodePoolAutoscaling {
+	return &containerpb.NodePoolAutoscaling{
+		Enabled:      true,
+		MinNodeCount: pool.MinSize,
+		MaxNodeCount: pool.MaxSize,
 	}
 }
 
@@ -140,7 +155,7 @@ func nodeConfig(pool core.NodePool) *containerpb.NodeConfig {
 	}
 }
 
-// defaultZone pins a node pool to a single zone within spec.Region.
+// nodeZone pins a node pool to a single zone within spec.Region.
 //
 // A regional GKE control plane otherwise defaults an unzoned node pool's
 // Locations to every zone in the region, which silently multiplies
@@ -149,11 +164,15 @@ func nodeConfig(pool core.NodePool) *containerpb.NodeConfig {
 // gets 6, blowing through regional disk/CPU quota for no operator-visible
 // reason. Pinning to one zone keeps DesiredSize meaning what it says; the
 // control plane itself stays regional (multi-zone) regardless.
-func defaultZone(spec core.ClusterSpec) string {
-	if spec.Zone != "" {
-		return spec.Zone
+//
+// A zonal cluster's pools live in its zone. Otherwise the zone is the
+// region's first UP zone rather than an assumed "<region>-a", which several
+// regions (us-east1, europe-west1) lack.
+func (p *ClusterProvisioner) nodeZone(ctx context.Context, n names) (string, error) {
+	if loc := n.controlPlaneLocation(); loc != n.spec.Region {
+		return loc, nil
 	}
-	return spec.Region + "-a"
+	return firstZone(ctx, p.c.zones, p.c.project, n.spec.Region)
 }
 
 func subnetwork(spec core.ClusterSpec) string {
@@ -222,8 +241,7 @@ func authorizedNetworksConfig(spec core.ClusterSpec) *containerpb.MasterAuthoriz
 }
 
 // locate resolves n to wherever the cluster actually lives, discovering it
-// via a project-wide search when spec.Zone is empty and the region-derived
-// path 404s.
+// via a project-wide search when the path spec.Zone/spec.Region implies 404s.
 //
 // spec.Zone is what tells clusterPath() whether to address a zonal or
 // regional cluster (see names.controlPlaneLocation), and it is only ever set
@@ -235,11 +253,12 @@ func authorizedNetworksConfig(spec core.ClusterSpec) *containerpb.MasterAuthoriz
 // that as "already gone" — decommissioning the registry record and archiving
 // the repo while the real cluster keeps running and billing, exactly what
 // happened before this existed.
+//
+// A non-empty spec.Zone is not trusted either: `delete --spot` derives one
+// (see the CLI's --spot handling), and an operator can pass a wrong --zone.
+// Reading that path's 404 as "already gone" would delete the network and
+// repository out from under a live regional cluster.
 func (p *ClusterProvisioner) locate(ctx context.Context, n names) (names, error) {
-	if n.spec.Zone != "" {
-		return n, nil
-	}
-
 	if _, err := p.c.cluster.GetCluster(ctx, &containerpb.GetClusterRequest{Name: n.clusterPath()}); err == nil {
 		return n, nil
 	} else if status.Code(err) != codes.NotFound {
@@ -259,7 +278,7 @@ func (p *ClusterProvisioner) locate(ctx context.Context, n names) (names, error)
 			// copy is local to the call, never written back to the caller's
 			// spec.
 			found := n
-			found.spec.Zone = c.GetLocation()
+			found.located = c.GetLocation()
 			return found, nil
 		}
 	}
@@ -357,11 +376,12 @@ func (p *ClusterProvisioner) describeNodePools(ctx context.Context, n names) ([]
 			pool.Labels = cfg.GetLabels()
 			pool.DiskSizeGB = cfg.GetDiskSizeGb()
 		}
-		if as := np.GetAutoscaling(); as != nil {
+		// DesiredSize stays unset: GKE's InitialNodeCount is fixed at
+		// creation and never tracks the live count, which the autoscaler owns.
+		if as := np.GetAutoscaling(); as != nil && as.GetEnabled() {
 			pool.MinSize = as.GetMinNodeCount()
 			pool.MaxSize = as.GetMaxNodeCount()
 		}
-		pool.DesiredSize = np.GetInitialNodeCount()
 		pools = append(pools, pool)
 	}
 
@@ -385,14 +405,22 @@ func (p *ClusterProvisioner) Reconcile(ctx context.Context, spec core.ClusterSpe
 		return change, fmt.Errorf("%w: %s", provisioner.ErrNotFound, spec.ID)
 	}
 
-	accessChange, err := p.reconcileAccess(ctx, spec, state)
+	// Describe found the cluster through locate; resolve the same way so every
+	// call below addresses the cluster where it actually lives, not where
+	// spec.Zone/spec.Region imply.
+	n, err := p.locate(ctx, p.names(spec))
+	if err != nil {
+		return change, err
+	}
+
+	accessChange, err := p.reconcileAccess(ctx, n, state)
 	if err != nil {
 		return change, err
 	}
 	change.Merge(accessChange)
 
 	if !state.Autopilot {
-		if err := p.ensureNodePools(ctx, spec, &change); err != nil {
+		if err := p.ensureNodePools(ctx, n, &change); err != nil {
 			return change, err
 		}
 	}
@@ -400,13 +428,13 @@ func (p *ClusterProvisioner) Reconcile(ctx context.Context, spec core.ClusterSpe
 }
 
 func (p *ClusterProvisioner) reconcileAccess(
-	ctx context.Context, spec core.ClusterSpec, state provisioner.ClusterState,
+	ctx context.Context, n names, state provisioner.ClusterState,
 ) (provisioner.Change, error) {
+	spec := n.spec
 	if state.Access == spec.Access {
 		return provisioner.Change{}, nil
 	}
 
-	n := p.names(spec)
 	_, err := p.c.cluster.UpdateCluster(ctx, &containerpb.UpdateClusterRequest{
 		Name: n.clusterPath(),
 		Update: &containerpb.ClusterUpdate{
@@ -417,7 +445,7 @@ func (p *ClusterProvisioner) reconcileAccess(
 	if err != nil {
 		return provisioner.Change{}, fmt.Errorf("updating access mode for %s: %w", spec.ID, err)
 	}
-	p.c.logger.Info("Updated Access Mode", "cluster", spec.ID, "from", state.Access, "to", spec.Access)
+	p.c.logger.Info("Updated Access Mode", "from", state.Access, "to", spec.Access)
 
 	return provisioner.Change{
 		Changed: true,
@@ -425,65 +453,69 @@ func (p *ClusterProvisioner) reconcileAccess(
 	}, nil
 }
 
-// ensureNodePools creates missing node pools and resizes drifted ones. It
-// never deletes: removing a node pool evicts running workloads, which is a
-// decision that belongs to a human rather than to a reconcile loop.
+// ensureNodePools creates missing node pools and converges drifted autoscaler
+// bounds. It never deletes: removing a node pool evicts running workloads,
+// which is a decision that belongs to a human rather than to a reconcile loop.
+//
+// Only min/max are compared. The live node count moves whenever GKE's
+// autoscaler acts, and resetting it to spec's DesiredSize on every apply would
+// fight the autoscaler and report a change on every run.
 func (p *ClusterProvisioner) ensureNodePools(
-	ctx context.Context, spec core.ClusterSpec, change *provisioner.Change,
+	ctx context.Context, n names, change *provisioner.Change,
 ) error {
-	existing, err := p.describeNodePools(ctx, p.names(spec))
+	spec := n.spec
+	existing, err := p.describeNodePools(ctx, n)
 	if err != nil {
 		return err
 	}
 
-	n := p.names(spec)
 	for _, want := range spec.NodePools {
 		current, found := findPool(existing, want.Name)
 		if !found {
-			if err := p.createNodePool(ctx, spec, want); err != nil {
+			if err := p.createNodePool(ctx, n, want); err != nil {
 				return err
 			}
-			p.c.logger.Info("Created Node Pool", "cluster", spec.ID, "pool", want.Name)
+			p.c.logger.Info("Created Node Pool", "pool", want.Name)
 			record(change, fmt.Sprintf("create node pool %s", want.Name))
 			continue
 		}
 
-		if current.MinSize == want.MinSize && current.MaxSize == want.MaxSize &&
-			current.DesiredSize == want.DesiredSize {
+		if current.MinSize == want.MinSize && current.MaxSize == want.MaxSize {
 			continue
 		}
 
-		_, err := p.c.cluster.SetNodePoolSize(ctx, &containerpb.SetNodePoolSizeRequest{
-			Name:      n.nodePoolPath(want.Name),
-			NodeCount: want.DesiredSize,
+		_, err := p.c.cluster.SetNodePoolAutoscaling(ctx, &containerpb.SetNodePoolAutoscalingRequest{
+			Name:        n.nodePoolPath(want.Name),
+			Autoscaling: nodePoolAutoscaling(want),
 		})
 		if err != nil {
 			return fmt.Errorf("resizing node pool %s: %w", want.Name, err)
 		}
-		p.c.logger.Info("Resized Node Pool", "cluster", spec.ID, "pool", want.Name,
-			"min", want.MinSize, "desired", want.DesiredSize, "max", want.MaxSize)
-		record(change, fmt.Sprintf("resize node pool %s to %d/%d/%d",
-			want.Name, want.MinSize, want.DesiredSize, want.MaxSize))
+		p.c.logger.Info("Resized Node Pool", "pool", want.Name,
+			"min", want.MinSize, "max", want.MaxSize)
+		record(change, fmt.Sprintf("resize node pool %s to %d-%d",
+			want.Name, want.MinSize, want.MaxSize))
 	}
 
 	return nil
 }
 
-func (p *ClusterProvisioner) createNodePool(ctx context.Context, spec core.ClusterSpec, pool core.NodePool) error {
-	n := p.names(spec)
+func (p *ClusterProvisioner) createNodePool(ctx context.Context, n names, pool core.NodePool) error {
+	// n, not the caller's spec: when locate found a zonal cluster, the pool
+	// has to live in that cluster's zone.
+	zone, err := p.nodeZone(ctx, n)
+	if err != nil {
+		return err
+	}
 
-	_, err := p.c.cluster.CreateNodePool(ctx, &containerpb.CreateNodePoolRequest{
+	_, err = p.c.cluster.CreateNodePool(ctx, &containerpb.CreateNodePoolRequest{
 		Parent: n.clusterPath(),
 		NodePool: &containerpb.NodePool{
 			Name:             pool.Name,
 			InitialNodeCount: pool.DesiredSize,
-			Locations:        []string{defaultZone(spec)},
+			Locations:        []string{zone},
 			Config:           nodeConfig(pool),
-			Autoscaling: &containerpb.NodePoolAutoscaling{
-				Enabled:      true,
-				MinNodeCount: pool.MinSize,
-				MaxNodeCount: pool.MaxSize,
-			},
+			Autoscaling:      nodePoolAutoscaling(pool),
 		},
 	})
 	if err != nil {
@@ -524,7 +556,7 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 		}
 		return fmt.Errorf("deleting GKE cluster %s: %w", spec.ID, err)
 	}
-	p.c.logger.Info("Requested GKE Cluster Deletion", "cluster", spec.ID)
+	p.c.logger.Info("Requested GKE Cluster Deletion")
 	return nil
 }
 

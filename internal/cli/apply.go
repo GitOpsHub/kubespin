@@ -91,7 +91,7 @@ addons that silently never sync.`,
 	fs.String("provider", "", "cloud provider: aws, gcp, or azure")
 	fs.String("region", "", "cloud region")
 	fs.String("access", string(core.AccessPrivate), "API server exposure: private or public")
-	fs.String("size", "small", "cluster size: small, medium, or large — determines the default addon set. Argo CD and cluster-autoscaler ship at every size; medium adds Velero+Falco, large raises Pod Security policies to restricted (audit mode) and adds an OTel collector")
+	fs.String("size", "small", "cluster size: small, medium, or large — determines the default addon set. Argo CD ships at every size, plus cluster-autoscaler on aws (GKE and AKS autoscale their node pools natively); medium adds Velero+Falco, large raises Pod Security policies to restricted (audit mode) and adds an OTel collector")
 	fs.String("kubernetes-version", "", "Kubernetes minor version, e.g. 1.34")
 	fs.StringSlice("subnets", nil, "existing subnets to place the cluster in")
 	fs.StringSlice("authorized-cidrs", nil, "CIDR blocks allowed to reach the API server when --access public (GCP: required to reach the endpoint at all, since GKE enables master-authorized-networks with an empty allowlist by default; AWS/Azure: public endpoints are open to 0.0.0.0/0 unless this is set)")
@@ -134,19 +134,14 @@ func runApply(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// A dry run only reads the AWS-hosted cluster registry — it never touches the
-	// cluster's own cloud — so it only needs AWS authenticated, regardless of
-	// spec.Provider. A real apply needs both.
-	authProviders := []string{"aws"}
-	if !cfg.DryRun {
-		authProviders = cloudAuthProviders(spec)
-	}
-	if err := ensureAuthenticated(cmd, authProviders...); err != nil {
-		return err
-	}
-
+	// A dry run only reads the Postgres registry, which authenticates through
+	// its own DSN — it never touches any cloud — so it needs no cloud session
+	// at all. Only a real apply preflights the cluster's own cloud.
 	if cfg.DryRun {
 		return reportPlan(ctx, cmd, reg, spec)
+	}
+	if err := ensureAuthenticated(cmd, cloudAuthProviders(spec)...); err != nil {
+		return err
 	}
 
 	cloud, err := buildCloud(ctx, cmd, spec)
@@ -391,8 +386,13 @@ func cloudAuthProviders(spec core.ClusterSpec) []string {
 }
 
 // buildCloud assembles the provisioners for the spec's cloud.
+//
+// The provisioners log with a cluster-scoped logger rather than each call
+// site passing the cluster itself, so every resource they create or delete
+// lands in the console's cluster column, including IAM roles and network
+// resources that never had the cluster on hand to log.
 func buildCloud(ctx context.Context, cmd *cobra.Command, spec core.ClusterSpec) (orchestrator.Cloud, error) {
-	logger := LoggerFrom(ctx)
+	logger := LoggerFrom(ctx).With("cluster", string(spec.ID))
 
 	switch spec.Provider {
 	case core.ProviderAWS:

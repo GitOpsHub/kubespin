@@ -71,7 +71,7 @@ func (p *ClusterProvisioner) ensureClusterAutoscalerIdentity(
 		}
 		return fmt.Errorf("creating pod identity association for cluster-autoscaler on %s: %w", spec.ID, err)
 	}
-	p.c.logger.Info("Bound Cluster Autoscaler Identity", "cluster", spec.ID, "role", role)
+	p.c.logger.Info("Bound Cluster Autoscaler Identity", "role", role)
 	record(change, "bind cluster-autoscaler identity")
 	return nil
 }

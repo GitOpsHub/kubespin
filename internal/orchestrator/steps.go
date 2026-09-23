@@ -286,7 +286,10 @@ func Teardown(cloud Cloud, repoProv repo.Provisioner, logger *slog.Logger) Teard
 		// Delete only requests the teardown. Waiting for the cloud to report the
 		// cluster gone is what makes the decommissioned phase honest: the caller
 		// records it only after this returns.
-		if err := provisioner.WaitUntilGone(ctx, cloud.Cluster, spec, cloud.Wait); err != nil {
+		stopWaiting := logWhileWaiting(ctx, logger, spec.ID, "cluster deletion")
+		err := provisioner.WaitUntilGone(ctx, cloud.Cluster, spec, cloud.Wait)
+		stopWaiting()
+		if err != nil {
 			return fmt.Errorf("waiting for cluster %s to be deleted: %w", spec.ID, err)
 		}
 		logger.Info("Deleted Cluster", "cluster", spec.ID)
@@ -345,6 +348,17 @@ func drainLoadBalancers(ctx context.Context, cloud Cloud, spec core.ClusterSpec,
 	if err != nil {
 		return fmt.Errorf("building Kubernetes client for %s: %w", spec.ID, err)
 	}
+	return drainLoadBalancersWith(ctx, clientset, spec, logger)
+}
+
+// drainLoadBalancersWith is drainLoadBalancers against an already-built
+// client, split out so it can run against a fake clientset.
+func drainLoadBalancersWith(ctx context.Context, clientset kubernetes.Interface, spec core.ClusterSpec, logger *slog.Logger) error {
+	// Argo CD first: every addon Application self-heals, so a LoadBalancer
+	// Service deleted out from under a running application controller is
+	// recreated within seconds — and the cloud provisions a fresh load
+	// balancer for it, which the cluster's deletion then orphans.
+	stopArgoCDSync(ctx, clientset, spec, logger)
 
 	services, err := clientset.CoreV1().Services("").List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -407,6 +421,44 @@ func drainLoadBalancers(ctx context.Context, cloud Cloud, spec core.ClusterSpec,
 	}
 }
 
+// argoCDControllerSelector matches the argo-cd chart's application
+// controller, whatever the release's fullname works out to.
+const argoCDControllerSelector = "app.kubernetes.io/component=application-controller"
+
+// stopArgoCDSync scales Argo CD's application controller to zero, so nothing
+// recreates the Services drainLoadBalancers is about to delete. A cluster
+// without Argo CD (never installed, or already gone) has nothing to stop.
+func stopArgoCDSync(ctx context.Context, clientset kubernetes.Interface, spec core.ClusterSpec, logger *slog.Logger) {
+	statefulSets := clientset.AppsV1().StatefulSets(argocd.Namespace)
+	list, err := statefulSets.List(ctx, metav1.ListOptions{LabelSelector: argoCDControllerSelector})
+	if err != nil {
+		// Same reasoning as the Services list below: an unreachable API server
+		// means there is nothing left to stop.
+		logger.Debug("Skipped Stopping Argo CD Sync",
+			"cluster", spec.ID, "reason", "could not list application controllers", "error", err)
+		return
+	}
+
+	for i := range list.Items {
+		sts := &list.Items[i]
+		if sts.Spec.Replicas != nil && *sts.Spec.Replicas == 0 {
+			continue
+		}
+		sts.Spec.Replicas = new(int32)
+		if _, err := statefulSets.Update(ctx, sts, metav1.UpdateOptions{}); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			// Draining anyway beats wedging delete: at worst a recreated
+			// load balancer outlives the drain, as it did before this existed.
+			logger.Warn("Could Not Stop Argo CD Sync",
+				"cluster", spec.ID, "controller", sts.Name, "error", err)
+			continue
+		}
+		logger.Info("Stopped Argo CD Sync", "cluster", spec.ID, "controller", sts.Name)
+	}
+}
+
 // createClusterStep resolves the cluster's network, requests the cluster,
 // waits for it to become active, then reconciles node pools.
 //
@@ -435,7 +487,10 @@ func createClusterStep(
 		}
 
 		logger.Info("Waiting For Control Plane", "cluster", spec.ID)
-		if _, err := provisioner.WaitUntilActive(ctx, cloud.Cluster, spec, cloud.Wait); err != nil {
+		stopWaiting := logWhileWaiting(ctx, logger, spec.ID, "control plane")
+		_, err := provisioner.WaitUntilActive(ctx, cloud.Cluster, spec, cloud.Wait)
+		stopWaiting()
+		if err != nil {
 			return fmt.Errorf("waiting for cluster %s: %w", spec.ID, err)
 		}
 
@@ -450,5 +505,42 @@ func createClusterStep(
 		}
 
 		return nil
+	}
+}
+
+// waitingLogInterval is how often a long wait says it is still going. A
+// control plane takes 10-20 minutes; without this the log sits on one
+// "Waiting" line for all of it, indistinguishable from a hang.
+var waitingLogInterval = time.Minute
+
+// logWhileWaiting logs "Still Waiting" every waitingLogInterval, with the
+// time elapsed, until the returned stop is called or ctx ends. stop waits for
+// the logging goroutine to exit, so no line lands after the wait's own
+// outcome.
+func logWhileWaiting(ctx context.Context, logger *slog.Logger, cluster core.ClusterID, what string) (stop func()) {
+	started := time.Now()
+	done := make(chan struct{})
+	exited := make(chan struct{})
+
+	go func() {
+		defer close(exited)
+		ticker := time.NewTicker(waitingLogInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				logger.Info("Still Waiting", "cluster", cluster, "for", what,
+					"elapsed", time.Since(started).Round(time.Second))
+			}
+		}
+	}()
+
+	return func() {
+		close(done)
+		<-exited
 	}
 }

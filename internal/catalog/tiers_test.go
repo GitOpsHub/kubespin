@@ -37,7 +37,7 @@ func TestSizeSmall_CarriesTheFullNamedAddonSet(t *testing.T) {
 	for _, want := range []string{
 		"cert-manager", "gateway-api", "external-secrets",
 		"kyverno", "kyverno-policies", "cluster-autoscaler", "argocd",
-		"kube-prometheus-stack", "fluent-bit", "opencost", "external-dns",
+		"kube-prometheus-stack", "fluent-bit", "external-dns",
 		"ingress-nginx",
 	} {
 		if !small[want] {
@@ -101,10 +101,9 @@ func TestSizeLarge_StrictPolicySetReplacesBaseline(t *testing.T) {
 	}
 }
 
-// Every size ships Argo CD and exactly one cluster-autoscaler per cloud —
-// the catalog carries an AWS-configured entry and a GCP/Azure one under the
-// same name, so two copies must never survive ForProvider together — and
-// Karpenter on no cloud.
+// Every size ships Argo CD on every cloud, cluster-autoscaler on AWS alone
+// (GKE and AKS node pools autoscale natively, and the chart has no
+// credentials for either), and Karpenter on no cloud.
 func TestEverySize_ArgoCDAndAutoscalerPerProvider(t *testing.T) {
 	for _, size := range []core.Profile{sizeSmall, sizeMedium, sizeLarge} {
 		t.Run(size.Name, func(t *testing.T) {
@@ -125,11 +124,16 @@ func TestEverySize_ArgoCDAndAutoscalerPerProvider(t *testing.T) {
 						autoscalers = append(autoscalers, a)
 					}
 				}
+				if provider != core.ProviderAWS {
+					if len(autoscalers) != 0 {
+						t.Errorf("%s/%s: %d cluster-autoscaler entries, want none", size.Name, provider, len(autoscalers))
+					}
+					continue
+				}
 				if len(autoscalers) != 1 {
 					t.Fatalf("%s/%s: %d cluster-autoscaler entries, want exactly 1", size.Name, provider, len(autoscalers))
 				}
-				isAWSConfigured := autoscalers[0].Values["cloudProvider"] == "aws"
-				if isAWSConfigured != (provider == core.ProviderAWS) {
+				if autoscalers[0].Values["cloudProvider"] != "aws" {
 					t.Errorf("%s/%s: cluster-autoscaler cloudProvider = %v", size.Name, provider, autoscalers[0].Values["cloudProvider"])
 				}
 			}

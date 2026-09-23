@@ -113,7 +113,7 @@ func (p *ClusterProvisioner) createCluster(ctx context.Context, spec core.Cluste
 	if err := p.c.cluster.CreateOrUpdate(ctx, n.resourceGroup(), n.cluster(), cluster); err != nil {
 		return fmt.Errorf("creating AKS cluster %s: %w", spec.ID, err)
 	}
-	p.c.logger.Info("Requested AKS Cluster", "cluster", spec.ID, "region", spec.Region)
+	p.c.logger.Info("Requested AKS Cluster", "region", spec.Region)
 	return nil
 }
 
@@ -216,13 +216,23 @@ func accessFrom(profile *armcontainerservice.ManagedClusterAPIServerAccessProfil
 }
 
 func (p *ClusterProvisioner) describeNodePools(ctx context.Context, spec core.ClusterSpec) ([]core.NodePool, error) {
-	n := names{spec}
+	listed, err := p.listAgentPools(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	return nodePoolsFrom(listed), nil
+}
 
+func (p *ClusterProvisioner) listAgentPools(ctx context.Context, spec core.ClusterSpec) ([]*armcontainerservice.AgentPool, error) {
+	n := names{spec}
 	listed, err := p.c.cluster.ListAgentPools(ctx, n.resourceGroup(), n.cluster())
 	if err != nil {
 		return nil, fmt.Errorf("listing node pools for %s: %w", spec.ID, err)
 	}
+	return listed, nil
+}
 
+func nodePoolsFrom(listed []*armcontainerservice.AgentPool) []core.NodePool {
 	pools := make([]core.NodePool, 0, len(listed))
 	for _, ap := range listed {
 		if ap.Properties == nil {
@@ -241,7 +251,21 @@ func (p *ClusterProvisioner) describeNodePools(ctx context.Context, spec core.Cl
 	}
 
 	slices.SortFunc(pools, func(a, b core.NodePool) int { return strings.Compare(a.Name, b.Name) })
-	return pools, nil
+	return pools
+}
+
+// agentPoolSubnet returns the VNet subnet the named live pool runs in, or
+// any live pool's when name is empty.
+func agentPoolSubnet(listed []*armcontainerservice.AgentPool, name string) string {
+	for _, ap := range listed {
+		if ap.Properties == nil || (name != "" && deref(ap.Name) != name) {
+			continue
+		}
+		if subnet := deref(ap.Properties.VnetSubnetID); subnet != "" {
+			return subnet
+		}
+	}
+	return ""
 }
 
 // Reconcile brings an existing cluster in line with the spec.
@@ -292,7 +316,7 @@ func (p *ClusterProvisioner) reconcileAccess(
 	if err := p.c.cluster.CreateOrUpdate(ctx, n.resourceGroup(), n.cluster(), *cluster); err != nil {
 		return provisioner.Change{}, fmt.Errorf("updating access mode for %s: %w", spec.ID, err)
 	}
-	p.c.logger.Info("Updated Access Mode", "cluster", spec.ID, "from", state.Access, "to", spec.Access)
+	p.c.logger.Info("Updated Access Mode", "from", state.Access, "to", spec.Access)
 
 	return provisioner.Change{
 		Changed: true,
@@ -300,21 +324,33 @@ func (p *ClusterProvisioner) reconcileAccess(
 	}, nil
 }
 
-// ensureNodePools creates missing node pools and resizes drifted ones. It
-// never deletes: removing a node pool evicts running workloads, which is a
-// decision that belongs to a human rather than to a reconcile loop.
+// ensureNodePools creates missing node pools and converges drifted
+// autoscaler bounds. It never deletes: removing a node pool evicts running
+// workloads, which is a decision that belongs to a human rather than to a
+// reconcile loop.
+//
+// Only min/max are compared. A pool's live Count moves whenever the AKS
+// cluster autoscaler acts, and resetting it to spec's DesiredSize on every
+// apply would fight the autoscaler and report a change on every run.
 func (p *ClusterProvisioner) ensureNodePools(
 	ctx context.Context, spec core.ClusterSpec, change *provisioner.Change,
 ) error {
-	existing, err := p.describeNodePools(ctx, spec)
+	listed, err := p.listAgentPools(ctx, spec)
 	if err != nil {
 		return err
 	}
+	existing := nodePoolsFrom(listed)
 
 	n := names{spec}
 	subnetID := ""
 	if len(spec.Subnets) > 0 {
 		subnetID = spec.Subnets[0]
+	} else {
+		// A ready cluster's apply carries no subnets for a kubespin-managed
+		// VNet: only the create path resolves them through EnsureNetwork. A
+		// new pool has to join the subnet the cluster's pools already run
+		// in, since AKS rejects a pool outside the cluster's VNet.
+		subnetID = agentPoolSubnet(listed, "")
 	}
 	for _, want := range spec.NodePools {
 		current, found := findPool(existing, want.Name)
@@ -324,7 +360,7 @@ func (p *ClusterProvisioner) ensureNodePools(
 			); err != nil {
 				return fmt.Errorf("creating node pool %s: %w", want.Name, err)
 			}
-			p.c.logger.Info("Created Node Pool", "cluster", spec.ID, "pool", want.Name)
+			p.c.logger.Info("Created Node Pool", "pool", want.Name)
 			record(change, fmt.Sprintf("create node pool %s", want.Name))
 			continue
 		}
@@ -337,20 +373,23 @@ func (p *ClusterProvisioner) ensureNodePools(
 			)
 		}
 
-		if current.MinSize == want.MinSize && current.MaxSize == want.MaxSize &&
-			current.DesiredSize == want.DesiredSize {
+		if current.MinSize == want.MinSize && current.MaxSize == want.MaxSize {
 			continue
 		}
 
+		// Keep the autoscaler's live count, only moved into the new bounds,
+		// and the pool's own subnet, which AKS does not let an update change.
+		resized := want
+		resized.DesiredSize = min(max(current.DesiredSize, want.MinSize), want.MaxSize)
 		if err := p.c.cluster.CreateOrUpdateAgentPool(
-			ctx, n.resourceGroup(), n.cluster(), want.Name, *agentPoolProfileAsPool(want, subnetID),
+			ctx, n.resourceGroup(), n.cluster(), want.Name, *agentPoolProfileAsPool(resized, agentPoolSubnet(listed, want.Name)),
 		); err != nil {
 			return fmt.Errorf("resizing node pool %s: %w", want.Name, err)
 		}
-		p.c.logger.Info("Resized Node Pool", "cluster", spec.ID, "pool", want.Name,
-			"min", want.MinSize, "desired", want.DesiredSize, "max", want.MaxSize)
-		record(change, fmt.Sprintf("resize node pool %s to %d/%d/%d",
-			want.Name, want.MinSize, want.DesiredSize, want.MaxSize))
+		p.c.logger.Info("Resized Node Pool", "pool", want.Name,
+			"min", want.MinSize, "desired", resized.DesiredSize, "max", want.MaxSize)
+		record(change, fmt.Sprintf("resize node pool %s to %d-%d",
+			want.Name, want.MinSize, want.MaxSize))
 	}
 
 	return nil
@@ -401,7 +440,7 @@ func (p *ClusterProvisioner) Delete(ctx context.Context, spec core.ClusterSpec) 
 		}
 		return fmt.Errorf("deleting AKS cluster %s: %w", spec.ID, err)
 	}
-	p.c.logger.Info("Requested AKS Cluster Deletion", "cluster", spec.ID)
+	p.c.logger.Info("Requested AKS Cluster Deletion")
 	return nil
 }
 

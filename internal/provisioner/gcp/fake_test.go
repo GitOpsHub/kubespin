@@ -38,6 +38,7 @@ type fakeGCP struct {
 	networks        map[string]*compute.Network    // name -> network
 	subnetworks     map[string]*compute.Subnetwork // "region/name" -> subnetwork
 	routers         map[string]*compute.Router     // "region/name" -> router
+	zones           map[string][]string            // region -> UP zone names
 
 	// deleteNetworkInUseErrors makes the next N DeleteNetwork calls fail with
 	// resourceInUseByAnotherResource before succeeding, modeling a GKE-managed
@@ -61,6 +62,13 @@ func newFakeGCP() *fakeGCP {
 			},
 		},
 		routers: map[string]*compute.Router{},
+		zones: map[string][]string{
+			// Deliberately unsorted: the provisioner has to pick the first
+			// by name, not by API order.
+			"us-central1": {"us-central1-c", "us-central1-a", "us-central1-f", "us-central1-b"},
+			// No "-a" zone, as in real GCP.
+			"us-east1": {"us-east1-d", "us-east1-c", "us-east1-b"},
+		},
 	}
 }
 
@@ -68,7 +76,7 @@ func (f *fakeGCP) record(name string) { f.calls = append(f.calls, name) }
 
 var mutatingCalls = []string{
 	"CreateCluster", "UpdateCluster", "DeleteCluster",
-	"CreateNodePool", "SetNodePoolSize", "DeleteNodePool",
+	"CreateNodePool", "SetNodePoolAutoscaling", "DeleteNodePool",
 	"CreateServiceAccount", "DeleteServiceAccount", "SetIamPolicy",
 	"InsertFirewall", "InsertNetwork", "InsertSubnetwork", "InsertRouter",
 	"DeleteFirewall", "DeleteNetwork", "DeleteSubnetwork", "DeleteRouter",
@@ -88,7 +96,7 @@ func (f *fakeGCP) assertNoMutations(t *testing.T) {
 func (f *fakeGCP) clients() *Clients {
 	return &Clients{
 		project: testProject, cluster: f, firewalls: f,
-		networks: f, subnetworks: f, routers: f, tokens: f, logger: slog.Default(),
+		networks: f, subnetworks: f, routers: f, zones: f, tokens: f, logger: slog.Default(),
 	}
 }
 
@@ -188,14 +196,21 @@ func (f *fakeGCP) CreateNodePool(_ context.Context, req *containerpb.CreateNodeP
 	return &containerpb.Operation{}, nil
 }
 
-func (f *fakeGCP) SetNodePoolSize(_ context.Context, req *containerpb.SetNodePoolSizeRequest, _ ...gax.CallOption) (*containerpb.Operation, error) {
-	f.record("SetNodePoolSize")
+func (f *fakeGCP) SetNodePoolAutoscaling(_ context.Context, req *containerpb.SetNodePoolAutoscalingRequest, _ ...gax.CallOption) (*containerpb.Operation, error) {
+	f.record("SetNodePoolAutoscaling")
 	np, ok := f.nodePools[clusterNameFromPath(req.Name)]
 	if !ok {
 		return nil, status.Error(codes.NotFound, "node pool not found")
 	}
-	np.InitialNodeCount = req.NodeCount
+	np.Autoscaling = req.Autoscaling
 	return &containerpb.Operation{}, nil
+}
+
+// --- Zones ---
+
+func (f *fakeGCP) ListZones(_ context.Context, _, region string) ([]string, error) {
+	f.record("ListZones")
+	return f.zones[region], nil
 }
 
 func (f *fakeGCP) DeleteNodePool(_ context.Context, req *containerpb.DeleteNodePoolRequest, _ ...gax.CallOption) (*containerpb.Operation, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/GitOpsHub/kubespin/internal/argocd"
 	"github.com/GitOpsHub/kubespin/internal/core"
 )
 
@@ -171,5 +172,37 @@ func TestReconcileAppOfApps_RemovesDeletedAddon(t *testing.T) {
 	}
 	if _, ok := checkoutAfter.File("apps/addon-one.yaml"); !ok {
 		t.Fatal("expected apps/addon-one.yaml to still exist")
+	}
+}
+
+// The root Application is applied straight to the cluster, but the repository
+// still keeps a record of it, outside the apps/ directory the root watches.
+func TestReconcileAppOfApps_CommitsRootApplicationRecord(t *testing.T) {
+	f := newFakeGitHub()
+	p := NewProvisioner(f.clients())
+	spec := testSpec()
+	profile := testProfile()
+
+	if err := Seed(context.Background(), p, spec, profile); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	if _, err := ReconcileAppOfApps(context.Background(), p, spec, profile); err != nil {
+		t.Fatalf("ReconcileAppOfApps: %v", err)
+	}
+
+	repoURL, err := p.RepoURL(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("RepoURL: %v", err)
+	}
+	want, err := argocd.RenderRootApplication(repoURL)
+	if err != nil {
+		t.Fatalf("RenderRootApplication: %v", err)
+	}
+	checkout, err := p.Clone(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if got, ok := checkout.File(RootApplicationFile); !ok || string(got) != string(want) {
+		t.Errorf("%s = %q, want %q", RootApplicationFile, got, want)
 	}
 }

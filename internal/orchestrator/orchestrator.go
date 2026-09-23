@@ -353,7 +353,7 @@ func (o *Orchestrator) advance(
 	}
 
 	progress := stepProgress(rec.Phase)
-	o.logger.Info("Starting Step"+progress, "cluster", spec.ID, "step", step.Name())
+	o.logger.Info("Starting Step"+progress, "cluster", spec.ID, "step", step.Name(), SectionLogKey, true)
 	started := o.now()
 
 	if err := step.Run(ctx, spec, rec); err != nil {
@@ -374,6 +374,11 @@ func (o *Orchestrator) advance(
 		"cluster", spec.ID, "step", step.Name(), "phase", next, "took", o.now().Sub(started))
 	return updated, nil
 }
+
+// SectionLogKey marks the log record that starts a step. A human-facing log
+// handler can render it as a header the step's own records group under;
+// anything machine-read just sees section=true.
+const SectionLogKey = "section"
 
 // provisioningPath is the happy path apply walks, one step per phase, for
 // numbering steps in the log ("Starting Step 2/4").

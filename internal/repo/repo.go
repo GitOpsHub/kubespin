@@ -24,6 +24,11 @@ const (
 	ClusterFile = "cluster.yaml"
 	AddonsFile  = "addons.yaml"
 	StateFile   = ".state.yaml"
+	// RootApplicationFile is a record of the app-of-apps root Application
+	// kubespin applies straight to the cluster. It sits outside
+	// argocd.AppsDir, the only path the root Application watches, so Argo CD
+	// never syncs it: committing it is for the operator, not for Argo CD.
+	RootApplicationFile = "bootstrap/root-application.yaml"
 )
 
 // repositoriesAPI is the go-github Repositories surface this package uses.

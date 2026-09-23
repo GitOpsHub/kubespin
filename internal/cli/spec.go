@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -10,7 +11,12 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/GitOpsHub/kubespin/internal/core"
+	gcpprov "github.com/GitOpsHub/kubespin/internal/provisioner/gcp"
 )
+
+// gcpDefaultZone resolves the zone --spot makes a GCP cluster zonal in. A
+// variable so tests can stand in for the Compute API.
+var gcpDefaultZone func(ctx context.Context, project, region string) (string, error) = gcpprov.DefaultZone
 
 // defaultPoolName is the node pool created when a spec is built from flags
 // rather than a file.
@@ -202,7 +208,24 @@ func applySpecFlags(cmd *cobra.Command, spec *core.ClusterSpec) error {
 	// the low-cost configuration.
 	if spot && spec.Provider == core.ProviderGCP {
 		if !flags.Changed("zone") && spec.Zone == "" {
-			spec.Zone = spec.Region + "-a"
+			// The region's first available zone, not an assumed "<region>-a":
+			// us-east1 and europe-west1, for two, have no "-a" zone.
+			project, err := flags.GetString("gcp-project")
+			if err != nil {
+				return fmt.Errorf("reading --gcp-project: %w", err)
+			}
+			if project == "" {
+				return fmt.Errorf("%w: --gcp-project is required for provider gcp", core.ErrInvalidSpec)
+			}
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			zone, err := gcpDefaultZone(ctx, project, spec.Region)
+			if err != nil {
+				return fmt.Errorf("resolving a zone for --spot in %s: %w", spec.Region, err)
+			}
+			spec.Zone = zone
 		}
 		if !flags.Changed("gcp-public-nodes") {
 			spec.PublicNodes = true

@@ -177,13 +177,19 @@ func (p *githubProvisioner) Create(ctx context.Context, spec core.ClusterSpec) e
 	return p.seedCodeowners(ctx, spec, branch)
 }
 
+// protectBranch requires a CODEOWNERS-reviewed pull request for every change
+// to branch, except from admins. kubespin itself commits straight to branch
+// (seed, addon and app-of-apps reconciles all go through Push → UpdateRef)
+// with the operator's org-admin token, so enforcing the rule on admins too
+// made GitHub refuse every one of those pushes ("Protected branch update
+// failed") on any plan that offers protection at all.
 func (p *githubProvisioner) protectBranch(ctx context.Context, n names, branch string) error {
 	_, _, err := p.c.repo.UpdateBranchProtection(ctx, p.c.org, n.repoName(), branch, &github.ProtectionRequest{
 		RequiredPullRequestReviews: &github.PullRequestReviewsEnforcementRequest{
 			RequireCodeOwnerReviews:      true,
 			RequiredApprovingReviewCount: 1,
 		},
-		EnforceAdmins: true,
+		EnforceAdmins: false,
 	})
 	switch {
 	case err == nil:
@@ -301,7 +307,7 @@ func (p *githubProvisioner) cloneBranch(ctx context.Context, spec core.ClusterSp
 		files:         map[string][]byte{},
 	}
 
-	for _, path := range []string{ClusterFile, AddonsFile, StateFile, "CODEOWNERS"} {
+	for _, path := range []string{ClusterFile, AddonsFile, StateFile, RootApplicationFile, "CODEOWNERS"} {
 		content, _, resp, err := p.c.repo.GetContents(ctx, p.c.org, n.repoName(), path,
 			&github.RepositoryContentGetOptions{Ref: branch})
 		if err != nil {

@@ -110,7 +110,7 @@ func TestReconcileAddons_AddonValueChange_Commits(t *testing.T) {
 	}
 }
 
-func TestReconcileAddons_InfraOnlyChange_NoCommit(t *testing.T) {
+func TestReconcileAddons_InfraOnlyChange_CommitsClusterYAML(t *testing.T) {
 	f := newFakeGitHub()
 	p := NewProvisioner(f.clients())
 	spec := testSpec()
@@ -120,10 +120,9 @@ func TestReconcileAddons_InfraOnlyChange_NoCommit(t *testing.T) {
 		t.Fatalf("Seed: %v", err)
 	}
 
-	// A node pool resize changes the spec but not the resolved profile — the
-	// scenario the M3 acceptance criteria calls out explicitly: this must
-	// reconcile via the cloud SDK (exercised in internal/provisioner tests),
-	// never via a git commit.
+	// A node pool resize changes the spec but not the resolved profile. The
+	// cloud SDK converges it (exercised in internal/provisioner tests); the
+	// repository's cluster.yaml must still record the new desired infra.
 	resized := spec
 	resized.NodePools = append([]core.NodePool{}, spec.NodePools...)
 	resized.NodePools[0].DesiredSize = 4
@@ -132,8 +131,29 @@ func TestReconcileAddons_InfraOnlyChange_NoCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReconcileAddons: %v", err)
 	}
+	if !changed {
+		t.Fatal("expected an infra-only change to commit cluster.yaml")
+	}
+
+	checkout, err := p.Clone(context.Background(), resized)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	want, _, err := Render(resized, profile)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if got, _ := checkout.File(ClusterFile); string(got) != string(want) {
+		t.Errorf("cluster.yaml = %s, want %s", got, want)
+	}
+
+	// And a repeat with nothing changed commits nothing.
+	changed, err = ReconcileAddons(context.Background(), p, resized, profile)
+	if err != nil {
+		t.Fatalf("ReconcileAddons (repeat): %v", err)
+	}
 	if changed {
-		t.Error("expected an infra-only change to produce no git commit")
+		t.Error("expected a no-change reconcile to produce no git commit")
 	}
 }
 

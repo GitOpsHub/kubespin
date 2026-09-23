@@ -234,7 +234,7 @@ Where AWS ships an EKS add-on for a component a cluster needs, kubespin installs
 - **Adopting existing installs:** `ResolveConflicts=OVERWRITE` adopts what's already running: the unmanaged `vpc-cni`/`kube-proxy`/`coredns` EKS installs on every cluster, and Helm releases an older kubespin delivered through Argo CD.
 - **No-op applies stay no-op:** configuration drift is compared as JSON, so key order and whitespace don't count. An unchanged add-on costs one `DescribeAddon`, plus role reads when it has an identity, and no writes.
 - **Auto Mode:** it runs its own networking, DNS, block storage and Pod Identity agent, so only `aws-efs-csi-driver` is installed there.
-- **Kept as Helm charts on AWS:** there's no EKS add-on running the same software for `cluster-autoscaler`, kube-prometheus-stack, kyverno, ingress-nginx, external-secrets, opencost, velero, falco, the OTel collector, or gateway-api. `adot` sends to CloudWatch/X-Ray rather than acting as a generic collector, and `kubecost` is a Marketplace product.
+- **Kept as Helm charts on AWS:** there's no EKS add-on running the same software for `cluster-autoscaler`, kube-prometheus-stack, kyverno, ingress-nginx, external-secrets, velero, falco, the OTel collector, or gateway-api. `adot` sends to CloudWatch/X-Ray rather than acting as a generic collector, and `kubecost` is a Marketplace product.
 
 ## autoscaler.go
 

@@ -226,7 +226,7 @@ func (p *ClusterProvisioner) ensureManagedAddon(
 		if _, err := p.c.eks.UpdateAddon(ctx, input); err != nil {
 			return fmt.Errorf("updating addon %s for %s: %w", a.name, spec.ID, err)
 		}
-		p.c.logger.Info("Updated EKS Addon", "cluster", spec.ID, "addon", a.name,
+		p.c.logger.Info("Updated EKS Addon", "addon", a.name,
 			"podIdentity", identityMissing, "configuration", configDrifted)
 		record(change, "update addon "+a.name)
 		return nil
@@ -254,7 +254,7 @@ func (p *ClusterProvisioner) ensureManagedAddon(
 		}
 		return fmt.Errorf("creating addon %s for %s: %w", a.name, spec.ID, err)
 	}
-	p.c.logger.Info("Installed EKS Addon", "cluster", spec.ID, "addon", a.name)
+	p.c.logger.Info("Installed EKS Addon", "addon", a.name)
 	record(change, "install addon "+a.name)
 	return nil
 }

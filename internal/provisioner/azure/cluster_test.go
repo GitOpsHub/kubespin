@@ -146,12 +146,12 @@ func TestClusterProvisioner_Reconcile_AccessDrift(t *testing.T) {
 	}
 }
 
-func TestClusterProvisioner_Reconcile_NodePoolResize(t *testing.T) {
+func TestClusterProvisioner_Reconcile_NodePoolBoundsDrift(t *testing.T) {
 	f := newFakeAzure()
 	spec := testSpec()
 	f.activeCluster(spec)
 	drifted := spec.NodePools[0]
-	drifted.DesiredSize = 1
+	drifted.MinSize, drifted.MaxSize, drifted.DesiredSize = 1, 2, 2
 	f.withNodePool(drifted)
 	p := NewClusterProvisioner(f.clients())
 
@@ -160,11 +160,79 @@ func TestClusterProvisioner_Reconcile_NodePoolResize(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if !change.Changed {
-		t.Fatal("expected the resize to be reported as a change")
+		t.Fatal("expected the bounds change to be reported as a change")
 	}
-	if derefInt32(f.agentPools["default"].Properties.Count) != spec.NodePools[0].DesiredSize {
-		t.Errorf("desired size = %d, want %d",
-			derefInt32(f.agentPools["default"].Properties.Count), spec.NodePools[0].DesiredSize)
+	props := f.agentPools["default"].Properties
+	if derefInt32(props.MinCount) != 1 || derefInt32(props.MaxCount) != 5 {
+		t.Errorf("bounds = %d-%d, want 1-5", derefInt32(props.MinCount), derefInt32(props.MaxCount))
+	}
+	// The autoscaler's live count is kept, not reset to spec's DesiredSize.
+	if got := derefInt32(props.Count); got != 2 {
+		t.Errorf("count = %d, want the live count 2 kept", got)
+	}
+}
+
+func TestClusterProvisioner_Reconcile_NodePoolBoundsDrift_ClampsLiveCount(t *testing.T) {
+	f := newFakeAzure()
+	spec := testSpec()
+	spec.NodePools[0].MaxSize = 3
+	f.activeCluster(spec)
+	live := spec.NodePools[0]
+	live.MaxSize, live.DesiredSize = 8, 7
+	f.withNodePool(live)
+
+	if _, err := NewClusterProvisioner(f.clients()).Reconcile(context.Background(), spec); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := derefInt32(f.agentPools["default"].Properties.Count); got != 3 {
+		t.Errorf("count = %d, want the live count clamped to the new max 3", got)
+	}
+}
+
+// The live count belongs to the AKS cluster autoscaler: a pool whose count has
+// moved away from spec's DesiredSize, but whose bounds match, is converged.
+func TestClusterProvisioner_Reconcile_DesiredSizeDriftIsNotAChange(t *testing.T) {
+	f := newFakeAzure()
+	spec := testSpec()
+	f.activeCluster(spec)
+	scaled := spec.NodePools[0]
+	scaled.DesiredSize = 1
+	f.withNodePool(scaled)
+
+	change, err := NewClusterProvisioner(f.clients()).Reconcile(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if change.Changed {
+		t.Errorf("expected no change, got %+v", change)
+	}
+	f.assertNoMutations(t)
+}
+
+// A ready cluster's apply carries no subnets for a kubespin-managed VNet
+// (only the create path runs EnsureNetwork), so a new pool must join the
+// subnet the cluster's existing pools run in rather than get none at all.
+func TestClusterProvisioner_Reconcile_NewNodePoolJoinsLiveSubnet(t *testing.T) {
+	f := newFakeAzure()
+	spec := testSpec()
+	liveSubnet := spec.Subnets[0]
+	f.activeCluster(spec)
+	f.withNodePool(spec.NodePools[0])
+	f.agentPools["default"].Properties.VnetSubnetID = ptr(liveSubnet)
+
+	spec.Subnets = nil
+	spec.NodePools = append(spec.NodePools, core.NodePool{
+		Name: "extra", InstanceType: "Standard_D2s_v5", MinSize: 0, MaxSize: 3, DesiredSize: 1,
+	})
+	if _, err := NewClusterProvisioner(f.clients()).Reconcile(context.Background(), spec); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	ap, ok := f.agentPools["extra"]
+	if !ok {
+		t.Fatal("expected the extra node pool to have been created")
+	}
+	if got := deref(ap.Properties.VnetSubnetID); got != liveSubnet {
+		t.Errorf("new pool subnet = %q, want the cluster's live subnet %q", got, liveSubnet)
 	}
 }
 

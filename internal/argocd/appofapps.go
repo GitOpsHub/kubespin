@@ -15,9 +15,10 @@ import (
 const AppsDir = "apps"
 
 // RenderRootApplication renders the app-of-apps root Application: the one
-// resource installed directly into the cluster (never committed to the repo
-// it manages — an Application that synced itself would be a cycle), which
-// discovers every manifest under AppsDir in the cluster's own repository.
+// resource installed directly into the cluster (never synced from the repo
+// it manages — an Application that synced itself would be a cycle; the repo
+// keeps only a record of it outside AppsDir), which discovers every manifest
+// under AppsDir in the cluster's own repository.
 func RenderRootApplication(repoURL string) ([]byte, error) {
 	app := Application{
 		APIVersion: "argoproj.io/v1alpha1",

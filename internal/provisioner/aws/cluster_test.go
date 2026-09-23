@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
 	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 
 	"github.com/GitOpsHub/kubespin/internal/core"
@@ -265,8 +266,8 @@ func TestReconcile_Drift(t *testing.T) {
 		mutate   func(*core.ClusterSpec)
 		wantCall string
 	}{
-		"node pool resized": {
-			mutate:   func(s *core.ClusterSpec) { s.NodePools[0].DesiredSize = 5 },
+		"node pool bounds changed": {
+			mutate:   func(s *core.ClusterSpec) { s.NodePools[0].MaxSize = 8 },
 			wantCall: "UpdateNodegroupConfig",
 		},
 		"node pool added": {
@@ -322,6 +323,96 @@ func TestReconcile_Drift(t *testing.T) {
 				t.Errorf("second reconcile still reports changes: %v", again.Details)
 			}
 		})
+	}
+}
+
+// cluster-autoscaler moves a node group's desired size; that is not drift,
+// and resetting it on every apply would evict pods and never converge.
+func TestReconcile_AutoscaledDesiredSizeIsNotDrift(t *testing.T) {
+	f := newFakeAWS()
+	spec := testSpec()
+	f.activeCluster(spec)
+	scaled := spec.NodePools[0]
+	scaled.DesiredSize = 5
+	f.withNodePool(spec, scaled)
+	f.roles[names{spec}.nodeRole()] = "arn:aws:iam::123456789012:role/node"
+	f.attached[names{spec}.nodeRole()] = []string{policyEKSWorkerNode, policyEKSCNI, policyECRReadOnly}
+	f.calls = nil
+
+	if _, err := NewClusterProvisioner(f.clients()).Reconcile(t.Context(), spec); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if f.called("UpdateNodegroupConfig") {
+		t.Error("an autoscaled desired size was reset to the spec's")
+	}
+}
+
+// Changing the bounds keeps the autoscaler's desired size, clamped into the
+// new range, rather than resetting it to the spec's initial size.
+func TestReconcile_BoundsChangeKeepsLiveDesiredSizeClamped(t *testing.T) {
+	tests := map[string]struct {
+		liveDesired, wantMin, wantMax, wantDesired int32
+	}{
+		"inside the new range": {liveDesired: 4, wantMin: 1, wantMax: 8, wantDesired: 4},
+		"above the new max":    {liveDesired: 5, wantMin: 1, wantMax: 3, wantDesired: 3},
+		"below the new min":    {liveDesired: 1, wantMin: 2, wantMax: 5, wantDesired: 2},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			f := newFakeAWS()
+			spec := testSpec()
+			f.activeCluster(spec)
+			live := spec.NodePools[0]
+			live.DesiredSize = tc.liveDesired
+			f.withNodePool(spec, live)
+			f.roles[names{spec}.nodeRole()] = "arn:aws:iam::123456789012:role/node"
+			f.attached[names{spec}.nodeRole()] = []string{policyEKSWorkerNode, policyEKSCNI, policyECRReadOnly}
+
+			spec.NodePools[0].MinSize = tc.wantMin
+			spec.NodePools[0].MaxSize = tc.wantMax
+			if _, err := NewClusterProvisioner(f.clients()).Reconcile(t.Context(), spec); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+
+			got := f.nodeGroups[names{spec}.nodeGroup(spec.NodePools[0].Name)].ScalingConfig
+			if aws.ToInt32(got.MinSize) != tc.wantMin || aws.ToInt32(got.MaxSize) != tc.wantMax ||
+				aws.ToInt32(got.DesiredSize) != tc.wantDesired {
+				t.Errorf("scaling = %d/%d/%d, want %d/%d/%d",
+					aws.ToInt32(got.MinSize), aws.ToInt32(got.DesiredSize), aws.ToInt32(got.MaxSize),
+					tc.wantMin, tc.wantDesired, tc.wantMax)
+			}
+		})
+	}
+}
+
+// A ready cluster's apply never runs EnsureNetwork, so a kubespin-managed
+// network reaches Reconcile with no subnets. A node group added then must
+// still be created in the cluster's own subnets.
+func TestReconcile_NewNodePoolUsesClusterSubnetsWhenSpecHasNone(t *testing.T) {
+	f := newFakeAWS()
+	spec := testSpec()
+	f.activeCluster(spec)
+	f.withNodePool(spec, spec.NodePools[0])
+	f.roles[names{spec}.nodeRole()] = "arn:aws:iam::123456789012:role/node"
+	f.attached[names{spec}.nodeRole()] = []string{policyEKSWorkerNode, policyEKSCNI, policyECRReadOnly}
+
+	var created *eks.CreateNodegroupInput
+	f.onCreateNodegroup = func(in *eks.CreateNodegroupInput) { created = in }
+
+	desired := testSpec()
+	desired.Subnets = nil
+	desired.NodePools = append(desired.NodePools, core.NodePool{
+		Name: "batch", InstanceType: "m6i.xlarge", MinSize: 0, MaxSize: 4, DesiredSize: 1,
+	})
+	if _, err := NewClusterProvisioner(f.clients()).Reconcile(t.Context(), desired); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	if created == nil {
+		t.Fatal("CreateNodegroup was not called")
+	}
+	if !slices.Equal(created.Subnets, spec.Subnets) {
+		t.Errorf("node group subnets = %v, want the cluster's %v", created.Subnets, spec.Subnets)
 	}
 }
 

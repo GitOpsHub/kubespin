@@ -73,6 +73,10 @@ type Postgres struct {
 	now         func() time.Time
 	logger      *slog.Logger
 	retryPolicy RetryPolicy
+
+	// skipMigrations leaves the schema untouched on connect (see
+	// WithoutMigrations).
+	skipMigrations bool
 }
 
 // Option configures a Postgres registry client.
@@ -95,6 +99,16 @@ func WithLogger(logger *slog.Logger) Option {
 func WithRetryPolicy(policy RetryPolicy) Option {
 	return func(p *Postgres) {
 		p.retryPolicy = policy
+	}
+}
+
+// WithoutMigrations connects without running the schema DDL, for a caller
+// that must not write to the database at all — a dry run, which promises to
+// be strictly read-only. Against a database the DDL has never run on, reads
+// then report ErrNotFound rather than failing on the missing table.
+func WithoutMigrations() Option {
+	return func(p *Postgres) {
+		p.skipMigrations = true
 	}
 }
 
@@ -128,6 +142,7 @@ func NewPostgres(ctx context.Context, dsn string, opts ...Option) (*Postgres, er
 	db.SetConnMaxIdleTime(5 * time.Minute)
 
 	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("connecting to postgres: %w", err)
 	}
 
@@ -136,10 +151,15 @@ func NewPostgres(ctx context.Context, dsn string, opts ...Option) (*Postgres, er
 		opt(p)
 	}
 
+	if p.skipMigrations {
+		return p, nil
+	}
 	if _, err := db.ExecContext(ctx, schemaDDL); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("migrating cluster registry schema: %w", err)
 	}
 	if _, err := db.ExecContext(ctx, argoCDDetailsDDL); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("migrating cluster_argocd_details schema: %w", err)
 	}
 
@@ -165,7 +185,7 @@ func (p *Postgres) Get(ctx context.Context, id core.ClusterID) (Record, error) {
 		return err
 	})
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) || isUndefinedTable(err) {
 			return Record{}, fmt.Errorf("%w: %s", ErrNotFound, id)
 		}
 		return Record{}, fmt.Errorf("getting cluster %s: %w", id, err)
@@ -338,7 +358,7 @@ func (p *Postgres) GetArgoCDAccess(ctx context.Context, id core.ClusterID) (Argo
 		return row.Scan(&provider, &region, &kubeContext, &endpoint, &username, &password)
 	})
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) || isUndefinedTable(err) {
 			return ArgoCDAccess{}, fmt.Errorf("%w: %s", ErrNotFound, id)
 		}
 		return ArgoCDAccess{}, fmt.Errorf("getting argocd access for %s: %w", id, err)
@@ -359,6 +379,14 @@ func (p *Postgres) GetArgoCDAccess(ctx context.Context, id core.ClusterID) (Argo
 func isForeignKeyViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
+// isUndefinedTable reports whether err is Postgres's undefined_table (SQLSTATE
+// 42P01): a read against a database the schema DDL has never run on, which
+// only a WithoutMigrations client can reach. No table means no record.
+func isUndefinedTable(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "42P01"
 }
 
 // Delete removes a cluster's record. The cluster_argocd_details row goes with

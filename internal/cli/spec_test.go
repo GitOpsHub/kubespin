@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,28 @@ import (
 
 	"github.com/GitOpsHub/kubespin/internal/core"
 )
+
+// TestMain stands in for the Compute API behind --spot's GCP zone lookup, so
+// no test in this package reaches Google.
+func TestMain(m *testing.M) {
+	gcpDefaultZone = fakeGCPDefaultZone
+	os.Exit(m.Run())
+}
+
+// fakeGCPDefaultZone answers like real GCP for the regions tests use:
+// us-central1's first zone is -a, us-east1 has no -a zone at all.
+func fakeGCPDefaultZone(_ context.Context, project, region string) (string, error) {
+	if project == "" {
+		return "", errors.New("no project")
+	}
+	switch region {
+	case "us-central1":
+		return "us-central1-a", nil
+	case "us-east1":
+		return "us-east1-b", nil
+	}
+	return "", fmt.Errorf("unknown region %s", region)
+}
 
 // applyCmd returns the apply command with args parsed, ready for loadSpec.
 func applyCmd(t *testing.T, args ...string) *cobra.Command {
@@ -130,7 +154,7 @@ func TestLoadSpec_Spot_PicksCheapDefaultsPerProvider(t *testing.T) {
 				"--spot",
 			}
 			if tc.provider == "gcp" {
-				args = append(args, "--subnets", "projects/p/regions/us-central1/subnetworks/default")
+				args = append(args, "--subnets", "projects/p/regions/us-central1/subnetworks/default", "--gcp-project", "p")
 			}
 			spec, err := loadSpec(applyCmd(t, args...))
 			if err != nil {
@@ -182,6 +206,7 @@ func TestLoadSpec_Spot_GCPImpliesZonalAndPublicNodes(t *testing.T) {
 	spec, err := loadSpec(applyCmd(t,
 		"--cluster-id", "team-alpha",
 		"--provider", "gcp",
+		"--gcp-project", "p",
 		"--region", "us-central1",
 		"--subnets", "projects/p/regions/us-central1/subnetworks/default",
 		"--spot",
@@ -202,6 +227,7 @@ func TestLoadSpec_Spot_GCPOverridesRespected(t *testing.T) {
 	spec, err := loadSpec(applyCmd(t,
 		"--cluster-id", "team-alpha",
 		"--provider", "gcp",
+		"--gcp-project", "p",
 		"--region", "us-central1",
 		"--subnets", "projects/p/regions/us-central1/subnetworks/default",
 		"--spot",
@@ -216,6 +242,54 @@ func TestLoadSpec_Spot_GCPOverridesRespected(t *testing.T) {
 	}
 	if spec.PublicNodes {
 		t.Error("PublicNodes = true, want the explicit --gcp-public-nodes=false to be respected")
+	}
+}
+
+// --spot's zone is the region's first real zone: us-east1 has no "-a".
+func TestLoadSpec_Spot_GCPResolvesARealZone(t *testing.T) {
+	spec, err := loadSpec(applyCmd(t,
+		"--cluster-id", "team-alpha",
+		"--provider", "gcp",
+		"--gcp-project", "p",
+		"--region", "us-east1",
+		"--subnets", "projects/p/regions/us-east1/subnetworks/default",
+		"--spot",
+	))
+	if err != nil {
+		t.Fatalf("loadSpec: %v", err)
+	}
+	if spec.Zone != "us-east1-b" {
+		t.Errorf("Zone = %q, want us-east1-b, the region's first real zone", spec.Zone)
+	}
+}
+
+func TestLoadSpec_Spot_GCPExplicitZoneSkipsLookup(t *testing.T) {
+	spec, err := loadSpec(applyCmd(t,
+		"--cluster-id", "team-alpha",
+		"--provider", "gcp",
+		"--region", "us-central1",
+		"--zone", "us-central1-c",
+		"--subnets", "projects/p/regions/us-central1/subnetworks/default",
+		"--spot",
+	))
+	if err != nil {
+		t.Fatalf("loadSpec: %v", err)
+	}
+	if spec.Zone != "us-central1-c" {
+		t.Errorf("Zone = %q, want the explicit us-central1-c", spec.Zone)
+	}
+}
+
+func TestLoadSpec_Spot_GCPRequiresProjectToResolveZone(t *testing.T) {
+	_, err := loadSpec(applyCmd(t,
+		"--cluster-id", "team-alpha",
+		"--provider", "gcp",
+		"--region", "us-central1",
+		"--subnets", "projects/p/regions/us-central1/subnetworks/default",
+		"--spot",
+	))
+	if !errors.Is(err, core.ErrInvalidSpec) {
+		t.Fatalf("err = %v, want ErrInvalidSpec for a missing --gcp-project", err)
 	}
 }
 

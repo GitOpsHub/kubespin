@@ -201,12 +201,12 @@ func TestClusterProvisioner_Reconcile_AccessDrift(t *testing.T) {
 	}
 }
 
-func TestClusterProvisioner_Reconcile_NodePoolResize(t *testing.T) {
+func TestClusterProvisioner_Reconcile_NodePoolBoundsDrift(t *testing.T) {
 	f := newFakeGCP()
 	spec := testSpec()
 	f.activeCluster(spec)
 	drifted := spec.NodePools[0]
-	drifted.DesiredSize = 1
+	drifted.MaxSize = 2
 	f.withNodePool(drifted)
 	p := NewClusterProvisioner(f.clients())
 
@@ -215,11 +215,117 @@ func TestClusterProvisioner_Reconcile_NodePoolResize(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if !change.Changed {
-		t.Fatal("expected the resize to be reported as a change")
+		t.Fatal("expected the bounds change to be reported as a change")
 	}
-	if f.nodePools["default"].InitialNodeCount != spec.NodePools[0].DesiredSize {
-		t.Errorf("desired size = %d, want %d",
-			f.nodePools["default"].InitialNodeCount, spec.NodePools[0].DesiredSize)
+	as := f.nodePools["default"].Autoscaling
+	if !as.Enabled || as.MinNodeCount != spec.NodePools[0].MinSize || as.MaxNodeCount != spec.NodePools[0].MaxSize {
+		t.Errorf("autoscaling = %+v, want enabled %d-%d", as, spec.NodePools[0].MinSize, spec.NodePools[0].MaxSize)
+	}
+}
+
+// The live node count belongs to GKE's autoscaler. A pool whose count has
+// moved away from spec's DesiredSize, but whose bounds match, is converged:
+// resetting it would fight the autoscaler and report a change on every apply.
+func TestClusterProvisioner_Reconcile_DesiredSizeDriftIsNotAChange(t *testing.T) {
+	f := newFakeGCP()
+	spec := testSpec()
+	f.activeCluster(spec)
+	scaled := spec.NodePools[0]
+	scaled.DesiredSize = 1
+	f.withNodePool(scaled)
+	p := NewClusterProvisioner(f.clients())
+
+	change, err := p.Reconcile(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if change.Changed {
+		t.Errorf("expected no change, got %+v", change)
+	}
+	f.assertNoMutations(t)
+}
+
+// A zonal cluster reconciled with no zone in the spec must be addressed where
+// it actually lives: before, Describe found it through locate but every
+// node-pool call went to the region-derived path and failed NotFound.
+func TestClusterProvisioner_Reconcile_ZonalClusterWithNoZoneInSpec(t *testing.T) {
+	f := newFakeGCP()
+	spec := testSpec()
+	spec.NodePools = append(spec.NodePools, core.NodePool{
+		Name: "extra", InstanceType: "e2-standard-2", MinSize: 0, MaxSize: 3, DesiredSize: 1,
+	})
+	f.activeCluster(spec)
+	f.clusterLocation = "us-central1-b"
+	f.withNodePool(spec.NodePools[0])
+	p := NewClusterProvisioner(f.clients())
+
+	if _, err := p.Reconcile(context.Background(), spec); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	np, ok := f.nodePools["extra"]
+	if !ok {
+		t.Fatal("expected the extra node pool to have been created")
+	}
+	if !slices.Equal(np.Locations, []string{"us-central1-b"}) {
+		t.Errorf("node pool locations = %v, want the zonal cluster's own zone", np.Locations)
+	}
+}
+
+// A zone that is set but wrong (as `delete --spot` derives one) must not make
+// a live regional cluster look already gone.
+func TestClusterProvisioner_Delete_FindsARegionalClusterDespiteAWrongZone(t *testing.T) {
+	f := newFakeGCP()
+	spec := testSpec()
+	f.activeCluster(spec)
+	f.clusterLocation = spec.Region
+	spec.Zone = "us-central1-a"
+	p := NewClusterProvisioner(f.clients())
+
+	if err := p.Delete(context.Background(), spec); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if f.cluster != nil {
+		t.Error("expected the regional cluster to be deleted, not read as already gone")
+	}
+}
+
+// Node pools are pinned to the region's first UP zone by name, never an
+// assumed "<region>-a": us-east1 has no such zone.
+func TestClusterProvisioner_Create_PinsNodePoolToARealZone(t *testing.T) {
+	for region, want := range map[string]string{
+		"us-central1": "us-central1-a",
+		"us-east1":    "us-east1-b",
+	} {
+		t.Run(region, func(t *testing.T) {
+			f := newFakeGCP()
+			f.subnetworks[region+"/default"] = f.subnetworks["us-central1/default"]
+			spec := testSpec()
+			spec.Region = region
+			p := NewClusterProvisioner(f.clients())
+
+			if err := p.Create(context.Background(), spec); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			got := f.cluster.NodePools[0].Locations
+			if !slices.Equal(got, []string{want}) {
+				t.Errorf("node pool locations = %v, want [%s]", got, want)
+			}
+		})
+	}
+}
+
+func TestClusterProvisioner_Create_FailsWhenRegionHasNoZones(t *testing.T) {
+	f := newFakeGCP()
+	f.subnetworks["nowhere1/default"] = f.subnetworks["us-central1/default"]
+	spec := testSpec()
+	spec.Region = "nowhere1"
+
+	err := NewClusterProvisioner(f.clients()).Create(context.Background(), spec)
+	if err == nil {
+		t.Fatal("expected an error for a region with no zones")
+	}
+	if f.cluster != nil {
+		t.Error("expected no cluster to be requested")
 	}
 }
 
@@ -352,7 +458,7 @@ func TestClusterProvisioner_Create_Autopilot_SkipsNodePoolCreation(t *testing.T)
 	}
 
 	for _, call := range f.calls {
-		if call == "CreateNodePool" || call == "SetNodePoolSize" {
+		if call == "CreateNodePool" || call == "SetNodePoolAutoscaling" {
 			t.Errorf("unexpected node-pool call %q under Autopilot", call)
 		}
 	}
@@ -374,7 +480,7 @@ func TestClusterProvisioner_Reconcile_Autopilot_SkipsEnsureNodePools(t *testing.
 		t.Errorf("expected no change under Autopilot, got %v", state.Details)
 	}
 	for _, call := range f.calls {
-		if call == "CreateNodePool" || call == "SetNodePoolSize" {
+		if call == "CreateNodePool" || call == "SetNodePoolAutoscaling" {
 			t.Errorf("unexpected node-pool call %q under Autopilot", call)
 		}
 	}

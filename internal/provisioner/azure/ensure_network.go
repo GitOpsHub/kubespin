@@ -75,7 +75,7 @@ func (p *NetworkProvisioner) EnsureNetwork(
 		if err := p.c.network.CreateOrUpdateVirtualNetwork(ctx, n.resourceGroup(), n.vnet(), vnet); err != nil {
 			return provisioner.NetworkResult{}, fmt.Errorf("creating virtual network %s: %w", n.vnet(), err)
 		}
-		p.c.logger.Info("Created Virtual Network", "vnet", n.vnet(), "cidr", vnetCIDR)
+		p.c.logger.Debug("Created Virtual Network", "vnet", n.vnet(), "cidr", vnetCIDR)
 		change.Changed = true
 		change.Details = append(change.Details, fmt.Sprintf("created virtual network %s (%s)", n.vnet(), vnetCIDR))
 	}
@@ -105,7 +105,7 @@ func (p *NetworkProvisioner) ensureSubnet(
 	if err := p.c.network.CreateOrUpdateSubnet(ctx, n.resourceGroup(), n.vnet(), n.subnet(), subnet); err != nil {
 		return "", fmt.Errorf("creating subnet %s: %w", n.subnet(), err)
 	}
-	p.c.logger.Info("Created Subnet", "subnet", n.subnet(), "cidr", subnetCIDR)
+	p.c.logger.Debug("Created Subnet", "subnet", n.subnet(), "cidr", subnetCIDR)
 	change.Changed = true
 	change.Details = append(change.Details, fmt.Sprintf("created subnet %s (%s)", n.subnet(), subnetCIDR))
 

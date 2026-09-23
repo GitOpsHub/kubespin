@@ -118,7 +118,7 @@ func (p *NetworkProvisioner) ensureCloudNAT(
 		return fmt.Errorf("creating router %s: %w", name, err)
 	}
 
-	p.c.logger.Info("Created Cloud Router And NAT", "router", name)
+	p.c.logger.Debug("Created Cloud Router And NAT", "router", name)
 	change.Changed = true
 	change.Details = append(change.Details, fmt.Sprintf("created Cloud Router and NAT %s", name))
 	return nil
@@ -151,7 +151,7 @@ func (p *NetworkProvisioner) ensureVPCNetwork(
 		return fmt.Errorf("creating network %s: %w", name, err)
 	}
 
-	p.c.logger.Info("Created VPC Network", "network", name)
+	p.c.logger.Debug("Created VPC Network", "network", name)
 	change.Changed = true
 	change.Details = append(change.Details, fmt.Sprintf("created network %s", name))
 	return nil
@@ -193,7 +193,7 @@ func (p *NetworkProvisioner) ensureSubnetwork(
 		return fmt.Errorf("creating subnetwork %s: %w", name, err)
 	}
 
-	p.c.logger.Info("Created Subnetwork", "subnetwork", name, "cidr", cidr)
+	p.c.logger.Debug("Created Subnetwork", "subnetwork", name, "cidr", cidr)
 	change.Changed = true
 	change.Details = append(change.Details, fmt.Sprintf("created subnetwork %s (%s)", name, cidr))
 	return nil

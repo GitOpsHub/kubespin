@@ -14,12 +14,16 @@ import (
 // state is the .state.yaml contract: the last-applied hashes used for
 // idempotent diffing. Not user-authored.
 //
-// Infra drift is detected by ClusterProvisioner.Reconcile diffing the spec
-// directly against live cloud state (M2), which needs no hash of its own;
-// hashing it here as well would just be a second, redundant source of truth
-// to keep in sync.
+// Infra drift is still detected by ClusterProvisioner.Reconcile diffing the
+// spec directly against live cloud state (M2) and converged through cloud SDK
+// calls, never through git. ClusterHash only keeps cluster.yaml, the
+// repository's record of desired infra, current: without it an infra-only
+// change (a node pool resize, an access-mode switch) never reached the
+// repository at all, since cluster.yaml was only rewritten alongside an
+// addons.yaml change.
 type state struct {
-	AddonsHash string `yaml:"addonsHash"`
+	AddonsHash  string `yaml:"addonsHash"`
+	ClusterHash string `yaml:"clusterHash,omitempty"`
 	// AppsHash is the app-of-apps addon Applications' combined hash (M5),
 	// separate from AddonsHash because the two are reconciled independently:
 	// an addons.yaml change and an Argo CD Application manifest change don't
@@ -67,6 +71,11 @@ func hashAddons(addonsYAML []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// hashCluster hashes cluster.yaml the same way hashAddons hashes addons.yaml.
+func hashCluster(clusterYAML []byte) string {
+	return hashAddons(clusterYAML)
+}
+
 // Seed creates and seeds a cluster's repository on its first apply: create
 // (idempotent) then one initial commit of cluster.yaml, addons.yaml, and
 // .state.yaml.
@@ -83,14 +92,14 @@ func Seed(ctx context.Context, rp Provisioner, spec core.ClusterSpec, profile co
 	return err
 }
 
-// ReconcileAddons brings a cluster's addons.yaml in line with its resolved
-// profile.
+// ReconcileAddons brings a cluster's cluster.yaml and addons.yaml in line
+// with its spec and resolved profile.
 //
 // It reports whether it made a commit. `apply` proves it made no git commits
-// when nothing differs, which is why this hashes addons.yaml against
+// when nothing differs, which is why this hashes both files against
 // .state.yaml rather than relying on the caller to have diffed beforehand.
 func ReconcileAddons(ctx context.Context, rp Provisioner, spec core.ClusterSpec, profile core.Profile) (bool, error) {
-	return reconcile(ctx, rp, spec, profile, "kubespin: update addons.yaml")
+	return reconcile(ctx, rp, spec, profile, "kubespin: update cluster.yaml and addons.yaml")
 }
 
 func reconcile(
@@ -101,6 +110,7 @@ func reconcile(
 		return false, err
 	}
 	desiredHash := hashAddons(addonsYAML)
+	desiredClusterHash := hashCluster(clusterYAML)
 
 	checkout, err := rp.Clone(ctx, spec)
 	if err != nil {
@@ -111,10 +121,11 @@ func reconcile(
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", spec.ID, err)
 	}
-	if currentState.AddonsHash == desiredHash {
+	if currentState.AddonsHash == desiredHash && currentState.ClusterHash == desiredClusterHash {
 		return false, nil
 	}
 	currentState.AddonsHash = desiredHash
+	currentState.ClusterHash = desiredClusterHash
 
 	stateYAML, err := yaml.Marshal(currentState)
 	if err != nil {

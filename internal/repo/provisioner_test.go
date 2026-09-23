@@ -44,8 +44,14 @@ func TestProvisioner_Create_SeedsCodeownersAndProtection(t *testing.T) {
 	}
 
 	n := names{spec}
-	if _, ok := f.protections[key(testOrg, n.repoName())+"/main"]; !ok {
-		t.Error("expected branch protection to have been configured")
+	protection, ok := f.protections[key(testOrg, n.repoName())+"/main"]
+	if !ok {
+		t.Fatal("expected branch protection to have been configured")
+	}
+	// kubespin pushes straight to the branch with an admin token; enforcing
+	// the review rule on admins would refuse every one of its own commits.
+	if protection.EnforceAdmins {
+		t.Error("branch protection enforces admins, which blocks kubespin's own pushes")
 	}
 
 	checkout, err := p.Clone(context.Background(), spec)

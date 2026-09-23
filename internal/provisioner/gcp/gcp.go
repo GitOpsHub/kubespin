@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,7 +26,8 @@ import (
 type clusterAPI interface {
 	GetCluster(context.Context, *containerpb.GetClusterRequest, ...gax.CallOption) (*containerpb.Cluster, error)
 	// ListClusters is used only by locate, to find a cluster by name across
-	// every location in the project when spec.Zone is not known — see locate
+	// every location in the project when it is not at the path the spec
+	// implies — see locate
 	// for why that lookup exists at all.
 	ListClusters(context.Context, *containerpb.ListClustersRequest, ...gax.CallOption) (*containerpb.ListClustersResponse, error)
 	CreateCluster(context.Context, *containerpb.CreateClusterRequest, ...gax.CallOption) (*containerpb.Operation, error)
@@ -34,7 +36,10 @@ type clusterAPI interface {
 	ListNodePools(context.Context, *containerpb.ListNodePoolsRequest, ...gax.CallOption) (*containerpb.ListNodePoolsResponse, error)
 	GetNodePool(context.Context, *containerpb.GetNodePoolRequest, ...gax.CallOption) (*containerpb.NodePool, error)
 	CreateNodePool(context.Context, *containerpb.CreateNodePoolRequest, ...gax.CallOption) (*containerpb.Operation, error)
-	SetNodePoolSize(context.Context, *containerpb.SetNodePoolSizeRequest, ...gax.CallOption) (*containerpb.Operation, error)
+	// SetNodePoolAutoscaling converges a pool's min/max bounds. There is no
+	// SetNodePoolSize: the pool's live node count belongs to the autoscaler,
+	// and resetting it to the spec on every apply would fight it.
+	SetNodePoolAutoscaling(context.Context, *containerpb.SetNodePoolAutoscalingRequest, ...gax.CallOption) (*containerpb.Operation, error)
 	DeleteNodePool(context.Context, *containerpb.DeleteNodePoolRequest, ...gax.CallOption) (*containerpb.Operation, error)
 }
 
@@ -79,6 +84,14 @@ type routersAPI interface {
 	DeleteRouter(ctx context.Context, project, region, name string) error
 }
 
+// zonesAPI lists a region's zones, so a node pool is pinned to a zone that
+// actually exists rather than an assumed "<region>-a" — us-east1 and
+// europe-west1, for two, have no "-a" zone at all.
+type zonesAPI interface {
+	// ListZones returns the names of region's zones whose status is UP.
+	ListZones(ctx context.Context, project, region string) ([]string, error)
+}
+
 // Clients bundles the GCP clients the provisioner uses, scoped to one project.
 //
 // The project is fixed at construction, the way AWS's Clients fixes a region:
@@ -92,6 +105,7 @@ type Clients struct {
 	networks    networksAPI
 	subnetworks subnetworksAPI
 	routers     routersAPI
+	zones       zonesAPI
 	tokens      tokenAPI
 
 	logger *slog.Logger
@@ -129,6 +143,7 @@ func NewClients(ctx context.Context, project string, opts ...Option) (*Clients, 
 		networks:    realNetworks{computeSvc.Networks, computeSvc.GlobalOperations},
 		subnetworks: realSubnetworks{computeSvc.Subnetworks, computeSvc.RegionOperations},
 		routers:     realRouters{computeSvc.Routers, computeSvc.RegionOperations},
+		zones:       realZones{computeSvc.Zones},
 		tokens:      applicationDefaultTokens{},
 		logger:      slog.Default(),
 	}
@@ -136,6 +151,53 @@ func NewClients(ctx context.Context, project string, opts ...Option) (*Clients, 
 		opt(c)
 	}
 	return c, nil
+}
+
+// DefaultZone returns the zone kubespin pins a region's node pools to when no
+// zone is given: the first of the region's UP zones, in name order. It builds
+// its own Compute client, for callers (the CLI's --spot handling) that need a
+// zone before any provisioner exists.
+func DefaultZone(ctx context.Context, project, region string) (string, error) {
+	computeSvc, err := compute.NewService(ctx)
+	if err != nil {
+		return "", fmt.Errorf("building Compute client: %w", err)
+	}
+	return firstZone(ctx, realZones{computeSvc.Zones}, project, region)
+}
+
+// firstZone returns the first of region's UP zones, sorted by name so every
+// run picks the same one.
+func firstZone(ctx context.Context, zones zonesAPI, project, region string) (string, error) {
+	listed, err := zones.ListZones(ctx, project, region)
+	if err != nil {
+		return "", fmt.Errorf("listing zones in %s: %w", region, err)
+	}
+	if len(listed) == 0 {
+		return "", fmt.Errorf("%w: region %q has no available zones in project %s", core.ErrInvalidSpec, region, project)
+	}
+	return slices.Min(listed), nil
+}
+
+// realZones adapts the fluent compute/v1 client to zonesAPI.
+type realZones struct {
+	svc *compute.ZonesService
+}
+
+func (r realZones) ListZones(ctx context.Context, project, region string) ([]string, error) {
+	var names []string
+	suffix := "/regions/" + region
+	err := r.svc.List(project).Pages(ctx, func(page *compute.ZoneList) error {
+		for _, z := range page.Items {
+			if z.Status == "UP" && strings.HasSuffix(z.Region, suffix) {
+				names = append(names, z.Name)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("compute: list zones: %w", err)
+	}
+	return names, nil
 }
 
 // realFirewalls adapts the fluent compute/v1 client to firewallsAPI.
@@ -331,6 +393,9 @@ func operationError(op *compute.Operation) error {
 type names struct {
 	project string
 	spec    core.ClusterSpec
+	// located is the GKE location ClusterProvisioner.locate found the cluster
+	// at — a zone or a region — overriding what spec implies.
+	located string
 }
 
 // location is the region every regional resource (subnetwork, Cloud Router,
@@ -343,6 +408,9 @@ func (n names) location() string { return n.spec.Region }
 // eligible for GCP's free-tier zonal cluster), otherwise the region (the
 // default regional, multi-zone control plane).
 func (n names) controlPlaneLocation() string {
+	if n.located != "" {
+		return n.located
+	}
 	if n.spec.Zone != "" {
 		return n.spec.Zone
 	}

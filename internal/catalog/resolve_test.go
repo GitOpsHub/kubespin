@@ -36,13 +36,16 @@ func TestResolveForCluster_Autopilot_OnlyArgoCD(t *testing.T) {
 	}
 }
 
+// GKE and AKS autoscale their node pools natively; only EKS gets the chart.
 func TestResolveForCluster_NonAutopilot_KeepsAutoscalers(t *testing.T) {
-	gcpProfile, err := ResolveForCluster(context.Background(), NewBuiltinResolver(), testClusterSpec(core.ProviderGCP))
-	if err != nil {
-		t.Fatalf("ResolveForCluster: %v", err)
-	}
-	if _, ok := gcpProfile.Addon("cluster-autoscaler"); !ok {
-		t.Error("expected cluster-autoscaler to remain without Autopilot")
+	for _, provider := range []core.Provider{core.ProviderGCP, core.ProviderAzure} {
+		profile, err := ResolveForCluster(context.Background(), NewBuiltinResolver(), testClusterSpec(provider))
+		if err != nil {
+			t.Fatalf("ResolveForCluster: %v", err)
+		}
+		if _, ok := profile.Addon("cluster-autoscaler"); ok {
+			t.Errorf("%s: cluster-autoscaler chart shipped on a cloud that autoscales natively", provider)
+		}
 	}
 
 	awsProfile, err := ResolveForCluster(context.Background(), NewBuiltinResolver(), testClusterSpec(core.ProviderAWS))
@@ -79,36 +82,5 @@ func TestResolveForCluster_FillsClusterValuesIntoTheAWSAutoscaler(t *testing.T) 
 		if a.Name == "cluster-autoscaler" && a.SupportsProvider(core.ProviderAWS) && a.Values["awsRegion"] != RegionPlaceholder {
 			t.Errorf("catalog entry was mutated: awsRegion = %v", a.Values["awsRegion"])
 		}
-	}
-}
-
-// OpenCost is served from a LoadBalancer that follows the cluster's access
-// mode, and reads kube-prometheus-stack's Prometheus.
-func TestResolveForCluster_OpenCostLoadBalancerFollowsAccessMode(t *testing.T) {
-	spec := testClusterSpec(core.ProviderAWS)
-	spec.Access = core.AccessPublic
-	spec.AuthorizedCIDRs = []string{"198.51.100.7/32"}
-
-	profile, err := ResolveForCluster(context.Background(), NewBuiltinResolver(), spec)
-	if err != nil {
-		t.Fatalf("ResolveForCluster: %v", err)
-	}
-	opencost, ok := profile.Addon("opencost")
-	if !ok {
-		t.Fatal("expected opencost in the profile")
-	}
-	service, _ := opencost.Values["service"].(map[string]any)
-	if service["type"] != "LoadBalancer" {
-		t.Errorf("service.type = %v, want LoadBalancer", service["type"])
-	}
-	if ranges, _ := service["loadBalancerSourceRanges"].([]any); len(ranges) != 1 || ranges[0] != "198.51.100.7/32" {
-		t.Errorf("loadBalancerSourceRanges = %v, want the cluster's authorized CIDRs", service["loadBalancerSourceRanges"])
-	}
-
-	cfg, _ := opencost.Values["opencost"].(map[string]any)
-	prom, _ := cfg["prometheus"].(map[string]any)
-	internal, _ := prom["internal"].(map[string]any)
-	if internal["serviceName"] != "kube-prometheus-stack-prometheus" || internal["namespaceName"] != "monitoring" {
-		t.Errorf("prometheus.internal = %v, want kube-prometheus-stack's Prometheus", internal)
 	}
 }

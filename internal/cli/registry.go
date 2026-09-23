@@ -23,7 +23,13 @@ func registryPrereqs(cmd *cobra.Command) (*Config, registry.Registry, error) {
 		return nil, nil, fmt.Errorf("%w: the Postgres registry DSN is required (KUBESPIN_REGISTRY_DSN)", ErrConfig)
 	}
 
-	reg, err := registry.NewPostgres(ctx, cfg.Registry.DSN, registry.WithLogger(LoggerFrom(ctx)))
+	opts := []registry.Option{registry.WithLogger(LoggerFrom(ctx))}
+	if cfg.DryRun {
+		// A dry run is strictly read-only, schema included: no CREATE/ALTER
+		// against the operator's database just to report a plan.
+		opts = append(opts, registry.WithoutMigrations())
+	}
+	reg, err := registry.NewPostgres(ctx, cfg.Registry.DSN, opts...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("connecting to the cluster registry: %w", err)
 	}
