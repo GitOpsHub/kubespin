@@ -30,11 +30,11 @@ directory. Override the destination with `make build INSTALL_DIR=...`.
 
 ## Commands
 
-| Command | Purpose |
-|---|---|
-| `kubespin login` / `status` / `logout` | Authenticate to (or check, or clear) cloud provider sessions. |
-| `kubespin apply` | Create or reconcile a cluster to match its desired state. Idempotent and resumable. |
-| `kubespin delete` | Decommission a cluster; archives its repository rather than deleting it. |
+| Command                                | Purpose                                                                             |
+| -------------------------------------- | ----------------------------------------------------------------------------------- |
+| `kubespin login` / `status` / `logout` | Authenticate to (or check, or clear) cloud provider sessions.                       |
+| `kubespin apply`                       | Create or reconcile a cluster to match its desired state. Idempotent and resumable. |
+| `kubespin delete`                      | Decommission a cluster; archives its repository rather than deleting it.            |
 
 See [Example workflows](#example-workflows) below for real invocations of
 each, or [docs/examples.md](docs/examples.md) for the full walkthrough.
@@ -61,6 +61,10 @@ kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws \
 
 ```bash
 # GCP, public cluster, custom node pool
+kubespin apply --provider aws --region us-east-1 --cluster-id demo-aws-spot \
+  --access public --spot --github-org GitOpsHub \
+  --authorized-cidrs "$(curl -s https://checkip.amazonaws.com)/32"
+
 kubespin apply --provider gcp --gcp-project kubernetes-dev-502710 --region us-central1 \
   --cluster-id demo-gcp --access public --size small \
   --instance-type e2-standard-4 --desired-size 3 \
