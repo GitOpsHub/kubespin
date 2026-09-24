@@ -12,6 +12,14 @@ Do not hand-edit past entries.
 
 ## [Unreleased]
 
+## [v1.4.2] - 2026-09-24
+### Fixed
+- Align command table formatting in README.md
+
+### Changed
+- Refactor GCP Cluster Provisioner and Tests
+
+
 ## [v1.4.1] - 2026-09-23
 ### Fixed
 - Make every catalog addon sync on a fresh cluster
